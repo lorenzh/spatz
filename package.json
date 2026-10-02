@@ -1,0 +1,23 @@
+{
+	"name": "poc-model-suggestion",
+	"type": "module",
+	"private": true,
+	"workspaces": [
+		"packages/*"
+	],
+	"scripts": {
+		"test": "bun test",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"prepare": "lefthook install"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.15",
+		"@types/bun": "latest",
+		"lefthook": "^2.1.16"
+	},
+	"peerDependencies": {
+		"typescript": "^7"
+	}
+}

@@ -1,0 +1,6 @@
+{
+	"name": "@poc/package-a",
+	"private": true,
+	"type": "module",
+	"exports": "./src/index.ts"
+}

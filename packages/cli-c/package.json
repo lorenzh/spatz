@@ -1,0 +1,12 @@
+{
+	"name": "@poc/cli-c",
+	"private": true,
+	"type": "module",
+	"exports": "./src/index.ts",
+	"bin": {
+		"cli-c": "./src/cli.ts"
+	},
+	"dependencies": {
+		"@poc/package-b": "workspace:*"
+	}
+}
