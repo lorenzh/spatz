@@ -1,0 +1,356 @@
+// store: bun:sqlite with schema, migrations (PRAGMA user_version), WAL and busy_timeout.
+// Spec: "Datenhaltung", outcomes view per "Signale".
+import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import type { Store } from "../contracts/deps.ts";
+import type {
+	CellStat,
+	Outcome,
+	SuggestionRecord,
+	TaskType,
+	UsageRecord,
+} from "../contracts/types.ts";
+
+// No column holds task text (spec "Datenhaltung", "Privacy").
+const SCHEMA_V1 = `
+CREATE TABLE suggestions (
+	id TEXT PRIMARY KEY,
+	created_at INTEGER NOT NULL,
+	session_id TEXT,
+	prompt_id TEXT,
+	task_type TEXT NOT NULL,
+	difficulty TEXT NOT NULL,
+	criticality TEXT NOT NULL,
+	probabilities TEXT,
+	model_ref TEXT,
+	strategy TEXT NOT NULL,
+	ranking TEXT NOT NULL,
+	reason TEXT NOT NULL,
+	explored INTEGER NOT NULL,
+	control INTEGER NOT NULL,
+	fallback_used INTEGER NOT NULL,
+	is_test INTEGER NOT NULL,
+	last_event_at INTEGER NOT NULL,
+	closed_at INTEGER
+);
+CREATE INDEX suggestions_session ON suggestions (session_id, created_at);
+CREATE TABLE usages (
+	suggestion_id TEXT NOT NULL,
+	model TEXT NOT NULL,
+	effort TEXT,
+	source TEXT NOT NULL,
+	scope_key TEXT NOT NULL,
+	input_tokens INTEGER NOT NULL,
+	output_tokens INTEGER NOT NULL,
+	cache_read_tokens INTEGER NOT NULL,
+	cache_creation_tokens INTEGER NOT NULL,
+	is_sidechain INTEGER NOT NULL,
+	rounds INTEGER,
+	note TEXT,
+	reported_at INTEGER NOT NULL,
+	UNIQUE (suggestion_id, source, scope_key, model)
+);
+CREATE TABLE signals (
+	suggestion_id TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	value REAL NOT NULL,
+	weight REAL NOT NULL,
+	source TEXT NOT NULL,
+	observed_at INTEGER NOT NULL
+);
+CREATE INDEX signals_suggestion ON signals (suggestion_id);
+-- quality: the latest report wins; else the latest value per hook kind, weighted mean over kinds.
+-- Used pair: the latest report usage; else the model with most output tokens, effort = its latest non-null effort.
+CREATE VIEW outcomes AS
+WITH latest AS (
+	SELECT suggestion_id, kind, value, weight FROM (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY suggestion_id, kind ORDER BY observed_at DESC, rowid DESC
+		) AS rn FROM signals
+	) WHERE rn = 1
+),
+quality AS (
+	SELECT suggestion_id, COALESCE(
+		MAX(CASE WHEN kind = 'report' THEN value END),
+		SUM(CASE WHEN kind <> 'report' THEN weight * value END)
+			/ SUM(CASE WHEN kind <> 'report' THEN weight END)
+	) AS quality
+	FROM latest GROUP BY suggestion_id
+),
+candidates AS (
+	SELECT suggestion_id, model, effort, 0 AS prio, reported_at AS rank_key
+	FROM usages WHERE source = 'report'
+	UNION ALL
+	SELECT suggestion_id, model, (
+		SELECT effort FROM usages e
+		WHERE e.suggestion_id = u.suggestion_id AND e.model = u.model AND e.effort IS NOT NULL
+		ORDER BY e.reported_at DESC, e.rowid DESC LIMIT 1
+	), 1, SUM(output_tokens)
+	FROM usages u GROUP BY suggestion_id, model
+),
+pair AS (
+	SELECT suggestion_id, model, effort FROM (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY suggestion_id ORDER BY prio, rank_key DESC, model
+		) AS rn FROM candidates
+	) WHERE rn = 1
+)
+SELECT q.suggestion_id AS suggestion_id, CAST(q.quality AS REAL) AS quality,
+	p.model AS model, p.effort AS effort
+FROM quality q LEFT JOIN pair p ON p.suggestion_id = q.suggestion_id;
+`;
+
+// Watermark per usage scope: the transcript snapshot last written, ordered by last_at; message_count breaks ties.
+const SCHEMA_V2 = `
+CREATE TABLE usage_scopes (
+	session_id TEXT NOT NULL,
+	source TEXT NOT NULL,
+	scope_key TEXT NOT NULL,
+	message_count INTEGER NOT NULL,
+	last_at INTEGER NOT NULL,
+	PRIMARY KEY (session_id, source, scope_key)
+);
+`;
+
+const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2];
+export const SCHEMA_VERSION = MIGRATIONS.length;
+
+/** Opens the db with WAL and busy_timeout 5000 and migrates to SCHEMA_VERSION. */
+export function openDatabase(dbPath: string): Database {
+	if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+	const db = new Database(dbPath, { create: true, strict: true });
+	db.run("PRAGMA busy_timeout = 5000");
+	db.run("PRAGMA journal_mode = WAL");
+	const version = () =>
+		db.query<{ user_version: number }, []>("PRAGMA user_version").get()
+			?.user_version ?? 0;
+	for (let v = version(); v < SCHEMA_VERSION; v = version()) {
+		// IMMEDIATE + re-check: two processes opening the same file must not both migrate.
+		db.transaction(() => {
+			if (version() !== v) return;
+			db.run(MIGRATIONS[v] as string);
+			db.run(`PRAGMA user_version = ${v + 1}`);
+		}).immediate();
+	}
+	return db;
+}
+
+type SuggestionRow = Omit<
+	SuggestionRecord,
+	| "probabilities"
+	| "ranking"
+	| "explored"
+	| "control"
+	| "fallback_used"
+	| "is_test"
+> & {
+	probabilities: string | null;
+	ranking: string;
+	explored: number;
+	control: number;
+	fallback_used: number;
+	is_test: number;
+};
+
+/** Creates the parent dir, opens the db, sets journal_mode=WAL and busy_timeout=5000, migrates, returns the Store. ":memory:" allowed. */
+export function openStore(dbPath: string): Store {
+	const db = openDatabase(dbPath);
+	const store: Store = {
+		insertSuggestion(r) {
+			db.query(
+				`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
+				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
+				$fallback_used, $is_test, $last_event_at, $closed_at)`,
+			).run({
+				...r,
+				probabilities: r.probabilities && JSON.stringify(r.probabilities),
+				ranking: JSON.stringify(r.ranking),
+				explored: Number(r.explored),
+				control: Number(r.control),
+				fallback_used: Number(r.fallback_used),
+				is_test: Number(r.is_test),
+			});
+		},
+		getSuggestion(id) {
+			const row = db
+				.query<SuggestionRow, [string]>(
+					"SELECT * FROM suggestions WHERE id = ?",
+				)
+				.get(id);
+			if (!row) return null;
+			return {
+				...row,
+				probabilities: row.probabilities && JSON.parse(row.probabilities),
+				ranking: JSON.parse(row.ranking),
+				explored: row.explored === 1,
+				control: row.control === 1,
+				fallback_used: row.fallback_used === 1,
+				is_test: row.is_test === 1,
+			};
+		},
+		cellStats(taskType) {
+			return db
+				.query<CellStat, [TaskType]>(
+					`SELECT s.task_type, s.difficulty, o.model, o.effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
+					FROM suggestions s JOIN outcomes o ON o.suggestion_id = s.id
+					WHERE s.task_type = ? AND s.is_test = 0 AND o.model IS NOT NULL AND o.effort IS NOT NULL
+					GROUP BY s.task_type, s.difficulty, o.model, o.effort`,
+				)
+				.all(taskType);
+		},
+		linkSession(id, sessionId, promptId, at) {
+			// Hooks run async, so links may arrive late, twice or out of order.
+			// Session order is creation order: each suggestion ends where the next one of its session starts.
+			return db.transaction(() => {
+				const me = db
+					.query<{ created_at: number; rowid: number }, [string]>(
+						"SELECT created_at, rowid FROM suggestions WHERE id = ?",
+					)
+					.get(id);
+				if (!me) return [];
+				db.query(
+					"UPDATE suggestions SET session_id = ?, prompt_id = ?, last_event_at = MAX(last_event_at, ?) WHERE id = ?",
+				).run(sessionId, promptId, at, id);
+				const shrunk = db
+					.query<
+						{ id: string },
+						{ start: number; rowid: number; session: string }
+					>(
+						`UPDATE suggestions SET closed_at = $start
+						WHERE session_id = $session AND (created_at, rowid) < ($start, $rowid)
+						AND (closed_at IS NULL OR closed_at > $start) RETURNING id`,
+					)
+					.all({ start: me.created_at, rowid: me.rowid, session: sessionId });
+				const next = db
+					.query<{ created_at: number }, [string, number, number]>(
+						`SELECT created_at FROM suggestions WHERE session_id = ? AND (created_at, rowid) > (?, ?)
+						ORDER BY created_at, rowid LIMIT 1`,
+					)
+					.get(sessionId, me.created_at, me.rowid);
+				if (next)
+					shrunk.push(
+						...db
+							.query<{ id: string }, [number, string]>(
+								"UPDATE suggestions SET closed_at = ?1 WHERE id = ?2 AND (closed_at IS NULL OR closed_at > ?1) RETURNING id",
+							)
+							.all(next.created_at, id),
+					);
+				return shrunk.map((r) => r.id);
+			})();
+		},
+		sessionWindows(sessionId, from, to, openWindowMs) {
+			// A window ends at the earliest of closure (report or next recommendation) and idle expiry.
+			return db
+				.query<
+					{ id: string; start: number; end: number },
+					{ session: string; from: number; to: number; idle: number }
+				>(
+					`SELECT id, start, "end" FROM (
+						SELECT id, rowid, created_at AS start,
+							MIN(COALESCE(closed_at, last_event_at + $idle + 1), last_event_at + $idle + 1) AS "end"
+						FROM suggestions WHERE session_id = $session
+					) WHERE start <= $to AND "end" > $from ORDER BY start, rowid`,
+				)
+				.all({ session: sessionId, from, to, idle: openWindowMs });
+		},
+		findOpenSuggestion(sessionId, now, openWindowMs) {
+			const row = db
+				.query<{ id: string }, [string, number]>(
+					`SELECT id FROM suggestions
+					WHERE session_id = ? AND closed_at IS NULL AND last_event_at >= ?
+					ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+				)
+				.get(sessionId, now - openWindowMs);
+			return row?.id ?? null;
+		},
+		touch(id, at) {
+			db.query("UPDATE suggestions SET last_event_at = ? WHERE id = ?").run(
+				at,
+				id,
+			);
+		},
+		closeSuggestion(id, at) {
+			db.query("UPDATE suggestions SET closed_at = ? WHERE id = ?").run(at, id);
+		},
+		insertSignal(r) {
+			db.query(
+				`INSERT INTO signals VALUES ($suggestion_id, $kind, $value, $weight, $source, $observed_at)`,
+			).run({ ...r });
+		},
+		upsertUsage(r) {
+			db.query(
+				`INSERT OR REPLACE INTO usages VALUES ($suggestion_id, $model, $effort, $source, $scope_key,
+				$input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $is_sidechain,
+				$rounds, $note, $reported_at)`,
+			).run({ ...r, is_sidechain: Number(r.is_sidechain) });
+		},
+		usageScopes(ids) {
+			return db
+				.query<Pick<UsageRecord, "source" | "scope_key" | "effort">, string[]>(
+					`SELECT source, scope_key, MAX(effort) AS effort FROM usages
+					WHERE source IN ('transcript', 'subagent') AND suggestion_id IN (${ids.map(() => "?").join()})
+					GROUP BY source, scope_key`,
+				)
+				.all(...ids);
+		},
+		rewriteScope(scope, rows) {
+			const key = {
+				session: scope.session_id,
+				source: scope.source,
+				scope_key: scope.scope_key,
+			};
+			return db
+				.transaction(() => {
+					const mark = db
+						.query<{ message_count: number; last_at: number }, typeof key>(
+							`SELECT message_count, last_at FROM usage_scopes
+							WHERE session_id = $session AND source = $source AND scope_key = $scope_key`,
+						)
+						.get(key);
+					// The last message decides (a compacted transcript has fewer messages); the count breaks ties.
+					if (
+						mark &&
+						(scope.last_at < mark.last_at ||
+							(scope.last_at === mark.last_at &&
+								scope.message_count < mark.message_count))
+					)
+						return false;
+					const replacement = rows(
+						store.sessionWindows(
+							scope.session_id,
+							scope.from,
+							scope.last_at,
+							scope.openWindowMs,
+						),
+					);
+					db.query(
+						`DELETE FROM usages WHERE source = $source AND scope_key = $scope_key
+						AND suggestion_id IN (SELECT id FROM suggestions WHERE session_id = $session)`,
+					).run(key);
+					for (const r of replacement) store.upsertUsage(r);
+					db.query(
+						`INSERT OR REPLACE INTO usage_scopes
+						VALUES ($session, $source, $scope_key, $message_count, $last_at)`,
+					).run({
+						...key,
+						message_count: scope.message_count,
+						last_at: scope.last_at,
+					});
+					return true;
+				})
+				.immediate();
+		},
+		outcome(id) {
+			return db
+				.query<Outcome, [string]>(
+					"SELECT * FROM outcomes WHERE suggestion_id = ?",
+				)
+				.get(id);
+		},
+		dispose() {
+			db.close();
+		},
+	};
+	return store;
+}

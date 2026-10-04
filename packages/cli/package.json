@@ -1,0 +1,11 @@
+{
+	"name": "@spatz/cli",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"spatz": "./src/cli.ts"
+	},
+	"dependencies": {
+		"@spatz/core": "workspace:*"
+	}
+}

@@ -1,0 +1,24 @@
+{"type": "user", "uuid": "60a9b1d2-e337-4b8d-b998-38458c17fc05", "parentUuid": null, "timestamp": "2026-10-03T22:19:20.709Z", "isSidechain": true, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de", "agentId": "a9038fc9eee25764c"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "user", "uuid": "54a1b963-fbce-4868-9117-63638031f9b0", "parentUuid": "25827460-359c-4c72-947f-0aeae364841f", "timestamp": "2026-10-03T22:19:20.785Z", "isSidechain": true, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de", "agentId": "a9038fc9eee25764c"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "assistant", "uuid": "a5a16722-546c-496b-955b-dce87d57b534", "parentUuid": "8fcaac47-8559-42ca-bc56-8316f5cbd911", "timestamp": "2026-10-03T22:19:22.912Z", "sessionId": "007accc1-0fcd-4f13-a307-fee448703384", "isSidechain": true, "agentId": "a9038fc9eee25764c", "requestId": "req_011Cfg5dhwMYZiueVfJHvdiq", "message": {"id": "msg_011Cfg5diFCsEHCFTytM5bTk", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "output_tokens": 16, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 30989}, "content": [{"type": "tool_use"}]}}
+{"type": "user", "uuid": "0e4c98fc-ed3c-4f5b-9461-b191edc67576", "parentUuid": "a5a16722-546c-496b-955b-dce87d57b534", "timestamp": "2026-10-03T22:19:22.956Z", "isSidechain": true, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de", "agentId": "a9038fc9eee25764c"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "assistant", "uuid": "59266f07-9a64-4d54-8c5c-85faec46a742", "parentUuid": "966afb87-bedf-47fb-b829-6f777fbdbd6f", "timestamp": "2026-10-03T22:19:25.035Z", "sessionId": "007accc1-0fcd-4f13-a307-fee448703384", "isSidechain": true, "agentId": "a9038fc9eee25764c", "requestId": "req_011Cfg5dtQPTR7sCCxTQiUYx", "message": {"id": "msg_011Cfg5dtg1m3i3wNmL8N9Sx", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "output_tokens": 24, "cache_read_input_tokens": 30989, "cache_creation_input_tokens": 6213}, "content": [{"type": "tool_use"}]}}
+{"type": "user", "uuid": "62de4015-87a9-47ee-ba03-b3fd3ae88893", "parentUuid": "59266f07-9a64-4d54-8c5c-85faec46a742", "timestamp": "2026-10-03T22:19:25.417Z", "isSidechain": true, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de", "agentId": "a9038fc9eee25764c"}

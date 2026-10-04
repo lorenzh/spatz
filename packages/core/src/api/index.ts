@@ -1,0 +1,374 @@
+// api: use cases suggest, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
+// Spec: "CLI-Schnittstelle", "Ablauf", "Zuordnung", "Genutztes Paar", "Privacy".
+import {
+	buildCatalog,
+	parseModelsArg,
+	toCanonicalId,
+} from "../catalog/index.ts";
+import { loadOpenRouterModels } from "../catalog/openrouter.ts";
+import { classify } from "../classify/index.ts";
+import type { CoreDeps, SpatzApi, Store } from "../contracts/deps.ts";
+import type {
+	AgentToolResponse,
+	BashToolInput,
+	BashToolResponse,
+	HookInput,
+} from "../contracts/hooks.ts";
+import {
+	type Config,
+	EFFORTS,
+	type Effort,
+	REPORT_VALUES,
+	SIGNAL_WEIGHTS,
+	type StatsReport,
+	type UsageRecord,
+} from "../contracts/types.ts";
+import { recommend } from "../recommend/index.ts";
+import type { StatsOptions } from "../report/index.ts";
+import {
+	detectCommandKind,
+	effortFromHook,
+	extractSuggestionId,
+	isIgnoredHookInput,
+	parseHookInput,
+	signalFromBashEvent,
+} from "../signals/index.ts";
+import {
+	type AssistantMessage,
+	type ModelUsage,
+	mainTurnMessages,
+	subagentMessages,
+	sumByModel,
+} from "../signals/transcript.ts";
+import { loadConfig } from "./deps.ts";
+
+export interface ApiInternals {
+	/** Test seam. Default: report module, imported lazily so DuckDB loads only for stats. */
+	runStats?: (options: StatsOptions) => Promise<StatsReport>;
+}
+
+const NO_TOKENS = {
+	input_tokens: 0,
+	output_tokens: 0,
+	cache_read_tokens: 0,
+	cache_creation_tokens: 0,
+};
+
+export function createApi(
+	deps: CoreDeps,
+	internals: ApiInternals = {},
+): SpatzApi {
+	let config: Promise<Config> | undefined;
+	const getConfig = () =>
+		(config ??= deps.config ? Promise.resolve(deps.config) : loadConfig(deps));
+
+	/** One store handle per use case; each spatz call is its own process. */
+	async function withStore<T>(
+		fn: (store: Store) => T | Promise<T>,
+	): Promise<T> {
+		const store = deps.openStore(deps.dbPath);
+		try {
+			return await fn(store);
+		} finally {
+			store.dispose();
+		}
+	}
+
+	async function onHook(input: HookInput, cfg: Config): Promise<void> {
+		if (isIgnoredHookInput(input)) return;
+		const now = deps.clock.now();
+		const canonical = (model: string) => toCanonicalId(model, cfg.aliases);
+		const usage = (
+			id: string,
+			u: Pick<UsageRecord, "model" | "source" | "scope_key" | "is_sidechain"> &
+				Partial<UsageRecord>,
+		): UsageRecord => ({
+			suggestion_id: id,
+			effort: null,
+			...NO_TOKENS,
+			rounds: null,
+			note: null,
+			reported_at: now,
+			...u,
+		});
+		type ScopeFields = Pick<
+			UsageRecord,
+			"source" | "scope_key" | "is_sidechain" | "effort"
+		>;
+		const fromTranscript = (
+			id: string,
+			rows: ModelUsage[],
+			fields: ScopeFields,
+		) => {
+			// Sum per canonical model: two raw names can map to one id, and upsert would overwrite.
+			const byModel = new Map<string, UsageRecord>();
+			for (const r of rows) {
+				const model = canonical(r.model);
+				const u = byModel.get(model) ?? usage(id, { ...fields, model });
+				u.input_tokens += r.input_tokens;
+				u.output_tokens += r.output_tokens;
+				u.cache_read_tokens += r.cache_read_tokens;
+				u.cache_creation_tokens += r.cache_creation_tokens;
+				byModel.set(model, u);
+			}
+			return [...byModel.values()];
+		};
+		/**
+		 * Each suggestion of the session gets the messages inside its own time window [created_at, end).
+		 * Rewrites the whole scope atomically, so replays drop stale rows; an older snapshot is skipped.
+		 */
+		const writeWindowed = (
+			store: Store,
+			messages: AssistantMessage[],
+			fields: ScopeFields,
+		) => {
+			const timed = messages.filter((m) => Number.isFinite(m.at));
+			if (timed.length === 0) return;
+			const times = timed.map((m) => m.at);
+			store.rewriteScope(
+				{
+					session_id: input.session_id,
+					source: fields.source,
+					scope_key: fields.scope_key,
+					message_count: timed.length,
+					from: Math.min(...times),
+					last_at: Math.max(...times),
+					openWindowMs: cfg.tuning.openWindowMs,
+				},
+				(windows) =>
+					windows.flatMap((w) =>
+						fromTranscript(
+							w.id,
+							sumByModel(timed.filter((m) => m.at >= w.start && m.at < w.end)),
+							fields,
+						),
+					),
+			);
+		};
+
+		return withStore(async (store) => {
+			// Every session event (handbacks are ignored above) is activity: it keeps the open suggestion open.
+			const open = store.findOpenSuggestion(
+				input.session_id,
+				now,
+				cfg.tuning.openWindowMs,
+			);
+			if (open) store.touch(open, now);
+
+			switch (input.hook_event_name) {
+				case "PostToolUse":
+				case "PostToolUseFailure": {
+					if (
+						input.hook_event_name === "PostToolUse" &&
+						input.tool_name === "Agent"
+					) {
+						const r = input.tool_response as AgentToolResponse | null;
+						if (!open || !r?.resolvedModel || !r.agentId) return;
+						// effort.level here is the main session's, not the subagent's: leave it empty.
+						store.upsertUsage(
+							usage(open, {
+								model: canonical(r.resolvedModel),
+								source: "agent_tool",
+								scope_key: r.agentId,
+								is_sidechain: true,
+							}),
+						);
+						return;
+					}
+					if (input.tool_name !== "Bash") return;
+					const command =
+						(input.tool_input as BashToolInput | null)?.command ?? "";
+					if (
+						input.hook_event_name === "PostToolUse" &&
+						detectCommandKind(command) === "spatz-suggest"
+					) {
+						const stdout =
+							(input.tool_response as BashToolResponse | null)?.stdout ?? "";
+						const id = extractSuggestionId(stdout);
+						if (!id) return;
+						const shrunk = store.linkSession(
+							id,
+							input.session_id,
+							input.prompt_id ?? null,
+							now,
+						);
+						// A delayed link can shrink windows that Stop or SubagentStop already filled: rewrite those scopes.
+						for (const scope of store.usageScopes(shrunk)) {
+							const sub = scope.source === "subagent";
+							// ponytail: subagent path derived from the Claude Code layout <session>/subagents/agent-<id>.jsonl
+							const path = sub
+								? `${input.transcript_path.replace(/\.jsonl$/, "")}/subagents/agent-${scope.scope_key}.jsonl`
+								: input.transcript_path;
+							const text = await Bun.file(path)
+								.text()
+								.catch(() => null);
+							if (text === null) continue;
+							writeWindowed(
+								store,
+								sub
+									? subagentMessages(text)
+									: mainTurnMessages(text, scope.scope_key),
+								{ ...scope, is_sidechain: sub },
+							);
+						}
+						return;
+					}
+					const signal = open && signalFromBashEvent(input, open, now);
+					if (signal) store.insertSignal(signal);
+					return;
+				}
+				case "Stop": {
+					const promptId = input.prompt_id;
+					if (!promptId) return;
+					return writeWindowed(
+						store,
+						mainTurnMessages(
+							await Bun.file(input.transcript_path).text(),
+							promptId,
+						),
+						{
+							source: "transcript",
+							scope_key: promptId,
+							is_sidechain: false,
+							effort: effortFromHook(input),
+						},
+					);
+				}
+				case "SubagentStop":
+					return writeWindowed(
+						store,
+						subagentMessages(
+							await Bun.file(input.agent_transcript_path).text(),
+						),
+						{
+							source: "subagent",
+							scope_key: input.agent_id,
+							is_sidechain: true,
+							effort: effortFromHook(input),
+						},
+					);
+			}
+		});
+	}
+
+	return {
+		async suggest({ task, models, dryRun }) {
+			const requested = parseModelsArg(models);
+			const cfg = await getConfig();
+			const openRouter = await loadOpenRouterModels({
+				fetch: deps.fetch,
+				env: deps.env,
+				cachePath: deps.openRouterCachePath,
+				clock: deps.clock,
+				ttlMs: cfg.tuning.openRouterCacheMs,
+				timeoutMs: cfg.tuning.openRouterTimeoutMs,
+			});
+			const catalog = buildCatalog(requested, openRouter, cfg);
+			if (catalog.length === 0)
+				throw new Error("--models: no usable candidate");
+			// The task text goes to classify (and maybe Jev) only; it is never stored.
+			const c = await classify(task, catalog, deps.jev, cfg);
+			return withStore((store) => {
+				const d = recommend(
+					{ classification: c, random: deps.random(), tuning: cfg.tuning },
+					catalog,
+					store.cellStats(c.task_type),
+				);
+				const id = deps.newId();
+				const now = deps.clock.now();
+				store.insertSuggestion({
+					id,
+					created_at: now,
+					session_id: null,
+					prompt_id: null,
+					task_type: c.task_type,
+					difficulty: c.difficulty,
+					criticality: c.criticality,
+					probabilities: c.probabilities,
+					model_ref: c.model_ref,
+					strategy: d.strategy,
+					ranking: d.ranking,
+					reason: d.reason,
+					explored: d.explored,
+					control: d.control,
+					fallback_used: c.fallback_used,
+					is_test: dryRun,
+					last_event_at: now,
+					closed_at: null,
+				});
+				return {
+					suggestion_id: id,
+					ranking: d.ranking,
+					reason: d.reason,
+					classification: {
+						task_type: c.task_type,
+						difficulty: c.difficulty,
+						criticality: c.criticality,
+					},
+					fallback_used: c.fallback_used,
+					explored: d.explored,
+					control: d.control,
+					strategy: d.strategy,
+					is_test: dryRun,
+				};
+			});
+		},
+
+		async report({ suggestionId, model, effort, result, rounds, note }) {
+			if (!(EFFORTS as readonly string[]).includes(effort))
+				throw new Error(
+					`invalid effort "${effort}" (allowed: ${EFFORTS.join(", ")})`,
+				);
+			if (!Object.hasOwn(REPORT_VALUES, result))
+				throw new Error(`invalid result "${result}"`);
+			const cfg = await getConfig();
+			return withStore((store) => {
+				if (!store.getSuggestion(suggestionId))
+					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				const now = deps.clock.now();
+				store.upsertUsage({
+					suggestion_id: suggestionId,
+					model: toCanonicalId(model, cfg.aliases),
+					effort: effort as Effort,
+					source: "report",
+					scope_key: "",
+					...NO_TOKENS,
+					is_sidechain: false,
+					rounds: rounds ?? null,
+					note: note ?? null,
+					reported_at: now,
+				});
+				store.insertSignal({
+					suggestion_id: suggestionId,
+					kind: "report",
+					value: REPORT_VALUES[result],
+					weight: SIGNAL_WEIGHTS.report,
+					source: "report",
+					observed_at: now,
+				});
+				store.closeSuggestion(suggestionId, now);
+				return store.outcome(suggestionId);
+			});
+		},
+
+		async handleHook(_event, stdin) {
+			// Hooks must never block the session: every error is swallowed.
+			try {
+				const input = parseHookInput(stdin);
+				if (input) await onHook(input, await getConfig());
+			} catch {}
+		},
+
+		async stats({ type }) {
+			const cfg = await getConfig();
+			const runStats =
+				internals.runStats ?? (await import("../report/index.ts")).runStats;
+			return runStats({
+				dbPath: deps.dbPath,
+				extensionDir: deps.duckdbExtensionDir,
+				...(type && { type }),
+				successQuality: cfg.tuning.successQuality,
+			});
+		},
+	};
+}
