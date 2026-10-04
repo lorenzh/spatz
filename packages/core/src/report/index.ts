@@ -1,0 +1,126 @@
+// report: DuckDB read-only evaluation over the SQLite file (only loaded by spatz stats).
+// Spec: "Datenhaltung", "Erfolgskriterien und Messung".
+import { DuckDBInstance } from "@duckdb/node-api";
+import type {
+	PairStats,
+	StatsReport,
+	TaskType,
+	TypeStats,
+} from "../contracts/types.ts";
+
+export interface StatsOptions {
+	dbPath: string;
+	/** DuckDB extension_directory holding the sqlite extension; INSTALL sqlite only if missing. */
+	extensionDir: string;
+	type?: TaskType;
+	/** Success means quality >= this (0.8). */
+	successQuality: number;
+	/** Called with each SQL statement before it runs; may throw to abort (tests block INSTALL). */
+	onSql?: (sql: string) => void;
+}
+
+// Non-test suggestions and their outcomes. The sqlite scanner reads the view's
+// CAST(... AS REAL) column as FLOAT (0.79999999 -> 0.800000011920929), so the
+// success test runs inside SQLite at double precision.
+const base = (q: number) => `
+WITH s AS (SELECT * FROM db.suggestions WHERE is_test = 0),
+oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, effort, quality >= ${q} AS success FROM outcomes')),
+o AS (
+	SELECT s.task_type, s.difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
+		o.success::INTEGER AS success,
+		COALESCE(o.model = json_extract_string(s.ranking, '$[0].model')
+			AND o.effort = json_extract_string(s.ranking, '$[0].effort'), false)::INTEGER AS adopted
+	FROM s JOIN oq o ON o.suggestion_id = s.id
+)`;
+
+/** LOAD sqlite; ATTACH dbPath (TYPE sqlite, READ_ONLY); aggregates from suggestions, usages and the outcomes view; is_test rows excluded. */
+export async function runStats(options: StatsOptions): Promise<StatsReport> {
+	const { dbPath, extensionDir, type, successQuality: q, onSql } = options;
+	// Interpolated into SQL: String(q) of a finite number round-trips exactly.
+	if (!Number.isFinite(q)) throw new Error(`invalid successQuality: ${q}`);
+	const BASE = base(q);
+	const instance = await DuckDBInstance.create(":memory:", {
+		extension_directory: extensionDir,
+		// Only the explicit INSTALL below may download.
+		autoinstall_known_extensions: "false",
+	});
+	const c = await instance.connect();
+	const run = (sql: string) => {
+		onSql?.(sql);
+		return c.run(sql);
+	};
+	const rows = async <T>(sql: string): Promise<T[]> => {
+		onSql?.(`${BASE} ${sql}`);
+		return (await c.runAndReadAll(`${BASE} ${sql}`)).getRowObjectsJS() as T[];
+	};
+	try {
+		try {
+			await run("LOAD sqlite");
+		} catch {
+			await run("INSTALL sqlite");
+			await run("LOAD sqlite");
+		}
+		await run(
+			`ATTACH '${dbPath.replaceAll("'", "''")}' AS db (TYPE sqlite, READ_ONLY)`,
+		);
+
+		const types = await rows<Omit<TypeStats, "pairs">>(
+			`, tok AS (
+				SELECT s.task_type, COALESCE(SUM(u.input_tokens), 0)::DOUBLE AS input_tokens,
+					COALESCE(SUM(u.output_tokens), 0)::DOUBLE AS output_tokens
+				FROM s LEFT JOIN db.usages u ON u.suggestion_id = s.id GROUP BY ALL
+			), agg AS (
+				SELECT task_type, COUNT(*)::INTEGER AS n, AVG(adopted) AS adoption_rate FROM o GROUP BY ALL
+			)
+			SELECT tok.task_type, COALESCE(agg.n, 0) AS n, COALESCE(agg.adoption_rate, 0) AS adoption_rate,
+				tok.input_tokens, tok.output_tokens
+			FROM tok LEFT JOIN agg USING (task_type) ORDER BY tok.task_type`,
+		);
+		const pairs = await rows<PairStats & { task_type: TaskType }>(
+			`SELECT task_type, model, effort, COUNT(*)::INTEGER AS n, AVG(success) AS success_rate
+			FROM o WHERE model IS NOT NULL GROUP BY ALL ORDER BY model, effort`,
+		);
+		const [cov] = await rows<{ coverage: number | null }>(
+			`SELECT COUNT(o.suggestion_id) / NULLIF(COUNT(*), 0) AS coverage
+			FROM s LEFT JOIN db.outcomes o ON o.suggestion_id = s.id`,
+		);
+		// Learned picks (strategy learned, no exploration) vs the control group, per cell (task_type, difficulty)
+		// with both groups, weighted by the cell's count of these outcomes. Exploration, jev-choice and rules are no learned pick.
+		const [cmp] = await rows<{
+			learned_success: number | null;
+			control_success: number | null;
+		}>(
+			`, cmp AS (
+				SELECT task_type, difficulty, success, control = 1 AS is_control FROM o
+				WHERE control = 1 OR (strategy = 'learned' AND explored = 0)
+			), cells AS (
+				SELECT COUNT(*) AS w,
+					AVG(success) FILTER (WHERE NOT is_control) AS l,
+					AVG(success) FILTER (WHERE is_control) AS k
+				FROM cmp GROUP BY task_type, difficulty HAVING l IS NOT NULL AND k IS NOT NULL
+			)
+			SELECT SUM(w * l) / SUM(w) AS learned_success, SUM(w * k) / SUM(w) AS control_success FROM cells`,
+		);
+
+		return {
+			by_type: types
+				.filter((t) => !type || t.task_type === type)
+				.map((t) => ({
+					task_type: t.task_type,
+					n: t.n,
+					pairs: pairs
+						.filter((p) => p.task_type === t.task_type)
+						.map(({ task_type: _, ...p }) => p),
+					adoption_rate: t.adoption_rate,
+					input_tokens: t.input_tokens,
+					output_tokens: t.output_tokens,
+				})),
+			coverage: cov?.coverage ?? 0,
+			learned_success: cmp?.learned_success ?? null,
+			control_success: cmp?.control_success ?? null,
+		};
+	} finally {
+		c.closeSync();
+		instance.closeSync();
+	}
+}

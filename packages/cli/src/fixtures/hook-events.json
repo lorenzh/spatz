@@ -1,0 +1,160 @@
+{
+	"_comment": "Real Claude Code hook inputs from the 2026-10-04 logging-hook spike. Prompt texts and tool outputs removed; Bash commands replaced; $MAIN_TRANSCRIPT/$SUBAGENT_TRANSCRIPT and $STDOUT are filled in by the test.",
+	"spatzCall": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"effort": {
+			"level": "low"
+		},
+		"hook_event_name": "PostToolUse",
+		"tool_name": "Bash",
+		"tool_input": {
+			"command": "spatz \"Fix the off-by-one error in the pagination helper\" --models claude-opus-5-5:high,gpt-6-luna:low --json"
+		},
+		"tool_response": {
+			"stdout": "$STDOUT",
+			"stderr": "",
+			"interrupted": false,
+			"isImage": false,
+			"noOutputExpected": false
+		},
+		"tool_use_id": "toolu_01TFpvsZi6dShGGNtcJChifJ",
+		"duration_ms": 114
+	},
+	"testPass": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"effort": {
+			"level": "low"
+		},
+		"hook_event_name": "PostToolUse",
+		"tool_name": "Bash",
+		"tool_input": {
+			"command": "bun test"
+		},
+		"tool_response": {
+			"stdout": "",
+			"stderr": "",
+			"interrupted": false,
+			"isImage": false,
+			"noOutputExpected": false
+		},
+		"tool_use_id": "toolu_01TFpvsZi6dShGGNtcJChifJ",
+		"duration_ms": 114
+	},
+	"buildFail": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"effort": {
+			"level": "low"
+		},
+		"hook_event_name": "PostToolUseFailure",
+		"tool_name": "Bash",
+		"tool_input": {
+			"command": "bun run build"
+		},
+		"tool_use_id": "toolu_01Cyr3bYCdJs3BopQBrS61Bi",
+		"error": "Exit code 1",
+		"is_interrupt": false,
+		"duration_ms": 9
+	},
+	"agentTool": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"effort": {
+			"level": "low"
+		},
+		"hook_event_name": "PostToolUse",
+		"tool_name": "Agent",
+		"tool_input": {
+			"description": "[redacted]",
+			"subagent_type": "general-purpose",
+			"run_in_background": false
+		},
+		"tool_response": {
+			"status": "completed",
+			"agentId": "a9038fc9eee25764c",
+			"agentType": "general-purpose",
+			"resolvedModel": "claude-sonnet-5-5",
+			"totalDurationMs": 4727,
+			"totalTokens": 37267
+		},
+		"tool_use_id": "toolu_01XNynRjBANZABUuuVj25eYo",
+		"duration_ms": 4728
+	},
+	"subagentStop": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"agent_id": "a9038fc9eee25764c",
+		"agent_type": "general-purpose",
+		"effort": {
+			"level": "low"
+		},
+		"hook_event_name": "SubagentStop",
+		"stop_hook_active": false,
+		"agent_transcript_path": "$SUBAGENT_TRANSCRIPT",
+		"background_tasks": [],
+		"session_crons": []
+	},
+	"handback": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"agent_id": "a9038fc9eee25764c",
+		"agent_type": "general-purpose",
+		"effort": {
+			"level": "low"
+		},
+		"hook_event_name": "PostToolUse",
+		"tool_name": "SubagentHandback",
+		"tool_input": {
+			"message": "[redacted]"
+		},
+		"tool_response": {
+			"success": true,
+			"message": "Report delivered to your caller."
+		},
+		"tool_use_id": "toolu_013kXMKkSt8UQ6wVDorKjPqP",
+		"duration_ms": 38
+	},
+	"agentMessage": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"hook_event_name": "UserPromptSubmit",
+		"prompt": "<agent-message from=\"a9038fc9eee25764c\">[redacted]</agent-message>"
+	},
+	"stop": {
+		"session_id": "007accc1-0fcd-4f13-a307-fee448703384",
+		"transcript_path": "$MAIN_TRANSCRIPT",
+		"cwd": "/tmp/proj",
+		"prompt_id": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de",
+		"permission_mode": "auto",
+		"effort": {
+			"level": "low"
+		},
+		"hook_event_name": "Stop",
+		"stop_hook_active": false,
+		"background_tasks": [],
+		"session_crons": []
+	}
+}

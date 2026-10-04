@@ -1,0 +1,1186 @@
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type {
+	CoreDeps,
+	JevClient,
+	JevRequest,
+	JevResult,
+	Store,
+} from "../contracts/deps.ts";
+import {
+	type Config,
+	DEFAULT_TUNING,
+	type ReportResult,
+	type StatsReport,
+} from "../contracts/types.ts";
+import { openStore } from "../store/index.ts";
+import { createApi } from "./index.ts";
+
+const OPENROUTER_FIXTURE = join(
+	import.meta.dir,
+	"../catalog/fixtures/openrouter-models.json",
+);
+const IDS = [
+	"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+	"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+	"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+	"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4",
+	"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5",
+	"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+] as const;
+const [ID1, ID2] = IDS;
+const SESSION = "5e550000-0000-4000-8000-000000000001";
+const PROMPT = "9f000000-0000-4000-8000-000000000001";
+// luna:low is the cheapest pair, opus:high the most expensive.
+const MODELS = "claude-opus-5-5:high,gpt-6-luna:low";
+const T0 = 1_800_000_000_000;
+const HOUR = 60 * 60 * 1000;
+const WRITES = [
+	"insertSuggestion",
+	"linkSession",
+	"touch",
+	"closeSuggestion",
+	"insertSignal",
+	"upsertUsage",
+	"rewriteScope",
+];
+
+const config = (over: Partial<Config> = {}): Config => ({
+	jevEnabled: true,
+	tuning: DEFAULT_TUNING,
+	aliases: {},
+	descriptions: {},
+	...over,
+});
+
+function jevResult(best = "openai/gpt-6-luna:low"): JevResult {
+	return {
+		model: "jev-1.13.0",
+		answers: {
+			task_type: {
+				type: "choice",
+				choice: "code.bugfix",
+				confidence: 0.9,
+				probabilities: { "code.bugfix": 0.9, other: 0.1 },
+			},
+			difficulty: {
+				type: "score",
+				score: 0,
+				confidence: 0.8,
+				probabilities: { "0": 0.8, "1": 0.15, "2": 0.05 },
+			},
+			criticality: {
+				type: "choice",
+				choice: "none",
+				confidence: 0.95,
+				probabilities: { none: 0.95, security: 0.05 },
+			},
+			best_candidate: {
+				type: "choice",
+				choice: best,
+				confidence: 0.7,
+				probabilities: { [best]: 0.7 },
+			},
+		},
+		usage: { input_tokens: 10, output_tokens: 4 },
+	};
+}
+
+function fakeJev(): JevClient & { requests: JevRequest[] } {
+	const requests: JevRequest[] = [];
+	return {
+		requests,
+		systemOne: async (request) => {
+			requests.push(request);
+			return jevResult();
+		},
+	};
+}
+
+type Call = [method: string, args: unknown[]];
+
+/** Real in-memory store that records every call; dispose is a no-op so data survives between api calls. */
+function spyStore(): { store: Store; calls: Call[] } {
+	const real = openStore(":memory:");
+	const calls: Call[] = [];
+	const store = Object.fromEntries(
+		Object.entries(real).map(([name, fn]) => [
+			name,
+			(...args: unknown[]) => {
+				calls.push([name, args]);
+				if (name === "dispose") return undefined;
+				if (name === "rewriteScope") {
+					// The real store upserts these rows internally: record them as upsertUsage calls.
+					const [scope, rows] = args as Parameters<Store["rewriteScope"]>;
+					return real.rewriteScope(scope, (windows) => {
+						const out = rows(windows);
+						for (const u of out) calls.push(["upsertUsage", [u]]);
+						return out;
+					});
+				}
+				return (fn as (...a: unknown[]) => unknown)(...args);
+			},
+		]),
+	) as unknown as Store;
+	return { store, calls };
+}
+
+let dir: string;
+beforeEach(() => {
+	dir = mkdtempSync(join(tmpdir(), "spatz-api-"));
+});
+afterEach(() => {
+	rmSync(dir, { recursive: true, force: true });
+});
+
+function setup(over: Partial<CoreDeps> = {}) {
+	const { store, calls } = spyStore();
+	let now = T0;
+	let idIndex = 0;
+	const fetched: string[] = [];
+	let draws = 0;
+	const deps: CoreDeps = {
+		env: {},
+		homeDir: dir,
+		cwd: dir,
+		dbPath: join(dir, "spatz.db"),
+		openRouterCachePath: join(dir, "openrouter-models.json"),
+		duckdbExtensionDir: join(dir, "ext"),
+		fetch: async (url) => {
+			fetched.push(url);
+			return new Response(Bun.file(OPENROUTER_FIXTURE));
+		},
+		jev: null,
+		clock: { now: () => now },
+		random: () => {
+			draws++;
+			return 0.5;
+		},
+		newId: () => IDS[idIndex++] as string,
+		openStore: () => store,
+		config: config(),
+		...over,
+	};
+	return {
+		deps,
+		api: createApi(deps),
+		store,
+		calls,
+		fetched,
+		draws: () => draws,
+		setNow: (t: number) => {
+			now = t;
+		},
+		writes: () => calls.filter(([m]) => WRITES.includes(m)),
+		argsOf: (method: string) =>
+			calls.filter(([m]) => m === method).map(([, a]) => a),
+	};
+}
+
+const suggestInput = (
+	task = "Fix the off-by-one in the pagination helper",
+) => ({
+	task,
+	models: MODELS,
+	dryRun: false,
+});
+
+describe("suggest", () => {
+	test("runs the pipeline with Jev and stores the suggestion without task text", async () => {
+		const jev = fakeJev();
+		const s = setup({ jev });
+		const task = "Fix the off-by-one in the pagination helper";
+
+		const out = await s.api.suggest(suggestInput(task));
+
+		expect(out).toEqual({
+			suggestion_id: ID1,
+			ranking: [
+				{ model: "openai/gpt-6-luna", effort: "low", estimate: 0.5, n: 0 },
+				{
+					model: "anthropic/claude-opus-5.5",
+					effort: "high",
+					estimate: 0.5,
+					n: 0,
+				},
+			],
+			reason: expect.any(String),
+			classification: {
+				task_type: "code.bugfix",
+				difficulty: "leicht",
+				criticality: "none",
+			},
+			fallback_used: false,
+			explored: false,
+			control: false,
+			strategy: "jev-choice",
+			is_test: false,
+		});
+		expect(s.fetched).toEqual(["https://openrouter.ai/api/v1/models"]);
+		expect(s.draws()).toBe(1);
+		expect(jev.requests).toHaveLength(1);
+		expect(jev.requests[0]?.state).toBe(task);
+		expect(s.argsOf("cellStats")).toEqual([["code.bugfix"]]);
+
+		const [[record]] = s.argsOf("insertSuggestion") as [[unknown]];
+		expect(record).toEqual({
+			id: ID1,
+			created_at: T0,
+			session_id: null,
+			prompt_id: null,
+			task_type: "code.bugfix",
+			difficulty: "leicht",
+			criticality: "none",
+			probabilities: expect.objectContaining({
+				difficulty: { leicht: 0.8, mittel: 0.15, schwer: 0.05 },
+			}),
+			model_ref: "jev-1.13.0",
+			strategy: "jev-choice",
+			ranking: out.ranking,
+			reason: out.reason,
+			explored: false,
+			control: false,
+			fallback_used: false,
+			is_test: false,
+			last_event_at: T0,
+			closed_at: null,
+		});
+		expect(JSON.stringify(s.calls)).not.toContain(task);
+		expect(JSON.stringify(s.store.getSuggestion(ID1))).not.toContain(task);
+	});
+
+	test("--dry-run sets is_test", async () => {
+		const s = setup();
+		const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
+		expect(out.is_test).toBe(true);
+		expect(s.store.getSuggestion(ID1)?.is_test).toBe(true);
+	});
+
+	test("a hanging OpenRouter request is bounded by openRouterTimeoutMs", async () => {
+		const s = setup({
+			fetch: () => new Promise<Response>(() => {}),
+			config: config({
+				tuning: { ...DEFAULT_TUNING, openRouterTimeoutMs: 20 },
+			}),
+		});
+		const r = await s.api.suggest(suggestInput());
+		expect(r.ranking.length).toBeGreaterThan(0);
+	});
+
+	test("OpenRouter list is cached for 24 h", async () => {
+		const s = setup();
+		await s.api.suggest(suggestInput());
+		s.setNow(T0 + 24 * HOUR - 1);
+		await s.api.suggest(suggestInput());
+		expect(s.fetched).toHaveLength(1);
+		s.setNow(T0 + 24 * HOUR);
+		await s.api.suggest(suggestInput());
+		expect(s.fetched).toHaveLength(2);
+	});
+
+	test("without Jev: fallback_used and strategy rules (most expensive pair)", async () => {
+		const s = setup({ jev: null });
+		const out = await s.api.suggest(suggestInput());
+		expect(out.fallback_used).toBe(true);
+		expect(out.strategy).toBe("rules");
+		expect(out.ranking[0]).toMatchObject({
+			model: "anthropic/claude-opus-5.5",
+			effort: "high",
+		});
+		expect(out.classification).toEqual({
+			task_type: "other",
+			difficulty: "mittel",
+			criticality: "none",
+		});
+	});
+
+	test("without Jev and a control draw: strategy strongest, control true", async () => {
+		const s = setup({ jev: null, random: () => 0.05 });
+		const out = await s.api.suggest(suggestInput());
+		expect(out.fallback_used).toBe(true);
+		expect(out.strategy).toBe("strongest");
+		expect(out.control).toBe(true);
+	});
+
+	test("opt-out: Jev is not called and nothing stored contains the task", async () => {
+		const jev = fakeJev();
+		const s = setup({ jev, config: config({ jevEnabled: false }) });
+		const task = "Refactor the very-private-feature module";
+		const out = await s.api.suggest(suggestInput(task));
+		expect(jev.requests).toHaveLength(0);
+		expect(out.fallback_used).toBe(true);
+		expect(JSON.stringify(s.calls)).not.toContain(task);
+	});
+
+	test("secret in the task: Jev is not called and nothing stored contains the task", async () => {
+		const jev = fakeJev();
+		const s = setup({ jev });
+		const task = "Rotate the key password=hunter2hunter2 in config";
+		const out = await s.api.suggest(suggestInput(task));
+		expect(jev.requests).toHaveLength(0);
+		expect(out.fallback_used).toBe(true);
+		const stored = JSON.stringify(s.calls);
+		expect(stored).not.toContain(task);
+		expect(stored).not.toContain("hunter2");
+	});
+
+	test("learned history from cellStats drives the next suggestion", async () => {
+		const s = setup({ jev: fakeJev() });
+		for (let i = 0; i < 5; i++) {
+			const { suggestion_id } = await s.api.suggest(suggestInput());
+			await s.api.report({
+				suggestionId: suggestion_id,
+				model: "gpt-6-luna",
+				effort: "low",
+				result: "pass",
+			});
+		}
+		const out = await s.api.suggest(suggestInput());
+		expect(out.strategy).toBe("learned");
+		expect(out.ranking[0]).toEqual({
+			model: "openai/gpt-6-luna",
+			effort: "low",
+			estimate: 6 / 7,
+			n: 5,
+		});
+	});
+
+	test("invalid --models throws", async () => {
+		const s = setup();
+		await expect(
+			s.api.suggest({ ...suggestInput(), models: "gpt-6-sol:ultra" }),
+		).rejects.toThrow();
+		expect(s.writes()).toEqual([]);
+	});
+});
+
+describe("report", () => {
+	test("canonicalizes the model, upserts usage, inserts the report signal, closes, returns the outcome", async () => {
+		const s = setup();
+		await s.api.suggest(suggestInput());
+		s.setNow(T0 + 1000);
+
+		const outcome = await s.api.report({
+			suggestionId: ID1,
+			model: "claude-opus-5-5",
+			effort: "high",
+			result: "partial",
+			rounds: 2,
+			note: "needed a second try",
+		});
+
+		expect(s.argsOf("upsertUsage")).toEqual([
+			[
+				{
+					suggestion_id: ID1,
+					model: "anthropic/claude-opus-5.5",
+					effort: "high",
+					source: "report",
+					scope_key: "",
+					input_tokens: 0,
+					output_tokens: 0,
+					cache_read_tokens: 0,
+					cache_creation_tokens: 0,
+					is_sidechain: false,
+					rounds: 2,
+					note: "needed a second try",
+					reported_at: T0 + 1000,
+				},
+			],
+		]);
+		expect(s.argsOf("insertSignal")).toEqual([
+			[
+				{
+					suggestion_id: ID1,
+					kind: "report",
+					value: 0.5,
+					weight: 1,
+					source: "report",
+					observed_at: T0 + 1000,
+				},
+			],
+		]);
+		expect(s.argsOf("closeSuggestion")).toEqual([[ID1, T0 + 1000]]);
+		expect(s.store.getSuggestion(ID1)?.closed_at).toBe(T0 + 1000);
+		expect(outcome).toEqual({
+			suggestion_id: ID1,
+			quality: 0.5,
+			model: "anthropic/claude-opus-5.5",
+			effort: "high",
+		});
+	});
+
+	test.each([
+		["pass", 1],
+		["fail", 0],
+	] as const)(
+		"result %s -> signal value %d, rounds/note default null",
+		async (result, value) => {
+			const s = setup();
+			await s.api.suggest(suggestInput());
+			await s.api.report({
+				suggestionId: ID1,
+				model: "gpt-6-luna",
+				effort: "low",
+				result,
+			});
+			const [[signal]] = s.argsOf("insertSignal") as [[{ value: number }]];
+			expect(signal.value).toBe(value);
+			const [[usage]] = s.argsOf("upsertUsage") as [[object]];
+			expect(usage).toMatchObject({
+				model: "openai/gpt-6-luna",
+				rounds: null,
+				note: null,
+			});
+		},
+	);
+
+	test("rejects an effort outside low..max without writing", async () => {
+		const s = setup();
+		await s.api.suggest(suggestInput());
+		const before = s.writes().length;
+		await expect(
+			s.api.report({
+				suggestionId: ID1,
+				model: "gpt-6-luna",
+				effort: "ultra",
+				result: "pass",
+			}),
+		).rejects.toThrow(/effort/);
+		expect(s.writes()).toHaveLength(before);
+	});
+
+	test.each(["bogus", "toString", "constructor", "__proto__", "valueOf"])(
+		"rejects result %p (incl. inherited property names) without writing",
+		async (result) => {
+			const s = setup();
+			await s.api.suggest(suggestInput());
+			const before = s.writes().length;
+			await expect(
+				s.api.report({
+					suggestionId: ID1,
+					model: "gpt-6-luna",
+					effort: "low",
+					// the CLI passes raw argv here; the type does not protect the runtime check
+					result: result as ReportResult,
+				}),
+			).rejects.toThrow(/result/);
+			expect(s.writes()).toHaveLength(before);
+		},
+	);
+
+	test("rejects an unknown suggestion_id without writing", async () => {
+		const s = setup();
+		await expect(
+			s.api.report({
+				suggestionId: ID2,
+				model: "gpt-6-luna",
+				effort: "low",
+				result: "pass",
+			}),
+		).rejects.toThrow(ID2);
+		expect(s.writes()).toEqual([]);
+	});
+});
+
+// ---------- hooks ----------
+
+const base = (over: Record<string, unknown> = {}) => ({
+	session_id: SESSION,
+	transcript_path: "/nonexistent/main.jsonl",
+	cwd: "/tmp/proj",
+	prompt_id: PROMPT,
+	effort: { level: "high" },
+	...over,
+});
+
+const bash = (
+	command: string,
+	stdout = "",
+	event: "PostToolUse" | "PostToolUseFailure" = "PostToolUse",
+) =>
+	JSON.stringify(
+		base({
+			hook_event_name: event,
+			tool_name: "Bash",
+			tool_input: { command },
+			tool_use_id: "toolu_1",
+			...(event === "PostToolUse"
+				? { tool_response: { stdout, stderr: "", interrupted: false } }
+				: { error: "Exit code 1" }),
+		}),
+	);
+
+const linkHook = (id: string) =>
+	bash(`spatz "fix it" --models ${MODELS}`, `suggestion_id: ${id}\n1. x`);
+
+/** suggest + link to SESSION via the PostToolUse hook. */
+async function linked(s: ReturnType<typeof setup>) {
+	const { suggestion_id } = await s.api.suggest(suggestInput());
+	await s.api.handleHook("PostToolUse", linkHook(suggestion_id));
+	return suggestion_id;
+}
+
+const iso = (t: number) => new Date(t).toISOString();
+const assistant = (
+	id: string,
+	model: string,
+	output: number,
+	extra = {},
+	at = T0 + 1000,
+) =>
+	JSON.stringify({
+		type: "assistant",
+		timestamp: iso(at),
+		message: {
+			id,
+			model,
+			usage: {
+				input_tokens: 3,
+				output_tokens: output,
+				cache_read_input_tokens: 100,
+				cache_creation_input_tokens: 7,
+			},
+		},
+		...extra,
+	});
+
+describe("handleHook", () => {
+	test("never throws: invalid JSON, unknown event, missing transcript, store errors", async () => {
+		const s = setup();
+		await expect(
+			s.api.handleHook("Stop", "{not json"),
+		).resolves.toBeUndefined();
+		await expect(
+			s.api.handleHook(
+				"Bogus",
+				JSON.stringify(base({ hook_event_name: "Bogus" })),
+			),
+		).resolves.toBeUndefined();
+		await linked(s);
+		await expect(
+			s.api.handleHook(
+				"Stop",
+				JSON.stringify(
+					base({ hook_event_name: "Stop", stop_hook_active: false }),
+				),
+			),
+		).resolves.toBeUndefined();
+
+		const broken = setup({
+			openStore: () => {
+				throw new Error("disk full");
+			},
+		});
+		await expect(
+			broken.api.handleHook("PostToolUse", bash("bun test")),
+		).resolves.toBeUndefined();
+
+		const failing = setup();
+		failing.store.findOpenSuggestion = () => {
+			throw new Error("SQLITE_BUSY");
+		};
+		await expect(
+			failing.api.handleHook("PostToolUse", bash("bun test")),
+		).resolves.toBeUndefined();
+	});
+
+	test("PostToolUse Bash with a spatz suggest call links the session and closes the previous open suggestion", async () => {
+		const s = setup();
+		const first = await linked(s);
+		expect(s.argsOf("linkSession")).toEqual([[first, SESSION, PROMPT, T0]]);
+
+		s.setNow(T0 + 5000);
+		const second = await linked(s);
+		expect(s.argsOf("linkSession")[1]).toEqual([
+			second,
+			SESSION,
+			PROMPT,
+			T0 + 5000,
+		]);
+		expect(s.store.getSuggestion(first)?.closed_at).toBe(T0 + 5000);
+		expect(s.store.findOpenSuggestion(SESSION, T0 + 5000, HOUR)).toBe(second);
+	});
+
+	test.each([
+		["PostToolUse", "bun test packages/core", "test", 1, 1],
+		["PostToolUseFailure", "bun test packages/core", "test", 0, 1],
+		["PostToolUse", "bun run build", "build", 1, 0.8],
+		["PostToolUseFailure", "bun run build", "build", 0, 0.8],
+	] as const)(
+		"%s Bash %p -> signal %s value %d weight %d on the open suggestion, touch",
+		async (event, command, kind, value, weight) => {
+			const s = setup();
+			const id = await linked(s);
+			s.setNow(T0 + 1000);
+			await s.api.handleHook(event, bash(command, "", event));
+			expect(s.argsOf("findOpenSuggestion")).toContainEqual([
+				SESSION,
+				T0 + 1000,
+				7_200_000,
+			]);
+			expect(s.argsOf("insertSignal")).toEqual([
+				[
+					{
+						suggestion_id: id,
+						kind,
+						value,
+						weight,
+						source: event,
+						observed_at: T0 + 1000,
+					},
+				],
+			]);
+			expect(s.argsOf("touch")).toContainEqual([id, T0 + 1000]);
+			expect(s.store.getSuggestion(id)?.last_event_at).toBe(T0 + 1000);
+		},
+	);
+
+	test("no open suggestion (none linked, or idle > 2 h) -> nothing written", async () => {
+		const s = setup();
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		expect(s.writes()).toEqual([]);
+
+		await linked(s);
+		const before = s.writes().length;
+		s.setNow(T0 + 2 * HOUR + 1);
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		expect(s.writes()).toHaveLength(before);
+	});
+
+	test("timeout boundary: exactly 2 h idle is still open", async () => {
+		const s = setup();
+		const id = await linked(s);
+		s.setNow(T0 + 2 * HOUR);
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		expect(s.argsOf("insertSignal")).toEqual([
+			[expect.objectContaining({ suggestion_id: id, kind: "test" })],
+		]);
+		expect(s.argsOf("touch")).toContainEqual([id, T0 + 2 * HOUR]);
+	});
+
+	test("Bash commands that are neither spatz, test nor build only refresh the window", async () => {
+		const s = setup();
+		const id = await linked(s);
+		const before = s.writes().length;
+		s.setNow(T0 + 1000);
+		await s.api.handleHook("PostToolUse", bash("echo ok", "ok"));
+		expect(s.writes().slice(before)).toEqual([["touch", [id, T0 + 1000]]]);
+	});
+
+	test("events without a signal keep the suggestion open (2 h counts from the last event)", async () => {
+		const s = setup();
+		const id = await linked(s);
+		s.setNow(T0 + HOUR);
+		await s.api.handleHook("PostToolUse", bash("echo ok", "ok"));
+		s.setNow(T0 + 2 * HOUR + 1);
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		expect(s.argsOf("insertSignal")).toEqual([
+			[expect.objectContaining({ suggestion_id: id, kind: "test" })],
+		]);
+	});
+
+	test("handback events do not refresh the window", async () => {
+		const s = setup();
+		await linked(s);
+		s.setNow(T0 + HOUR);
+		await s.api.handleHook(
+			"UserPromptSubmit",
+			JSON.stringify(
+				base({
+					hook_event_name: "UserPromptSubmit",
+					prompt: "<agent-message from a1>done",
+				}),
+			),
+		);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify(
+				base({
+					hook_event_name: "PostToolUse",
+					tool_name: "SubagentHandback",
+					tool_input: {},
+					tool_response: {},
+					tool_use_id: "t",
+				}),
+			),
+		);
+		s.setNow(T0 + 2 * HOUR + 1);
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		expect(s.argsOf("insertSignal")).toEqual([]);
+	});
+
+	test("Stop -> usage per canonical model from the main transcript turn", async () => {
+		const s = setup();
+		const id = await linked(s);
+		const path = join(dir, "main.jsonl");
+		await Bun.write(
+			path,
+			[
+				JSON.stringify({ type: "user", promptId: "other-prompt" }),
+				assistant("m0", "claude-opus-5-5", 999),
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				assistant("m1", "claude-sonnet-5-5", 10),
+				assistant("m1", "claude-sonnet-5-5", 10),
+				assistant("m2", "gpt-6-luna", 5),
+				// same canonical model under its OpenRouter name: must add up, not overwrite
+				assistant("m3", "anthropic/claude-sonnet-5.5", 20),
+				"not json",
+			].join("\n"),
+		);
+		s.setNow(T0 + 1000);
+		await s.api.handleHook(
+			"Stop",
+			JSON.stringify(
+				base({
+					hook_event_name: "Stop",
+					transcript_path: path,
+					stop_hook_active: false,
+				}),
+			),
+		);
+		const row = {
+			suggestion_id: id,
+			effort: "high",
+			source: "transcript",
+			scope_key: PROMPT,
+			is_sidechain: false,
+			rounds: null,
+			note: null,
+			reported_at: T0 + 1000,
+		};
+		expect(s.argsOf("upsertUsage")).toEqual([
+			[
+				{
+					...row,
+					model: "anthropic/claude-sonnet-5.5",
+					input_tokens: 6,
+					output_tokens: 30,
+					cache_read_tokens: 200,
+					cache_creation_tokens: 14,
+				},
+			],
+			[
+				{
+					...row,
+					model: "openai/gpt-6-luna",
+					input_tokens: 3,
+					output_tokens: 5,
+					cache_read_tokens: 100,
+					cache_creation_tokens: 7,
+				},
+			],
+		]);
+		expect(s.argsOf("touch")).toContainEqual([id, T0 + 1000]);
+		expect(s.store.outcome(id)).toBeNull(); // usage alone is no outcome
+	});
+
+	test("SubagentStop -> usage from the agent transcript, source subagent, sidechain", async () => {
+		const s = setup();
+		const id = await linked(s);
+		const path = join(dir, "agent-a1.jsonl");
+		const sub = { isSidechain: true, agentId: "a1" };
+		await Bun.write(
+			path,
+			[
+				assistant("s1", "claude-sonnet-5-5", 10, sub),
+				assistant("s2", "anthropic/claude-sonnet-5.5", 30, sub),
+			].join("\n"),
+		);
+		await s.api.handleHook(
+			"SubagentStop",
+			JSON.stringify(
+				base({
+					hook_event_name: "SubagentStop",
+					agent_id: "a1",
+					agent_type: "general-purpose",
+					stop_hook_active: false,
+					agent_transcript_path: path,
+					effort: undefined,
+				}),
+			),
+		);
+		expect(s.argsOf("upsertUsage")).toEqual([
+			[
+				expect.objectContaining({
+					suggestion_id: id,
+					model: "anthropic/claude-sonnet-5.5",
+					effort: null,
+					source: "subagent",
+					scope_key: "a1",
+					input_tokens: 6,
+					output_tokens: 40,
+					is_sidechain: true,
+				}),
+			],
+		]);
+		expect(s.argsOf("touch")).toContainEqual([id, T0]);
+	});
+
+	const stopHook = (path: string) =>
+		JSON.stringify(
+			base({
+				hook_event_name: "Stop",
+				transcript_path: path,
+				stop_hook_active: false,
+			}),
+		);
+	const subagentStopHook = (path: string) =>
+		JSON.stringify(
+			base({
+				hook_event_name: "SubagentStop",
+				agent_id: "a1",
+				agent_type: "general-purpose",
+				stop_hook_active: false,
+				agent_transcript_path: path,
+			}),
+		);
+	const outputBy = (s: ReturnType<typeof setup>, id: string) =>
+		Object.fromEntries(
+			s
+				.argsOf("upsertUsage")
+				.map(
+					([u]) =>
+						u as {
+							suggestion_id: string;
+							model: string;
+							output_tokens: number;
+						},
+				)
+				.filter((u) => u.suggestion_id === id)
+				.map((u) => [u.model, u.output_tokens]),
+		);
+
+	test("Stop counts only usage inside the recommendation's time window", async () => {
+		const s = setup();
+		const id = await linked(s);
+		const path = join(dir, "main.jsonl");
+		await Bun.write(
+			path,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				// same turn, but before spatz created the recommendation
+				assistant("m0", "claude-opus-5-5", 999, {}, T0 - 1000),
+				assistant("m1", "claude-sonnet-5-5", 10, {}, T0 + 1000),
+			].join("\n"),
+		);
+		s.setNow(T0 + 2000);
+		await s.api.handleHook("Stop", stopHook(path));
+		expect(outputBy(s, id)).toEqual({ "anthropic/claude-sonnet-5.5": 10 });
+	});
+
+	test("two recommendations in one turn each get their own slice (main and subagent)", async () => {
+		const s = setup();
+		const first = await linked(s);
+		s.setNow(T0 + 5000);
+		const second = await linked(s);
+		const main = join(dir, "main.jsonl");
+		const agent = join(dir, "agent-a1.jsonl");
+		await Bun.write(
+			main,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				assistant("m1", "claude-opus-5-5", 999, {}, T0 + 1000),
+				assistant("m2", "claude-sonnet-5-5", 10, {}, T0 + 6000),
+			].join("\n"),
+		);
+		const sub = { isSidechain: true, agentId: "a1" };
+		await Bun.write(
+			agent,
+			[
+				assistant("s1", "gpt-6-luna", 7, sub, T0 + 2000),
+				assistant("s2", "gpt-6-sol", 3, sub, T0 + 7000),
+			].join("\n"),
+		);
+		s.setNow(T0 + 8000);
+		await s.api.handleHook("SubagentStop", subagentStopHook(agent));
+		await s.api.handleHook("Stop", stopHook(main));
+		expect(outputBy(s, first)).toEqual({
+			"anthropic/claude-opus-5.5": 999,
+			"openai/gpt-6-luna": 7,
+		});
+		expect(outputBy(s, second)).toEqual({
+			"anthropic/claude-sonnet-5.5": 10,
+			"openai/gpt-6-sol": 3,
+		});
+	});
+
+	test("Stop before a delayed link: the link moves later usage from the earlier recommendation to the newer one", async () => {
+		const s = setup();
+		const first = await linked(s);
+		s.setNow(T0 + 5000);
+		const { suggestion_id: second } = await s.api.suggest(suggestInput());
+		// Claude Code layout: <dir>/<session>.jsonl and <dir>/<session>/subagents/agent-<id>.jsonl
+		const main = join(dir, `${SESSION}.jsonl`);
+		const agent = join(dir, SESSION, "subagents", "agent-a1.jsonl");
+		await Bun.write(
+			main,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				assistant("m1", "claude-opus-5-5", 10, {}, T0 + 1000),
+				assistant("m2", "claude-sonnet-5-5", 999, {}, T0 + 6000),
+			].join("\n"),
+		);
+		const sub = { isSidechain: true, agentId: "a1" };
+		await Bun.write(
+			agent,
+			[
+				assistant("s1", "gpt-6-luna", 7, sub, T0 + 2000),
+				assistant("s2", "gpt-6-sol", 2000, sub, T0 + 6500),
+			].join("\n"),
+		);
+		s.setNow(T0 + 7000);
+		const stop = JSON.stringify({
+			...JSON.parse(stopHook(main)),
+			transcript_path: main,
+		});
+		await s.api.handleHook("Stop", stop);
+		await s.api.handleHook("SubagentStop", subagentStopHook(agent));
+		// The async link hook of the second call arrives after Stop.
+		s.setNow(T0 + 8000);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				...JSON.parse(linkHook(second)),
+				transcript_path: main,
+			}),
+		);
+		const pairOf = (id: string) => {
+			s.store.insertSignal({
+				suggestion_id: id,
+				kind: "test",
+				value: 1,
+				weight: 1,
+				source: "PostToolUse",
+				observed_at: T0 + 9000,
+			});
+			return s.store.outcome(id)?.model;
+		};
+		expect(pairOf(first)).toBe("anthropic/claude-opus-5.5");
+		expect(pairOf(second)).toBe("openai/gpt-6-sol");
+
+		// Replaying Stop and SubagentStop after the link keeps the same assignment.
+		s.setNow(T0 + 9000);
+		await s.api.handleHook("Stop", stop);
+		await s.api.handleHook("SubagentStop", subagentStopHook(agent));
+		expect(s.store.outcome(first)?.model).toBe("anthropic/claude-opus-5.5");
+		expect(s.store.outcome(second)?.model).toBe("openai/gpt-6-sol");
+	});
+
+	test("a failing rewrite of a scope rolls back and keeps the earlier usage", async () => {
+		const dbPath = join(dir, "spatz.db");
+		const s = setup({ dbPath, openStore });
+		await linked(s);
+		const path = join(dir, "main.jsonl");
+		await Bun.write(
+			path,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				assistant("m1", "claude-sonnet-5-5", 10),
+			].join("\n"),
+		);
+		await s.api.handleHook("Stop", stopHook(path));
+		const raw = new Database(dbPath);
+		const count = () =>
+			raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usages").get()?.n;
+		expect(count()).toBe(1);
+		// Every insert into usages fails from now on, like a full disk.
+		raw.run(
+			"CREATE TRIGGER fail BEFORE INSERT ON usages BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+		);
+		await s.api.handleHook("Stop", stopHook(path));
+		expect(count()).toBe(1);
+		raw.close();
+	});
+
+	test("a compacted transcript (fewer messages, newer last one) rewrites the scope, and a delayed link then moves its later usage", async () => {
+		const s = setup();
+		const first = await linked(s);
+		s.setNow(T0 + 5000);
+		const { suggestion_id: second } = await s.api.suggest(suggestInput());
+		const user = JSON.stringify({ type: "user", promptId: PROMPT });
+		const long = join(dir, "long.jsonl");
+		const compacted = join(dir, "compacted.jsonl");
+		await Bun.write(
+			long,
+			[
+				user,
+				assistant("m1", "claude-opus-5-5", 10, {}, T0 + 1000),
+				assistant("m2", "claude-opus-5-5", 10, {}, T0 + 2000),
+				assistant("m3", "claude-opus-5-5", 10, {}, T0 + 3000),
+			].join("\n"),
+		);
+		await Bun.write(
+			compacted,
+			[user, assistant("m4", "claude-sonnet-5-5", 999, {}, T0 + 6000)].join(
+				"\n",
+			),
+		);
+		s.setNow(T0 + 7000);
+		await s.api.handleHook("Stop", stopHook(long));
+		await s.api.handleHook("Stop", stopHook(compacted));
+		expect(outputBy(s, first)).toEqual({
+			"anthropic/claude-opus-5.5": 30,
+			"anthropic/claude-sonnet-5.5": 999,
+		});
+		// The delayed link of the second call reconciles from the compacted transcript.
+		s.setNow(T0 + 8000);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				...JSON.parse(linkHook(second)),
+				transcript_path: compacted,
+			}),
+		);
+		const pairOf = (id: string) => {
+			s.store.insertSignal({
+				suggestion_id: id,
+				kind: "test",
+				value: 1,
+				weight: 1,
+				source: "PostToolUse",
+				observed_at: T0 + 9000,
+			});
+			return s.store.outcome(id)?.model;
+		};
+		expect(pairOf(second)).toBe("anthropic/claude-sonnet-5.5");
+		expect(pairOf(first)).not.toBe("anthropic/claude-sonnet-5.5");
+	});
+
+	test("an older transcript snapshot that commits last does not replace a newer one", async () => {
+		const s = setup();
+		const id = await linked(s);
+		const turn = [
+			JSON.stringify({ type: "user", promptId: PROMPT }),
+			assistant("m1", "claude-opus-5-5", 10, {}, T0 + 1000),
+		];
+		const older = join(dir, "older.jsonl");
+		const newer = join(dir, "newer.jsonl");
+		await Bun.write(older, turn.join("\n"));
+		await Bun.write(
+			newer,
+			[...turn, assistant("m2", "claude-sonnet-5-5", 999, {}, T0 + 2000)].join(
+				"\n",
+			),
+		);
+		// Two hook processes of the same turn: the one with the newer snapshot commits first.
+		await s.api.handleHook("Stop", stopHook(newer));
+		await s.api.handleHook("Stop", stopHook(older));
+		s.store.insertSignal({
+			suggestion_id: id,
+			kind: "test",
+			value: 1,
+			weight: 1,
+			source: "PostToolUse",
+			observed_at: T0 + 3000,
+		});
+		expect(s.store.outcome(id)?.model).toBe("anthropic/claude-sonnet-5.5");
+	});
+
+	test("PostToolUse on Agent -> usage source agent_tool with the resolved model and 0 tokens", async () => {
+		const s = setup();
+		const id = await linked(s);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify(
+				base({
+					hook_event_name: "PostToolUse",
+					tool_name: "Agent",
+					tool_input: { prompt: "secret prompt text" },
+					tool_response: {
+						status: "completed",
+						agentId: "a1",
+						resolvedModel: "claude-sonnet-5-5",
+						content: "agent output text",
+					},
+					tool_use_id: "toolu_2",
+				}),
+			),
+		);
+		expect(s.argsOf("upsertUsage")).toEqual([
+			[
+				{
+					suggestion_id: id,
+					model: "anthropic/claude-sonnet-5.5",
+					effort: null,
+					source: "agent_tool",
+					scope_key: "a1",
+					input_tokens: 0,
+					output_tokens: 0,
+					cache_read_tokens: 0,
+					cache_creation_tokens: 0,
+					is_sidechain: true,
+					rounds: null,
+					note: null,
+					reported_at: T0,
+				},
+			],
+		]);
+		const stored = JSON.stringify(s.calls);
+		expect(stored).not.toContain("secret prompt text");
+		expect(stored).not.toContain("agent output text");
+	});
+
+	test.each([
+		["SessionStart", { source: "startup", prompt_id: undefined }, true],
+		["UserPromptSubmit", { prompt: "do the thing" }, true],
+		["UserPromptSubmit", { prompt: "<agent-message from a1>done" }, false],
+		["SubagentStart", { agent_id: "a1", agent_type: "general-purpose" }, true],
+		[
+			"PostToolUse",
+			{
+				tool_name: "SubagentHandback",
+				tool_input: {},
+				tool_response: {},
+				tool_use_id: "t",
+			},
+			false,
+		],
+	] as const)(
+		"%s writes at most a touch (%o)",
+		async (event, fields, touches) => {
+			const s = setup();
+			const id = await linked(s);
+			const before = s.writes().length;
+			s.setNow(T0 + 1000);
+			await s.api.handleHook(
+				event,
+				JSON.stringify(base({ hook_event_name: event, ...fields })),
+			);
+			expect(s.writes().slice(before)).toEqual(
+				touches ? [["touch", [id, T0 + 1000]]] : [],
+			);
+		},
+	);
+});
+
+describe("stats", () => {
+	test("calls runStats with dbPath, extension dir, type and success quality 0.8", async () => {
+		const report: StatsReport = {
+			by_type: [],
+			coverage: 0,
+			learned_success: null,
+			control_success: null,
+		};
+		const seen: unknown[] = [];
+		const s = setup();
+		const api = createApi(s.deps, {
+			runStats: async (options) => {
+				seen.push(options);
+				return report;
+			},
+		});
+		expect(await api.stats({ type: "review" })).toBe(report);
+		expect(seen).toEqual([
+			{
+				dbPath: join(dir, "spatz.db"),
+				extensionDir: join(dir, "ext"),
+				type: "review",
+				successQuality: 0.8,
+			},
+		]);
+	});
+});

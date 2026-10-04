@@ -1,0 +1,43 @@
+{"type": "queue-operation"}
+{"type": "queue-operation"}
+{"type": "attachment"}
+{"type": "user", "uuid": "2515f45b-cf7a-4d82-8adb-4e8da25b03e4", "parentUuid": "75466fb4-a9bb-4559-9128-36a04bd8ac52", "timestamp": "2026-10-03T22:19:11.852Z", "isSidechain": false, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "atis-latch"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "last-prompt"}
+{"type": "atis-latch"}
+{"type": "attachment"}
+{"type": "assistant", "uuid": "8e6df9a2-52b0-40c6-9db4-51bb52eb84d9", "parentUuid": "92cfcbe1-34cd-4aa0-8489-b15db13b927e", "timestamp": "2026-10-03T22:19:15.477Z", "sessionId": "007accc1-0fcd-4f13-a307-fee448703384", "isSidechain": false, "requestId": "req_011Cfg5d471uyRHNqQwzLHSM", "message": {"id": "msg_011Cfg5d4MuT36zwLKW3odVb", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "output_tokens": 158, "cache_read_input_tokens": 10566, "cache_creation_input_tokens": 24366}, "content": [{"type": "thinking"}]}}
+{"type": "assistant", "uuid": "05b67389-17bf-4cae-aaf6-12950e8c0f84", "parentUuid": "8e6df9a2-52b0-40c6-9db4-51bb52eb84d9", "timestamp": "2026-10-03T22:19:15.495Z", "sessionId": "007accc1-0fcd-4f13-a307-fee448703384", "isSidechain": false, "requestId": "req_011Cfg5d471uyRHNqQwzLHSM", "message": {"id": "msg_011Cfg5d4MuT36zwLKW3odVb", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "output_tokens": 158, "cache_read_input_tokens": 10566, "cache_creation_input_tokens": 24366}, "content": [{"type": "tool_use"}]}}
+{"type": "user", "uuid": "51a0203f-fedd-4262-8f9c-0e85641bd28e", "parentUuid": "05b67389-17bf-4cae-aaf6-12950e8c0f84", "timestamp": "2026-10-03T22:19:15.649Z", "isSidechain": false, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "attachment"}
+{"type": "last-prompt"}
+{"type": "atis-latch"}
+{"type": "assistant", "uuid": "f763f397-207a-4ee0-bf21-a6e1602d4626", "parentUuid": "ec19badb-f025-4e57-9a67-3447c6c72abe", "timestamp": "2026-10-03T22:19:17.804Z", "sessionId": "007accc1-0fcd-4f13-a307-fee448703384", "isSidechain": false, "requestId": "req_011Cfg5dMHtMBcZCArhRLcyG", "message": {"id": "msg_011Cfg5dMbjWgUoS9Ly5Vh6B", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "output_tokens": 47, "cache_read_input_tokens": 34932, "cache_creation_input_tokens": 6790}, "content": [{"type": "tool_use"}]}}
+{"type": "user", "uuid": "f983a08b-6ee7-4479-bda1-c5d586006671", "parentUuid": "f763f397-207a-4ee0-bf21-a6e1602d4626", "timestamp": "2026-10-03T22:19:17.850Z", "isSidechain": false, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de"}
+{"type": "attachment"}
+{"type": "assistant", "uuid": "457912ea-4271-41fe-84bf-58ceb01b70b4", "parentUuid": "cb573c85-961d-4de5-9c1c-d69769677d2e", "timestamp": "2026-10-03T22:19:20.373Z", "sessionId": "007accc1-0fcd-4f13-a307-fee448703384", "isSidechain": false, "requestId": "req_011Cfg5dWk9yag39uK376Z9y", "message": {"id": "msg_011Cfg5dXEAvsSfLxUjL8qKr", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "output_tokens": 152, "cache_read_input_tokens": 41722, "cache_creation_input_tokens": 88}, "content": [{"type": "tool_use"}]}}
+{"type": "queue-operation"}
+{"type": "user", "uuid": "1cfdf240-3b25-4524-9b98-3c55d7243e2b", "parentUuid": "457912ea-4271-41fe-84bf-58ceb01b70b4", "timestamp": "2026-10-03T22:19:25.442Z", "isSidechain": false, "promptId": "6d44bc7e-ba60-48d1-b58c-43c8ef31f1de"}
+{"type": "attachment"}
+{"type": "queue-operation"}
+{"type": "attachment"}
+{"type": "assistant", "uuid": "4e2b3a83-094e-448f-86e9-1a4de335d385", "parentUuid": "1a3c90df-a85a-41c0-a645-27fb561db831", "timestamp": "2026-10-03T22:19:27.052Z", "sessionId": "007accc1-0fcd-4f13-a307-fee448703384", "isSidechain": false, "requestId": "req_011Cfg5e435c1PjY5URGL31o", "message": {"id": "msg_011Cfg5e4KhRMf27ykMNiaTE", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 2, "output_tokens": 48, "cache_read_input_tokens": 41810, "cache_creation_input_tokens": 790}, "content": [{"type": "text"}]}}
+{"type": "system"}
+{"type": "last-prompt"}
+{"type": "cost-state"}

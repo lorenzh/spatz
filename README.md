@@ -1,30 +1,157 @@
-# poc-model-suggestion
+# spatz
 
-Bun workspace monorepo.
+spatz recommends a model and effort pair for a coding-agent task, and learns which pairs succeed.
 
+The motto is "nicht mit Kanonen auf Spatzen schießen". In English: do not use a cannon to shoot sparrows. Do not use the strongest model when a cheaper model is good enough.
+
+## Status
+
+spatz is a proof of concept. Expect changes to commands, output and the database schema.
+
+What works:
+
+- Recommendations from the candidates that you give with `--models`.
+- Task classification with Jev, or with local keyword rules when Jev is off.
+- Learning from Claude Code hooks and from `spatz report`.
+- Statistics per task type with `spatz stats`.
+
+What does not work yet:
+
+- Signal collection works only with Claude Code hooks. Other coding agents can only use `spatz report`.
+- There is no MCP server.
+- There is no npm package. You run spatz from a clone of this repository.
+
+## How it works
+
+You give spatz a task text and a list of candidate pairs. A local filter first checks the task text for secrets. If the filter finds no secret, Jev classifies the task. The classification gives a task type, a difficulty and a criticality. Jev is a TypeSafe AI model that returns typed answers with calibrated probabilities. spatz then reads the learned success estimates for each candidate in that task class and ranks the candidates. spatz never runs the task and never switches the model. You or your agent pick the model. Claude Code hooks and `spatz report` send the outcome back, and spatz updates its estimates.
+
+```mermaid
+flowchart LR
+    T[Task text] --> F[Privacy filter]
+    F -->|no secret, Jev on| J[Jev classification]
+    F -->|secret found, Jev off or no key| K[Keyword rules]
+    J -->|Jev error| K
+    J --> E[Learned estimates]
+    K --> E
+    E --> R[Ranking of --models candidates]
+    R --> U[You or your agent pick a pair]
+    U --> H[Claude Code hooks]
+    U --> S[spatz report]
+    H --> O[(Outcomes in ~/.spatz/spatz.db)]
+    S --> O
+    O --> E
 ```
-packages/
-  package-a/  @poc/package-a  add(a, b)
-  package-b/  @poc/package-b  sum(numbers), uses package-a
-  cli-c/      @poc/cli-c      CLI that sums its arguments, uses package-b
-```
+
+[docs/how-it-works.md](docs/how-it-works.md) and [docs/recommendation.md](docs/recommendation.md) explain the details.
+
+## Requirements
+
+- Bun 1.4.
+- Optional: a TypeSafe AI API key for Jev classification. Jev is in early access.
+
+spatz works without a key. Without a key, spatz uses the keyword rules. These rules set only the criticality. The task type is always `other`.
+
+## Install and quickstart
+
+1. Clone the repository and install the dependencies.
+
+   ```bash
+   git clone https://github.com/lorenzh/spatz.git
+   cd spatz
+   bun install
+   ```
+
+2. Put `spatz` on your `PATH` with a small wrapper. Hooks run in a non-interactive shell, so a shell alias does not work.
+
+   ```bash
+   mkdir -p ~/.local/bin
+   printf '#!/bin/sh\nexec bun "%s/packages/cli/src/cli.ts" "$@"\n' "$PWD" > ~/.local/bin/spatz
+   chmod +x ~/.local/bin/spatz
+   ```
+
+3. Optional: set your TypeSafe AI key to turn on Jev.
+
+   ```bash
+   export TYPESAFE_AI_API_KEY=<your-key>
+   ```
+
+4. Ask for a recommendation. `--models` lists the pairs that you can use, in the form `<id>[:<effort>+<effort>...]`.
+
+   ```bash
+   spatz "Fix the off-by-one error in src/list.ts" \
+     --models claude-opus-5-5:high+medium,claude-sonnet-5-5:medium+low --dry-run
+   ```
+
+   Example output without a key (`SPATZ_NO_JEV=1`, empty database):
+
+   ```text
+   suggestion_id: fd8b7c1f-1f93-44f6-ac7b-b77ee287d1bb
+   1. anthropic/claude-opus-5.5:high  estimate=0.50  n=0
+   reason: Without Jev and learned data the most expensive pair anthropic/claude-opus-5.5 (high) is recommended.
+   task_type: other  difficulty: mittel  criticality: none
+   explored: false  control: false  fallback_used: true  (dry-run)
+   ```
+
+   `--dry-run` marks the recommendation as a test. A test never counts for learning or statistics. Remove the flag for real use.
+
+   spatz gets model prices from the OpenRouter model list and keeps them for 24 hours in `~/.spatz/openrouter-models.json`. To fill this cache, spatz needs network access. Without network access, you still get a recommendation. spatz uses the cached prices, even from a stale cache. If no cache exists, all prices are unknown and the models rank as most expensive.
+
+5. After the task, report the pair that you used and the result.
+
+   ```bash
+   spatz report <suggestion_id> --model claude-sonnet-5-5 --effort medium --result pass
+   ```
+
+   A report overrides all hook signals for that recommendation.
+
+## Use with Claude Code
+
+If you add the spatz hooks to `.claude/settings.json` of a project, spatz learns without manual reports. The hooks call `spatz hook <event>` for `PostToolUse`, `PostToolUseFailure`, `Stop` and `SubagentStop`. They record test and build results, the model, the effort and token counts. They never store prompt text or tool output. [docs/hooks.md](docs/hooks.md) has the settings snippet and the full list of signals.
 
 ## Commands
 
+Every command except `spatz hook` accepts `--json` for machine-readable output.
+
+| Command | Purpose |
+| --- | --- |
+| `spatz "<task>" --models <list> [--dry-run]` | Rank the candidate pairs for a task. Prints `suggestion_id: <id>` first. |
+| `spatz report <suggestion_id> --model <m> --effort <e> --result pass\|partial\|fail [--rounds <n>] [--note <t>]` | Record the pair that you used and the result. |
+| `spatz hook <event>` | Read a Claude Code hook event from stdin. Prints nothing and always exits 0. |
+| `spatz stats [--type <t>]` | Show results per task type: n, success rate per pair, adoption, tokens, coverage. |
+
+Exit codes: 0 for success, 1 for a runtime error (for example an unknown `suggestion_id`), 2 for a usage error. [docs/cli.md](docs/cli.md) is the full reference.
+
+## Configuration and privacy
+
+spatz reads four environment variables. `HOME` sets the location of `~/.spatz`. `TYPESAFE_AI_API_KEY` turns on Jev. `SPATZ_NO_JEV=1` turns off Jev. If you set `OPENROUTER_API_KEY`, spatz sends it with the OpenRouter model-list request. A project can also turn off Jev with `{"jev": false}` in `.spatz.json` in the working directory. All data stays in `~/.spatz`. [docs/configuration.md](docs/configuration.md) lists all settings and files.
+
+When Jev is on, spatz sends the task text and the candidate list to TypeSafe AI. The candidate list holds the `model:effort` labels and a short description per model. If Jev is off, the key is missing or the secret filter finds a secret, spatz sends nothing to TypeSafe AI. spatz does not store the task text. The OpenRouter model-list request holds no task data. Turning off Jev does not stop this request. The hooks store only derived signals, model names, efforts and token counts. [docs/privacy.md](docs/privacy.md) describes each data flow.
+
+## Documentation
+
+- [docs/how-it-works.md](docs/how-it-works.md): the architecture and the flow from task to outcome.
+- [docs/recommendation.md](docs/recommendation.md): how spatz ranks candidates, explores and uses control groups.
+- [docs/privacy.md](docs/privacy.md): what data leaves your machine and what spatz stores.
+- [docs/cli.md](docs/cli.md): all commands, flags, output fields and exit codes.
+- [docs/hooks.md](docs/hooks.md): the Claude Code hooks setup and the signals they record.
+- [docs/configuration.md](docs/configuration.md): environment variables, project file and files in `~/.spatz`.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and the change process.
+- [SECURITY.md](SECURITY.md): how to report a vulnerability.
+
+## Development
+
+The repository is a Bun workspace with two packages. `packages/core` (`@spatz/core`) holds all logic. `packages/cli` (`@spatz/cli`) is a thin CLI on top of it.
+
+Run these gates before you push:
+
 ```bash
-bun install          # install deps and git hooks (lefthook)
-bun test             # run all tests
-bun run lint         # biome check
-bun run format       # biome check --write
-bun run typecheck    # tsc --noEmit
-bun packages/cli-c/src/cli.ts 1 2 3   # prints 6
+bun test            # all tests, including end-to-end tests of the CLI
+bun run typecheck   # tsc --noEmit
+bun run lint        # biome check
 ```
 
-Git hooks: pre-commit runs Biome on staged files, pre-push runs `bun test`.
+Work test first. Write a failing test and make it pass with the minimum code. Then clean up. [CONTRIBUTING.md](CONTRIBUTING.md) has the details.
 
-## TDD loop
+## License
 
-1. Write a failing test in `src/index.test.ts` next to the code.
-2. Run `bun test --watch` and see it fail (red).
-3. Write the minimum code to make it pass (green).
-4. Clean up while the tests stay green (refactor).
+MIT. See [LICENSE](LICENSE).
