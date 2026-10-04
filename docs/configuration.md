@@ -1,0 +1,160 @@
+---
+title: spatz configuration
+description: Environment variables, files under ~/.spatz, the per-project opt-out file, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
+tags: [configuration, reference, spatz]
+keywords: [environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning]
+---
+
+# spatz configuration
+
+You configure spatz with four environment variables and optional JSON files. The tuning values are fixed in the code.
+
+For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
+
+## Environment variables
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TYPESAFE_AI_API_KEY` | not set | API key for Jev (TypeSafe AI). When it is not set, spatz classifies with keyword rules (`fallback_used: true`). |
+| `SPATZ_NO_JEV` | not set | When the value is exactly `1`, spatz never sends the task text to Jev. Other values have no effect. |
+| `OPENROUTER_API_KEY` | not set | When set, spatz sends it as `Authorization: Bearer <key>` with the OpenRouter model-list request. The request works without it. |
+| `HOME` | home directory of the OS user | spatz keeps all its files in `$HOME/.spatz`. |
+
+The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it. See [DuckDB sqlite extension](#duckdb-sqlite-extension).
+
+## Files and directories
+
+| Path | Format | Written by | Purpose |
+| --- | --- | --- | --- |
+| `~/.spatz/spatz.db` | SQLite, WAL mode | spatz | All suggestions, signals and usage. |
+| `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
+| `~/.spatz/duckdb-extensions/` | DuckDB extension directory | `spatz stats` | The DuckDB sqlite extension. |
+| `~/.spatz/aliases.json` | JSON object | you | Model id mapping. Optional. |
+| `~/.spatz/descriptions.json` | JSON object | you | Model descriptions for Jev. Optional. |
+| `<cwd>/.spatz.json` | JSON object | you | Per-project Jev opt-out. Optional. |
+
+spatz creates `~/.spatz` when it opens the database. If an optional file is missing, has invalid JSON or is not an object, spatz ignores it. In `aliases.json` and `descriptions.json`, spatz ignores each entry whose value is not a string. In `.spatz.json`, spatz reads only the boolean `"jev": false`.
+
+### Database: ~/.spatz/spatz.db
+
+bun:sqlite writes the database in WAL mode with a busy timeout of 5000 ms. So several Claude Code sessions can write at the same time. spatz migrates the schema when it opens the file. `PRAGMA user_version` holds the schema version.
+
+The tables are `suggestions`, `signals`, `usages` and `usage_scopes`. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
+
+To delete all learned data, delete `~/.spatz/spatz.db` and the files `spatz.db-wal` and `spatz.db-shm` next to it.
+
+### OpenRouter cache: ~/.spatz/openrouter-models.json
+
+`spatz "<task>"` needs model prices to sort the candidates by cost. spatz gets them from `https://openrouter.ai/api/v1/models` and keeps a trimmed copy for 24 hours.
+
+- If the cache is younger than 24 hours, spatz makes no request.
+- If the request fails or takes more than 3 s, spatz uses the old cache.
+- If there is no cache, spatz continues without prices. All models then count as unknown and rank as most expensive.
+
+```json
+{
+  "fetched_at": 1791100000000,
+  "models": [
+    {
+      "id": "anthropic/claude-sonnet-5.5",
+      "name": "Anthropic: Claude Sonnet 5.5",
+      "price_prompt": 0.000002,
+      "price_completion": 0.00001,
+      "context_length": 1000000,
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"]
+    }
+  ]
+}
+```
+
+`fetched_at` is epoch milliseconds. Prices are USD per token. The values above are an example. To force a new request, delete the file.
+
+### Alias file: ~/.spatz/aliases.json
+
+The alias file maps a model id that you pass to a canonical OpenRouter id. An alias wins over the built-in id rules. spatz uses it for `--models`, for `spatz report --model` and for model names from transcripts.
+
+```json
+{
+  "my-fast-model": "vendor/fast-model-2",
+  "claude-sonnet-5-5": "anthropic/claude-sonnet-5.5"
+}
+```
+
+### Description file: ~/.spatz/descriptions.json
+
+The description file gives Jev one short text per canonical model id. Jev uses it to select the best candidate. Without an entry, Jev gets the model name and its output price per million tokens.
+
+```json
+{
+  "anthropic/claude-sonnet-5.5": "Fast general coding model, good for routine fixes.",
+  "anthropic/claude-opus-5.5": "Strongest model, for design work and hard bugs."
+}
+```
+
+### Per-project opt-out: .spatz.json
+
+If the working directory of the `spatz` process holds `.spatz.json` with `"jev": false`, spatz does not send the task text to Jev. spatz reads only the working directory, not parent directories. Run `spatz` from the project root for this file to apply.
+
+```json
+{ "jev": false }
+```
+
+## Fixed tuning values
+
+These values are start values from the design. The CLI uses them as they are. No environment variable or file changes them. To change them, edit `DEFAULT_TUNING` in `packages/core/src/contracts/types.ts`. A program that uses `@spatz/core` directly can pass its own `config` to `createApi`.
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `minN` | 5 | Learned choice: a pair needs at least this many outcomes in the cell. |
+| `minEstimate` | 0.8 | Learned choice: a pair needs at least this estimate. |
+| `criticalMinN` | 10 | Critical task: a cheaper pair needs at least this many outcomes. |
+| `criticalMinEstimate` | 0.9 | Critical task: a cheaper pair needs at least this estimate. |
+| `controlRate` | 0.1 | Share of suggestions in the control group (most expensive pair). |
+| `exploreRate` | 0.1 | Share of suggestions that explore a cheaper pair. |
+| `jevTimeoutMs` | 1000 ms | Timeout of the Jev request. spatz makes no retry. After a timeout, spatz uses the keyword rules. |
+| `difficultyMinProbability` | 0.5 | If the top difficulty has a lower probability, spatz raises the difficulty one level. |
+| `openWindowMs` | 2 h | A suggestion closes after this time without a hook event. |
+| `openRouterCacheMs` | 24 h | Age of the OpenRouter cache before a new request. |
+| `openRouterTimeoutMs` | 3000 ms | Timeout of the OpenRouter request. After a timeout, spatz uses the old cache. |
+| `successQuality` | 0.8 | An outcome is a success when its quality is at least this value. |
+
+Other fixed values:
+
+| Value | Default | Where |
+| --- | --- | --- |
+| Default efforts | `low`, `medium`, `high` | Used when a `--models` entry names no effort. |
+| Signal weights | `report` 1.0, `test` 1.0, `build` 0.8 | Weighted mean of the hook signals. |
+| Report values | `pass` 1, `partial` 0.5, `fail` 0 | Quality from `spatz report`. |
+| Ranking length | up to 3 | Entries in `ranking`. |
+| SQLite busy timeout | 5000 ms | Wait time for a locked database. |
+| Jev model | `jev-1.13.0` | Model of the Jev request. |
+
+See [recommendation.md](recommendation.md) for how these values decide a recommendation.
+
+## DuckDB sqlite extension
+
+`spatz stats` reads the SQLite database with DuckDB. DuckDB needs its sqlite extension for that. On the first run, `spatz stats` downloads the extension from `extensions.duckdb.org` into `~/.spatz/duckdb-extensions/`. Later runs work offline. No other command loads DuckDB.
+
+If the machine has no network access, the first `spatz stats` fails with exit code 1 and the message `Failed to download extension "sqlite_scanner"`.
+
+To prepare the extension before you go offline, do one of these steps:
+
+1. Run `spatz stats` once on the same machine while it has network access. The database must exist, so run one `spatz "<task>"` first. You can use `--dry-run`.
+2. Copy or link an existing extension directory to `~/.spatz/duckdb-extensions`. It must come from the same DuckDB version and platform:
+
+   ```bash
+   mkdir -p ~/.spatz
+   ln -s /path/to/existing/duckdb-extensions ~/.spatz/duckdb-extensions
+   ```
+
+The directory has this layout:
+
+```text
+~/.spatz/duckdb-extensions/
+  v1.5.6/
+    linux_amd64/
+      sqlite_scanner.duckdb_extension
+      sqlite_scanner.duckdb_extension.info
+```
+
+The CLI always uses `~/.spatz/duckdb-extensions`. `SPATZ_DUCKDB_EXTENSION_DIR` has no effect on the CLI. Only the test suites read it, to find an installed extension.
