@@ -90,6 +90,8 @@ jobs:
     if: needs.resolve.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The npm environment only allows main, so a workflow edited on another branch cannot publish.
+    environment: npm
     permissions:
       contents: read
       id-token: write

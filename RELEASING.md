@@ -86,9 +86,11 @@ For each package, configure an npm GitHub Actions trusted publisher with these v
 | Organization or user | `lorenzh` |
 | Repository | `spatz` |
 | Workflow filename | `npm-publish.yml` |
-| Environment | Leave empty |
+| Environment | `npm` |
 
 The publish job lives directly in that file. It does not use a reusable publish workflow.
+The publish job runs in the GitHub environment `npm`, which only allows deployments from `main`.
+npm accepts a token only when the run uses that environment, so a workflow changed on another branch cannot publish.
 It uses Node.js 24, npm 11.5.1 or newer, and `id-token: write` for authentication.
 The workflow needs no npm token. Each publish includes provenance.
 See [npm's trusted publishing instructions](https://docs.npmjs.com/trusted-publishers/) for the package settings.
