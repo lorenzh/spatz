@@ -215,6 +215,41 @@ describe("hook", () => {
 		}
 	});
 
+	test("concurrent hook processes lose no link", async () => {
+		// Dry-runs stay out of the stats below.
+		const outs = await Promise.all(
+			Array.from({ length: 12 }, () =>
+				spatz([TASK, "--models", MODELS, "--dry-run", "--json"]),
+			),
+		);
+		const runs = outs.map((s, i) => ({
+			stdout: s.stdout,
+			id: (JSON.parse(s.stdout) as Suggestion).suggestion_id,
+			session: `race-${i}`,
+		}));
+		const results = await Promise.all(
+			runs.map((r) =>
+				spatz(
+					["hook", "PostToolUse"],
+					hookJson(
+						{ ...hookEvents.spatzCall, session_id: r.session },
+						r.stdout,
+					),
+				),
+			),
+		);
+		for (const r of results) expect(r.code).toBe(0);
+		const d = db();
+		try {
+			for (const r of runs)
+				expect(
+					d.query("SELECT session_id FROM suggestions WHERE id = ?").get(r.id),
+				).toEqual({ session_id: r.session });
+		} finally {
+			d.close();
+		}
+	});
+
 	test("test, build, Stop, SubagentStop and Agent events write signals and usages", async () => {
 		for (const e of [
 			hookEvents.testPass,

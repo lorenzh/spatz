@@ -260,7 +260,8 @@ export function openStore(
 		linkSession(id, sessionId, promptId, at, agentId) {
 			// Hooks run async, so links may arrive late, twice or out of order.
 			// Creation order sets the boundaries within each session and agent sequence.
-			return db.transaction(() => {
+			// Immediate: a deferred read-then-write fails with SQLITE_BUSY_SNAPSHOT under concurrent hooks.
+			const link = db.transaction(() => {
 				if (agentId !== undefined)
 					db.query(
 						"UPDATE suggestions SET agent_id = COALESCE(agent_id, ?) WHERE id = ?",
@@ -313,7 +314,8 @@ export function openStore(
 							.all(next.created_at, id),
 					);
 				return shrunk.map((r) => r.id);
-			})();
+			});
+			return link.immediate();
 		},
 		sessionWindows(sessionId, from, to, openWindowMs, agentId = null) {
 			// A window ends at the earliest of closure (report or next recommendation) and idle expiry.

@@ -259,11 +259,17 @@ describe("learned choice", () => {
 		});
 	});
 
-	test("enough data but nobody qualifies: highest estimate wins", () => {
-		const history = [stat(c0, 5, 2), stat(c1, 2, 2)]; // 3/7 and 3/4
+	test("enough data but nobody qualifies: highest estimate with n >= 5 wins", () => {
+		const history = [stat(c0, 5, 2), stat(c2, 6, 3), stat(c1, 2, 2)]; // 3/7, 4/8, 3/4 (n too low)
 		const d = recommend(ctx(LEARNED), CATALOG, history);
-		expect(pick(d)).toMatchObject({ model: c1.model, effort: c1.effort });
+		expect(pick(d)).toMatchObject({ model: c2.model, effort: c2.effort, n: 6 });
 		expect(d.strategy).toBe("learned");
+	});
+
+	test("best-estimate step skips pairs with too few outcomes", () => {
+		const history = [stat(c1, 5, 2), stat(c0, 1, 1)]; // c0 2/3 > 3/7, but n = 1
+		const d = recommend(ctx(LEARNED), CATALOG, history);
+		expect(pick(d)).toMatchObject({ model: c1.model, effort: c1.effort, n: 5 });
 	});
 
 	test("highest estimate tie goes to the more expensive pair", () => {
@@ -329,9 +335,14 @@ describe("extended level", () => {
 	});
 
 	test("extended level enough data but none qualifies: highest estimate", () => {
-		const history = [stat(c0, 5, 1, "medium"), stat(c2, 1, 1, "hard")];
+		const history = [
+			stat(c0, 5, 1, "medium"), // 2/7
+			stat(c1, 3, 2, "medium"),
+			stat(c1, 3, 1, "hard"), // 6 outcomes, 4/8
+			stat(c2, 1, 1, "hard"), // 2/3, but n = 1
+		];
 		const d = recommend(ctx(LEARNED), CATALOG, history);
-		expect(pick(d)).toMatchObject({ model: c2.model, effort: c2.effort, n: 1 });
+		expect(pick(d)).toMatchObject({ model: c1.model, effort: c1.effort, n: 6 });
 		expect(d.strategy).toBe("learned");
 	});
 });

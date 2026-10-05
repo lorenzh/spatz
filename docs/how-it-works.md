@@ -178,7 +178,7 @@ The output shows `fallback_used: true`. The reason itself is not in the output a
 
 ## Data model
 
-spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with a busy timeout of 5000 ms. Each session starts its own `spatz` processes, so several processes can write at the same time.
+spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with a busy timeout of 5000 ms. Each session starts its own `spatz` processes, so several processes can write at the same time. A session link reads and then writes, so it runs in an `IMMEDIATE` transaction. It takes the write lock first, so the busy timeout also covers it and a concurrent hook cannot break its read snapshot.
 
 | Table or view | Content |
 |---|---|
