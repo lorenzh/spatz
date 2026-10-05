@@ -99,16 +99,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           bun scripts/release-version.ts "v$env:RELEASE_VERSION"
       - run: bun install --frozen-lockfile
-      - name: Install DuckDB SQLite extension for offline tests
+      - name: Install DuckDB SQLite extension for the smoke test
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $ErrorActionPreference = 'Stop'
           bun packages/cli/src/cli.ts 'release setup' --models gpt-6-luna --dry-run
           bun packages/cli/src/cli.ts stats
-      - run: bun test
-      - run: bun run typecheck
-      - run: bun run lint
+      # Tests, typecheck and lint run on Linux and macOS; the suite assumes POSIX paths and HOME.
+      # Windows only checks the built binary below.
       - name: Build and smoke-test on Windows
         shell: pwsh
         run: |
