@@ -100,7 +100,10 @@ jobs:
           bun scripts/release-version.ts "v$env:RELEASE_VERSION"
       - run: bun install --frozen-lockfile
       - name: Install DuckDB SQLite extension for offline tests
+        shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
           bun packages/cli/src/cli.ts 'release setup' --models gpt-6-luna --dry-run
           bun packages/cli/src/cli.ts stats
       - run: bun test

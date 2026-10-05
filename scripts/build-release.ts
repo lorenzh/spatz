@@ -85,7 +85,19 @@ export async function buildRelease(version = pkg.version, outDir = "dist") {
 		);
 		const pack = Bun.spawn(
 			process.platform === "win32"
-				? ["tar.exe", "-a", "-cf", archive, "-C", stage, name]
+				? [
+						join(
+							process.env.SystemRoot ?? "C:\\Windows",
+							"System32",
+							"tar.exe",
+						),
+						"-a",
+						"-cf",
+						archive,
+						"-C",
+						stage,
+						name,
+					]
 				: ["tar", "-czf", archive, "-C", stage, name],
 			{ stdout: "inherit", stderr: "inherit" },
 		);
