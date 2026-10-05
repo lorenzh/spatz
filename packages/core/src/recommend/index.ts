@@ -87,14 +87,15 @@ const label = (c: Candidate) => `${c.model} (${c.effort})`;
 /** Steps 3 and 4 on one level; null when no catalog candidate has n >= minN. */
 function pickOnLevel(catalog: Catalog, at: Level, t: Tuning): number | null {
 	const ests = catalog.map(at);
-	if (!ests.some((e) => e.n >= t.minN)) return null;
+	let best = ests.findIndex((e) => e.n >= t.minN);
+	if (best < 0) return null;
 	const cheapest = ests.findIndex(
 		(e) => e.n >= t.minN && e.estimate >= t.minEstimate,
 	);
 	if (cheapest >= 0) return cheapest;
-	let best = 0;
 	ests.forEach((e, i) => {
-		if (e.estimate >= (ests[best] as Est).estimate) best = i; // tie -> more expensive
+		// only pairs with n >= minN; tie -> more expensive
+		if (e.n >= t.minN && e.estimate >= (ests[best] as Est).estimate) best = i;
 	});
 	return best;
 }

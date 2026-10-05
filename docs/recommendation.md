@@ -55,7 +55,7 @@ spatz applies the first rule that matches. The values are the start values in `D
    - If `0.1 ≤ u < 0.2`, spatz explores after steps 3 to 7. See [Exploration](#exploration).
    - If `u ≥ 0.2`, spatz continues with step 3.
 3. **Learned choice in the cell.** If the cell has enough data, spatz takes the cheapest candidate with `n ≥ 5` and estimate `≥ 0.8` (strategy `learned`).
-4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate. On a tie, the more expensive candidate wins (strategy `learned`).
+4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate among the candidates with `n ≥ 5`. Candidates with fewer outcomes cannot win this step. On a tie, the more expensive candidate wins (strategy `learned`).
 5. **Pooled level.** If the cell has too little data, spatz repeats steps 3 and 4 on the pooled levels.
 6. **Jev choice.** If the pooled levels also have too little data, spatz takes the best candidate of Jev (strategy `jev-choice`).
 7. **Rules.** If Jev was not involved, or its answer is not in the catalog, spatz recommends the most expensive candidate (strategy `rules`).
