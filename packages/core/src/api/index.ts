@@ -97,6 +97,10 @@ export function createApi(
 			}
 		return byModel;
 	}
+	const noneOnly = (available: Map<string, Effort[]>) =>
+		[...available]
+			.filter(([, efforts]) => efforts.every((e) => e === "none"))
+			.map(([model]) => model);
 	async function validateNone(models: string[]) {
 		if (!models.length) return;
 		const cfg = await getConfig();
@@ -114,10 +118,7 @@ export function createApi(
 	async function withStore<T>(
 		fn: (store: Store) => T | Promise<T>,
 	): Promise<T> {
-		const available = await availableEfforts();
-		const noneOnlyModels = [...available]
-			.filter(([, efforts]) => efforts.every((e) => e === "none"))
-			.map(([model]) => model);
+		const noneOnlyModels = noneOnly(await availableEfforts());
 		const store = deps.openStore(deps.dbPath, noneOnlyModels);
 		try {
 			return await fn(store);
@@ -608,6 +609,7 @@ export function createApi(
 				!(EFFORTS as readonly string[]).includes(effort)
 			)
 				throw new Error("invalid effort");
+			if (effort === "none") await validateNone([model]);
 			for (const n of [
 				input.input,
 				input.output,
@@ -640,7 +642,9 @@ export function createApi(
 					reported_at: deps.clock.now(),
 				};
 				store.upsertUsage(record);
-				return record;
+				const stored = store.getUsage(suggestionId, source, turn, record.model);
+				if (!stored) throw new Error("usage was not stored");
+				return stored;
 			});
 		},
 
@@ -727,6 +731,7 @@ export function createApi(
 
 		async stats({ type, by }) {
 			const cfg = await getConfig();
+			const noneOnlyModels = noneOnly(await availableEfforts());
 			// Opening the store runs migrations; the read-only DuckDB scan cannot.
 			await withStore(() => {});
 			const runStats =
@@ -737,6 +742,7 @@ export function createApi(
 				...(type && { type }),
 				...(by && { by }),
 				successQuality: cfg.tuning.successQuality,
+				noneOnlyModels,
 			});
 		},
 	};

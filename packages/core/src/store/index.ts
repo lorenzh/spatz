@@ -373,11 +373,20 @@ export function openStore(
 				$rounds, $note, $reported_at, $turn_id, $agent_id)`,
 			).run({
 				...r,
-				effort: r.effort ?? (noneOnly.has(r.model) ? "none" : null),
+				effort: noneOnly.has(r.model) ? "none" : (r.effort ?? null),
 				turn_id: r.turn_id ?? null,
 				agent_id: r.agent_id ?? null,
 				is_sidechain: Number(r.is_sidechain),
 			});
+		},
+		getUsage(suggestionId, source, scopeKey, model) {
+			return (
+				db
+					.query<UsageRecord, [string, string, string, string]>(
+						"SELECT * FROM usages WHERE suggestion_id = ? AND source = ? AND scope_key = ? AND model = ?",
+					)
+					.get(suggestionId, source, scopeKey, model) ?? null
+			);
 		},
 		usageScopes(ids) {
 			return db

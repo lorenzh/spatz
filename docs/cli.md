@@ -88,7 +88,7 @@ spatz "Review the parser" --family gpt --json
 
 - If an entry has no efforts, spatz uses `low`, `medium` and `high`. If OpenRouter lists the efforts of the model, spatz keeps only the listed ones. spatz uses `none`, `xhigh`, `max` and `ultra` only if you name them.
 - spatz removes duplicate pairs.
-- An unknown effort stops the command with exit code 1.
+- An unknown effort stops the command with exit code 1. For catalog models, `none` is rejected when the model lists real efforts; unknown models still accept it.
 - `none` means the harness offers no effort setting. It sorts below `low`; `ultra` sorts above `max`, after price.
 - For Codex dispatch, pass `ultra` as `-c model_reasoning_effort=ultra`. Claude Code has no `ultra`.
 
@@ -102,7 +102,7 @@ spatz converts each id to the canonical OpenRouter id:
 | `gpt-*` | Prefix `openai/`. | `gpt-6-sol` becomes `openai/gpt-6-sol` |
 | Any other id | Used as given. | `my-model` |
 
-The Claude picker ID `claude-haiku-4-5-20251001` maps to `anthropic/claude-haiku-4.5` for pricing and learning. User aliases take precedence.
+An 8-digit date snapshot suffix (for example, `-20251001`) is stripped from Claude IDs for pricing and learning and added when spatz matches a picker ID. The Claude picker ID `claude-haiku-4-5-20251001` maps to `anthropic/claude-haiku-4.5`. User aliases take precedence.
 
 spatz sorts the candidates by cost: output price, then input price, then effort, then id. A model that OpenRouter does not list counts as the most expensive.
 
@@ -167,7 +167,7 @@ This command records the pair you used and the result of the task. A report wins
 | --- | --- | --- | --- |
 | `<suggestion_id>` | string, positional | required | The id from `spatz "<task>"`. An unknown id gives exit code 1. |
 | `--model <m>` | string | required | The model you used. spatz converts it with the same id rules as `--models`. |
-| `--effort <e>` | string | required | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. Another value gives exit code 1. |
+| `--effort <e>` | string | required | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. Another value gives exit code 1. `none` is rejected for catalog models with real efforts; unknown models still accept it. |
 | `--result <r>` | `pass`, `partial` or `fail` | required | The result. spatz stores it as quality 1, 0.5 or 0. |
 | `--rounds <n>` | non-negative integer | none | Count of rounds the agent needed. |
 | `--note <t>` | string | none | A short note. spatz stores it in the database. |
@@ -216,7 +216,7 @@ It does not create a success signal or close the suggestion.
 | --- | --- | --- |
 | `<suggestion_id>` | required | The existing suggestion id. |
 | `--model <m>` | required | The model used. spatz applies its model-id rules. |
-| `--effort <e>` | `null` | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. |
+| `--effort <e>` | `null` | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. `none` is rejected for catalog models with real efforts; unknown models still accept it. Missing or supplied efforts are stored as `none` for catalog models whose only effort is `none`. |
 | `--input <n>` | required | Uncached input tokens. |
 | `--output <n>` | required | Output tokens. |
 | `--cache-read <n>` | required | Input tokens read from cache. |
@@ -305,6 +305,7 @@ This command shows how well each pair worked, per task type. It reads the databa
 `--by scope` adds `by_scope` to the JSON response. Text output shows one line per recorded scope.
 Suggestions without a scope appear as `unscoped` in text and `scope: null` in JSON.
 `--type` also filters this view. Test suggestions stay excluded.
+For none-only catalog models, stats count old rows with a missing effort as `none`.
 
 | `by_scope` field | Meaning |
 | --- | --- |

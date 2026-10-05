@@ -65,11 +65,12 @@ The extractor uses these sources and selection rules:
 - **Claude Code:** the native package embeds a structured catalog marked by `https://downloads.claude.ai/model-catalog/v1/schema.json`.
   The extractor reads `surfaces.cc.model_selector_config` for `id: cc` without executing the embedded JavaScript.
   It selects every `main` picker model offered on `first_party`, regardless of family. It excludes disabled and overflow entries.
-  Efforts must appear in both `thinking.effort_options` and `runtime.effort_levels`.
-  Models without effort options use `["none"]`.
+  Efforts must appear in both `thinking.effort_options` and `runtime.effort_levels`; otherwise extraction fails.
+  A Claude model gets `["none"]` only when both `effort_options` and `effort_levels` are empty; if only one is empty, extraction fails.
+  An unsafe ID in the main picker fails extraction.
 - **Codex:** the installed CLI returns its built-in picker metadata through `codex debug models --bundled` without login.
   The extractor selects `visibility: list` entries from the newest GPT major generation.
-  This excludes hidden entries and older generations. Efforts come from `supported_reasoning_levels`.
+  This excludes hidden entries and older generations. Efforts come from `supported_reasoning_levels`; Codex `none` (reasoning off) is excluded.
 
 The script keeps only these spatz efforts: `none`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`.
 If a harness has no selected models, the script fails.

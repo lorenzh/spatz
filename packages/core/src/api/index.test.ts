@@ -1342,6 +1342,7 @@ describe("stats", () => {
 				extensionDir: join(dir, "ext"),
 				type: "review",
 				successQuality: 0.8,
+				noneOnlyModels: ["anthropic/claude-haiku-4.5"],
 			},
 		]);
 	});
@@ -1528,7 +1529,12 @@ describe("direct mod attribution", () => {
 		};
 		await s.api.usage(input);
 		await s.api.usage({ ...input, output: 21 });
-		await s.api.usage({ ...input, turn: "t2", effort: "high" });
+		const opusUsage = await s.api.usage({
+			...input,
+			turn: "t2",
+			effort: "high",
+		});
+		expect(opusUsage.effort).toBe("high");
 		const db = new Database(dbPath);
 		try {
 			expect(
@@ -1565,6 +1571,24 @@ describe("direct mod attribution", () => {
 		} finally {
 			db.close();
 		}
+
+		const haiku = await s.api.suggest(suggestInput());
+		const haikuUsage = await s.api.usage({
+			...input,
+			suggestionId: haiku.suggestion_id,
+			model: "claude-haiku-4-5",
+			turn: "haiku",
+			effort: "high",
+		});
+		expect(haikuUsage.effort).toBe("none");
+		await expect(
+			s.api.usage({
+				...input,
+				suggestionId: haiku.suggestion_id,
+				model: "claude-opus-5-5",
+				effort: "none",
+			}),
+		).rejects.toThrow("none is not supported");
 		await expect(
 			s.api.usage({ ...input, suggestionId: "missing" }),
 		).rejects.toThrow("unknown suggestion_id");

@@ -106,7 +106,7 @@ Haiku uses `none`. When the catalog lists only `none`, spatz records missing usa
 Learning also counts older null-effort outcomes for these models. Other models keep unknown effort as `null`.
 Escalation can move from a `none` model to a reasoning model with an explicit effort.
 Claude Code has no `ultra`: the mod rejects an `ultra` recommendation and excludes it from escalation.
-Critical tasks and cold start choose the most expensive pair, now at `max`.
+Critical tasks and cold start choose the most expensive pair, currently `claude-fable-5-1:max`.
 To narrow candidates, set the mod option, config `models`, or `SPATZ_MODELS`.
 For example: `claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high`.
 See [model defaults](configuration.md#harness-catalog) for cache and offline behavior.

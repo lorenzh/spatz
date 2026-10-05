@@ -965,23 +965,15 @@ test("none-only models normalize missing usage effort and pool legacy null rows"
 		signal(store, "test", 1, 1000, id);
 	}
 	expect(store.outcome("new")?.effort).toBe("none");
-	expect(store.outcome("explicit")?.effort).toBe("high");
+	expect(store.outcome("explicit")?.effort).toBe("none");
 	expect(store.cellStats("code.bugfix")).toEqual([
 		{
 			task_type: "code.bugfix",
 			difficulty: "medium",
 			model,
-			effort: "high",
-			n: 1,
-			sum_quality: 1,
-		},
-		{
-			task_type: "code.bugfix",
-			difficulty: "medium",
-			model,
 			effort: "none",
-			n: 2,
-			sum_quality: 2,
+			n: 3,
+			sum_quality: 3,
 		},
 	]);
 });

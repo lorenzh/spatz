@@ -129,6 +129,12 @@ export interface Store {
 	insertSignal(record: SignalRecord): void;
 	/** Upsert on (suggestion_id, source, scope_key, model). */
 	upsertUsage(record: UsageRecord): void;
+	getUsage(
+		suggestionId: string,
+		source: UsageRecord["source"],
+		scopeKey: string,
+		model: string,
+	): UsageRecord | null;
 	/** Distinct transcript and subagent usage scopes of the suggestions, with their stored effort. */
 	usageScopes(
 		suggestionIds: string[],

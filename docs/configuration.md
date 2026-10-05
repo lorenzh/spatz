@@ -172,7 +172,7 @@ If no valid cache exists, spatz uses the JSON bundled into the executable at bui
 Unknown schema versions and malformed known harnesses count as failures. A failed request never replaces a valid cache.
 The parser ignores unknown harnesses and extra fields. It removes unknown efforts and models with no remaining efforts.
 It rejects structurally broken files and known harnesses with no remaining models. Only breaking changes need a schema bump.
-Known harnesses allow up to 50 models, IDs up to 64 characters, and valid spatz efforts.
+Known harnesses allow up to 50 models and IDs up to 64 characters. Unknown efforts are dropped per model; models with no remaining efforts are ignored.
 Downloads stop above 256 KiB.
 
 **v0.1.5 compatibility:** its strict effort validator rejects this entire catalog because it contains `none` and `ultra`.
