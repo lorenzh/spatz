@@ -13,7 +13,7 @@ The terms are explained in [how-it-works.md](how-it-works.md#terms).
 
 ## Cells and the estimate
 
-A cell is the pair (task type, difficulty), for example (`code.bugfix`, `leicht`). spatz learns per cell. Criticality is not part of the cell. It only changes the decision rule.
+A cell is the pair (task type, difficulty), for example (`code.bugfix`, `easy`). spatz learns per cell. Criticality is not part of the cell. It only changes the decision rule.
 
 For each candidate in a cell, spatz computes an estimate of the success rate:
 
@@ -39,9 +39,9 @@ If the cell has too little data, spatz pools the outcomes of the same task type 
 
 | Difficulty | Pooled levels |
 |---|---|
-| `leicht` | `leicht`, `mittel`, `schwer` |
-| `mittel` | `mittel`, `schwer` |
-| `schwer` | no pooling |
+| `easy` | `easy`, `medium`, `hard` |
+| `medium` | `medium`, `hard` |
+| `hard` | no pooling |
 
 Success on a harder task is evidence for an easier task. The reverse is not true. Pooled data uses the same "enough data" rule.
 
@@ -60,7 +60,7 @@ spatz applies the first rule that matches. The values are the start values in `D
 6. **Jev choice.** If the pooled levels also have too little data, spatz takes the best candidate of Jev (strategy `jev-choice`).
 7. **Rules.** If Jev was not involved, or its answer is not in the catalog, spatz recommends the most expensive candidate (strategy `rules`).
 
-The fallback without Jev also goes through steps 3 to 5. It always uses the cell (`other`, `mittel`). So `rules` applies only while that cell and its pooled level have too little data.
+The fallback without Jev also goes through steps 3 to 5. It always uses the cell (`other`, `medium`). So `rules` applies only while that cell and its pooled level have too little data.
 
 The ranking shows the recommended candidate and up to two next candidates in cost order. Each entry shows the estimate and `n` of the level that made the decision.
 
@@ -156,9 +156,9 @@ See [cli.md](cli.md#spatz-stats) for the output fields.
 
 ## Worked example
 
-The catalog has six candidates. The cost order puts Sonnet before Opus. The task is a bug fix. Jev classifies it as (`code.bugfix`, `leicht`), criticality `none`. The draw is `u = 0.5`, so spatz takes the normal path.
+The catalog has six candidates. The cost order puts Sonnet before Opus. The task is a bug fix. Jev classifies it as (`code.bugfix`, `easy`), criticality `none`. The draw is `u = 0.5`, so spatz takes the normal path.
 
-The cell (`code.bugfix`, `leicht`) has this history:
+The cell (`code.bugfix`, `easy`) has this history:
 
 | Candidate (cost order) | n | Sum of quality | Estimate |
 |---|---|---|---|

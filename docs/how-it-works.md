@@ -109,7 +109,7 @@ Jev is the classification model of TypeSafe AI. It gives typed answers with a pr
 | Question | Kind | Options |
 |---|---|---|
 | `task_type` | choice | The eight task types below |
-| `difficulty` | score over a rubric | `leicht`, `mittel`, `schwer` |
+| `difficulty` | score over a rubric | `easy`, `medium`, `hard` |
 | `criticality` | choice | `none`, `business_logic`, `security`, `data_integrity` |
 | `best_candidate` | choice | Every candidate as `model:effort` |
 
@@ -132,15 +132,15 @@ The timeout is 1000 ms. The SDK does not retry.
 
 ### Difficulty rubric
 
-The values stay German in the output and the database.
+The output and database use English values, ordered `easy < medium < hard`.
 
-| Value | Meaning | Rubric |
-|---|---|---|
-| `leicht` | easy | A clear task with little context. One place or one topic. |
-| `mittel` | medium | Several places or topics. The approach needs some analysis. |
-| `schwer` | hard | Many parts, an unclear cause, a design decision or much context. |
+| Value | Rubric |
+|---|---|
+| `easy` | A clear task with little context. One place or one topic. |
+| `medium` | Several places or topics. The approach needs some analysis. |
+| `hard` | Many parts, an unclear cause, a design decision or much context. |
 
-spatz takes the level with the highest probability. If that probability is below 0.5, spatz moves one level up. `schwer` stays `schwer`. An uncertain answer thus gets the safer level.
+spatz takes the level with the highest probability. If that probability is below 0.5, spatz moves one level up. `hard` stays `hard`. An uncertain answer thus gets the safer level.
 
 ### Criticality
 
@@ -170,7 +170,7 @@ spatz uses keyword rules instead of Jev in these cases:
 The rules give these values:
 
 - `task_type` is `other`.
-- `difficulty` is `mittel`.
+- `difficulty` is `medium`.
 - `criticality` comes from keywords in the task text. spatz checks the `security` words first, for example `auth` or `password`. Then it checks the `data_integrity` words, for example `migration`. Then it checks the `business_logic` words, for example `payment`. The lists include German words. The check is a substring match, so `author` counts as `auth`.
 - There is no best candidate.
 
@@ -197,11 +197,19 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 | 1 | Tables `suggestions`, `usages`, `signals` and the view `outcomes` |
 | 2 | Table `usage_scopes` |
 | 3 | Nullable routing and attribution fields. A unique index prevents duplicate direct signals per turn. |
+| 4 | English difficulty values, probability keys and pooling reasons. Row counts and outcomes stay unchanged. |
 
 `SCHEMA_V3` is the third entry in `MIGRATIONS`.
 `SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.
 The migration adds columns without replacing existing rows or the outcome view.
 Existing suggestions keep their outcomes. Their new fields are `null`.
+
+`SCHEMA_V4` converts `leicht`, `mittel` and `schwer` to `easy`, `medium` and `hard`.
+It updates `suggestions.difficulty`, `probabilities.difficulty` keys and generated pooling labels in `reason`.
+Ranking entries contain no difficulty field. The migration preserves them and all unrelated JSON fields.
+Store reads and writes accept the old values. Classification and recommendation also accept legacy difficulty inputs.
+Stats group old and new spellings into the same cell, including `stats --by scope`.
+English probability keys take precedence when both spellings exist.
 
 ### Direct attribution
 

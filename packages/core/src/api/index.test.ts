@@ -210,7 +210,7 @@ describe("suggest", () => {
 			reason: expect.any(String),
 			classification: {
 				task_type: "code.bugfix",
-				difficulty: "leicht",
+				difficulty: "easy",
 				criticality: "none",
 			},
 			fallback_used: false,
@@ -236,10 +236,10 @@ describe("suggest", () => {
 			session_id: null,
 			prompt_id: null,
 			task_type: "code.bugfix",
-			difficulty: "leicht",
+			difficulty: "easy",
 			criticality: "none",
 			probabilities: expect.objectContaining({
-				difficulty: { leicht: 0.8, mittel: 0.15, schwer: 0.05 },
+				difficulty: { easy: 0.8, medium: 0.15, hard: 0.05 },
 			}),
 			model_ref: "jev-1.13.0",
 			strategy: "jev-choice",
@@ -296,7 +296,7 @@ describe("suggest", () => {
 		});
 		expect(out.classification).toEqual({
 			task_type: "other",
-			difficulty: "mittel",
+			difficulty: "medium",
 			criticality: "none",
 		});
 	});

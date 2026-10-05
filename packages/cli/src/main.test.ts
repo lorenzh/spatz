@@ -27,7 +27,7 @@ const suggestion: Suggestion = {
 	reason: "Cheapest pair with enough outcomes.",
 	classification: {
 		task_type: "code.bugfix",
-		difficulty: "mittel",
+		difficulty: "medium",
 		criticality: "none",
 	},
 	fallback_used: false,
@@ -202,7 +202,7 @@ describe("suggest", () => {
 				"1. openai/gpt-6-sol:medium  estimate=0.85  n=7",
 				"2. anthropic/claude-opus-5.5:high  estimate=0.90  n=12",
 				"reason: Cheapest pair with enough outcomes.",
-				"task_type: code.bugfix  difficulty: mittel  criticality: none",
+				"task_type: code.bugfix  difficulty: medium  criticality: none",
 				"explored: true  control: false  fallback_used: false",
 			].join("\n"),
 		);

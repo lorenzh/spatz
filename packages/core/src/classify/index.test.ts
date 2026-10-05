@@ -40,12 +40,8 @@ function candidate(
 }
 
 const catalog: Catalog = [
-	candidate(
-		"anthropic/claude-sonnet-5.5",
-		"low",
-		"Günstig, für einfache Arbeit.",
-	),
-	candidate("anthropic/claude-opus-5.5", "high", "Stärkstes Modell, teuer."),
+	candidate("anthropic/claude-sonnet-5.5", "low", "Cheap, for simple work."),
+	candidate("anthropic/claude-opus-5.5", "high", "Strongest model, expensive."),
 ];
 
 const config: Config = {
@@ -126,40 +122,37 @@ describe("buildJevRequest", () => {
 	test("task_type is a choice over the 8 options with the spec descriptions", () => {
 		const q = request.questions.task_type;
 		expect(q.type).toBe("choice");
-		// Literal copy of the spec table "task_type | Beschreibung für Jev".
+		// Literal copy of the spec table "task_type | Description for Jev".
 		const spec = {
-			"code.bugfix":
-				"Ein Fehler im bestehenden Code wird gefunden und behoben.",
-			"code.feature": "Neuer Code fügt eine Funktion hinzu.",
+			"code.bugfix": "Find and fix a bug in existing code.",
+			"code.feature": "Add a feature with new code.",
 			"code.refactor":
-				"Der Code ändert seine Struktur, das Verhalten bleibt gleich.",
-			"code.explain": "Der Agent erklärt Code und ändert nichts.",
-			review:
-				"Der Agent prüft fremde Arbeit: ein Review oder eine Verifikation.",
-			spec: "Der Agent schreibt oder ändert eine Spezifikation.",
-			planning:
-				"Der Agent plant Schritte, Architektur oder Vorgehen ohne Code.",
-			other: "Keine der anderen Optionen passt.",
+				"Change the code structure without changing its behavior.",
+			"code.explain": "Explain code without changing it.",
+			review: "Review or verify someone else's work.",
+			spec: "Write or change a specification.",
+			planning: "Plan steps, architecture or an approach without writing code.",
+			other: "None of the other options fits.",
 		};
 		expect(q.criteria).toEqual(spec);
 		expect(TASK_TYPE_DESCRIPTIONS).toEqual(spec);
 	});
 
-	test("difficulty is a score with the rubric in order leicht, mittel, schwer", () => {
+	test("difficulty is a score with the rubric in order easy, medium, hard", () => {
 		const q = request.questions.difficulty;
 		expect(q.type).toBe("score");
 		expect(q.criteria).toHaveLength(3);
-		expect(q.criteria[0]).toStartWith("leicht");
+		expect(q.criteria[0]).toStartWith("easy");
 		expect(q.criteria[0]).toContain(
-			"Klarer Auftrag mit wenig Kontext. Ein Ort oder ein Thema.",
+			"A clear task with little context. One place or one topic.",
 		);
-		expect(q.criteria[1]).toStartWith("mittel");
+		expect(q.criteria[1]).toStartWith("medium");
 		expect(q.criteria[1]).toContain(
-			"Mehrere Stellen oder Themen. Der Weg braucht etwas Analyse.",
+			"Several places or topics. The approach needs some analysis.",
 		);
-		expect(q.criteria[2]).toStartWith("schwer");
+		expect(q.criteria[2]).toStartWith("hard");
 		expect(q.criteria[2]).toContain(
-			"Viele Teile, eine unklare Ursache, eine Entwurfsentscheidung oder viel Kontext.",
+			"Many parts, an unclear cause, a design decision or much context.",
 		);
 	});
 
@@ -172,15 +165,15 @@ describe("buildJevRequest", () => {
 			"security",
 			"data_integrity",
 		]);
-		expect(q.criteria.none).toContain("Auch sichtbare Fehler gehören hierher.");
+		expect(q.criteria.none).toContain("Visible bugs also belong here.");
 		expect(q.criteria.business_logic).toBe(
-			"Geld, Preise, Abrechnung, Verträge oder rechtliche Regeln.",
+			"Money, prices, billing, contracts or legal rules.",
 		);
 		expect(q.criteria.security).toBe(
-			"Anmeldung, Berechtigungen, Geheimnisse oder Schwachstellen.",
+			"Login, permissions, secrets or vulnerabilities.",
 		);
 		expect(q.criteria.data_integrity).toBe(
-			"Gespeicherte Daten: Migrationen, Löschen oder Schutz vor Datenverlust.",
+			"Stored data: migrations, deletion or protection against data loss.",
 		);
 	});
 
@@ -188,13 +181,34 @@ describe("buildJevRequest", () => {
 		const q = request.questions.best_candidate;
 		expect(q.type).toBe("choice");
 		expect(q.criteria).toEqual({
-			"anthropic/claude-sonnet-5.5:low": "Günstig, für einfache Arbeit.",
-			"anthropic/claude-opus-5.5:high": "Stärkstes Modell, teuer.",
+			"anthropic/claude-sonnet-5.5:low": "Cheap, for simple work.",
+			"anthropic/claude-opus-5.5:high": "Strongest model, expensive.",
 		});
 	});
 });
 
 describe("parseJevResult", () => {
+	test("accepts legacy and English probability keys and returns only English keys", () => {
+		for (const probabilities of [
+			{ leicht: 0.1, mittel: 0.7, schwer: 0.2 },
+			{ easy: 0.1, medium: 0.7, hard: 0.2 },
+			{ easy: 0.1, medium: 0.7, hard: 0.2, leicht: 0.9, mittel: 0, schwer: 0 },
+		] as Record<string, number>[]) {
+			const result = jevResult();
+			result.answers.difficulty.probabilities = probabilities;
+			const parsed = parseJevResult(result, catalog, DEFAULT_TUNING);
+			expect(parsed.difficulty).toBe("medium");
+			expect(parsed.probabilities?.difficulty).toEqual({
+				easy: 0.1,
+				medium: 0.7,
+				hard: 0.2,
+			});
+		}
+		expect(
+			roundUpDifficulty({ leicht: 0.3, mittel: 0.4, schwer: 0.3 }, 0.5),
+		).toBe("hard");
+	});
+
 	test("maps answers, difficulty keys and keeps all probabilities", () => {
 		const result = jevResult({
 			difficulty: {
@@ -206,12 +220,12 @@ describe("parseJevResult", () => {
 		});
 		expect(parseJevResult(result, catalog, DEFAULT_TUNING)).toEqual({
 			task_type: "code.bugfix",
-			difficulty: "mittel",
+			difficulty: "medium",
 			criticality: "none",
 			best_candidate: "anthropic/claude-sonnet-5.5:low",
 			probabilities: {
 				task_type: { "code.bugfix": 0.9, other: 0.1 },
-				difficulty: { leicht: 0.1, mittel: 0.7, schwer: 0.2 },
+				difficulty: { easy: 0.1, medium: 0.7, hard: 0.2 },
 				criticality: { none: 0.9, security: 0.1 },
 				best_candidate: {
 					"anthropic/claude-sonnet-5.5:low": 0.93,
@@ -241,7 +255,7 @@ describe("parseJevResult", () => {
 			},
 		});
 		expect(parseJevResult(result, catalog, DEFAULT_TUNING).difficulty).toBe(
-			"mittel",
+			"medium",
 		);
 	});
 
@@ -262,13 +276,13 @@ describe("parseJevResult", () => {
 
 describe("roundUpDifficulty", () => {
 	test.each([
-		[{ leicht: 0.8, mittel: 0.1, schwer: 0.1 }, "leicht"],
-		[{ leicht: 0.5, mittel: 0.3, schwer: 0.2 }, "leicht"],
-		[{ leicht: 0.45, mittel: 0.3, schwer: 0.25 }, "mittel"],
-		[{ leicht: 0.1, mittel: 0.6, schwer: 0.3 }, "mittel"],
-		[{ leicht: 0.3, mittel: 0.4, schwer: 0.3 }, "schwer"],
-		[{ leicht: 0.3, mittel: 0.3, schwer: 0.4 }, "schwer"],
-		[{ leicht: 0, mittel: 0, schwer: 1 }, "schwer"],
+		[{ easy: 0.8, medium: 0.1, hard: 0.1 }, "easy"],
+		[{ easy: 0.5, medium: 0.3, hard: 0.2 }, "easy"],
+		[{ easy: 0.45, medium: 0.3, hard: 0.25 }, "medium"],
+		[{ easy: 0.1, medium: 0.6, hard: 0.3 }, "medium"],
+		[{ easy: 0.3, medium: 0.4, hard: 0.3 }, "hard"],
+		[{ easy: 0.3, medium: 0.3, hard: 0.4 }, "hard"],
+		[{ easy: 0, medium: 0, hard: 1 }, "hard"],
 	] as const)("%p -> %p", (probabilities, expected) => {
 		expect(roundUpDifficulty(probabilities, 0.5)).toBe(expected);
 	});
@@ -308,7 +322,7 @@ describe("classify", () => {
 			const result = await classify("Fix the login page", catalog, jev, config);
 			expect(result).toEqual({
 				task_type: "other",
-				difficulty: "mittel",
+				difficulty: "medium",
 				criticality: "security",
 				best_candidate: null,
 				probabilities: null,

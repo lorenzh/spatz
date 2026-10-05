@@ -21,6 +21,10 @@ The mod never edits a prompt. It stores no task text. [hooks.md](hooks.md) descr
 
 spatz stores every suggestion with its scope. `spatz stats --by scope` compares the scopes ([cli.md](cli.md)).
 
+The CLI uses English difficulty values: `easy`, `medium` and `hard`.
+The mod accepts responses from older clients with German difficulty values.
+See [database migrations](how-it-works.md#migrations) for the v4 conversion.
+
 ## Routing scopes
 
 One setting picks when spatz decides. The default is `subagent`. Every scope works with every mode.

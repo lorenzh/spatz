@@ -9,7 +9,42 @@ import {
 
 const good = JSON.stringify({
 	suggestion_id: "s1",
+	classification: {
+		task_type: "code.bugfix",
+		difficulty: "medium",
+		criticality: "none",
+	},
 	ranking: [{ model: "anthropic/claude-opus-5.5", effort: "high" }],
+});
+
+test("bridge accepts English and legacy difficulty values from the CLI", async () => {
+	for (const difficulty of [
+		"easy",
+		"medium",
+		"hard",
+		"leicht",
+		"mittel",
+		"schwer",
+	]) {
+		const result = await suggest(
+			async () => ({
+				exitCode: 0,
+				stderr: "",
+				stdout: JSON.stringify({
+					...JSON.parse(good),
+					classification: {
+						task_type: "code.bugfix",
+						difficulty,
+						criticality: "none",
+					},
+				}),
+			}),
+			"task",
+			["claude-opus-5-5:high"],
+			{ scope: "turn" },
+		);
+		expect(result?.model).toBe("claude-opus-5-5");
+	}
 });
 
 test("bridge parses a spatz suggestion and passes every link flag", async () => {

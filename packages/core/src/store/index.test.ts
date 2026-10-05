@@ -43,7 +43,7 @@ function suggestion(over: Partial<SuggestionRecord> = {}): SuggestionRecord {
 		session_id: null,
 		prompt_id: null,
 		task_type: "code.bugfix",
-		difficulty: "mittel",
+		difficulty: "medium",
 		criticality: "none",
 		probabilities: null,
 		model_ref: null,
@@ -68,13 +68,159 @@ function suggestion(over: Partial<SuggestionRecord> = {}): SuggestionRecord {
 }
 
 describe("schema", () => {
-	test("populated v2 migrates to v3 without losing rows or outcomes", async () => {
+	test("v3 difficulty migration preserves rows, outcomes and unrelated JSON", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "spatz-v3-"));
+		dirs.push(dir);
+		const path = join(dir, "v3.db");
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v3.sql")).text());
+		for (const [i, difficulty] of [
+			"leicht",
+			"mittel",
+			"schwer",
+			"easy",
+		].entries()) {
+			db.run(
+				`INSERT INTO suggestions VALUES (?, 1, NULL, NULL, 'review', ?, 'none', ?, NULL, 'learned', ?, ?, 0, 0, 0, 0, 1, NULL, 'turn', 'claude-code-mod', 't1', NULL)`,
+				[
+					String(i),
+					difficulty,
+					i === 3
+						? null
+						: JSON.stringify({
+								difficulty: {
+									leicht: 0.1,
+									mittel: 0.2,
+									schwer: 0.7,
+									...(i === 1 && { medium: 0.8 }),
+								},
+								best_candidate: { "m/leicht:low": 1 },
+							}),
+					JSON.stringify([
+						{ model: "m/leicht", effort: "low", n: 5, estimate: 0.9 },
+					]),
+					"Selected on the leicht+mittel+schwer level.",
+				],
+			);
+			db.run(
+				"INSERT INTO usages VALUES (?, 'm/a', 'low', 'report', '', 3, 4, 5, 6, 0, 1, 'note', 2, NULL, NULL)",
+				[String(i)],
+			);
+			db.run(
+				"INSERT INTO signals VALUES (?, 'report', ?, 1, 'report', 2, NULL, NULL)",
+				[String(i), i / 3],
+			);
+		}
+		db.run(
+			"INSERT INTO usage_scopes VALUES ('session', 'transcript', 'prompt', 1, 2)",
+		);
+		const tables = ["usages", "signals", "usage_scopes", "outcomes"];
+		const before = tables.map((t) => db.query(`SELECT * FROM ${t}`).all());
+		db.close();
+		const store = open(path);
+		const migrated = new Database(path);
+		try {
+			expect(migrated.query("PRAGMA user_version").get()).toEqual({
+				user_version: 4,
+			});
+			expect(
+				migrated.query("SELECT difficulty FROM suggestions ORDER BY id").all(),
+			).toEqual(
+				["easy", "medium", "hard", "easy"].map((difficulty) => ({
+					difficulty,
+				})),
+			);
+			for (const [i, table] of tables.entries())
+				expect(migrated.query(`SELECT * FROM ${table}`).all()).toEqual(
+					before[i] ?? [],
+				);
+			const row = migrated
+				.query<{ probabilities: string; reason: string }, []>(
+					"SELECT probabilities, reason FROM suggestions WHERE id = '0'",
+				)
+				.get();
+			expect(JSON.parse(row?.probabilities ?? "null")).toEqual({
+				difficulty: { easy: 0.1, medium: 0.2, hard: 0.7 },
+				best_candidate: { "m/leicht:low": 1 },
+			});
+			expect(row?.reason).toBe("Selected on the easy+medium+hard level.");
+			expect(store.getSuggestion("0")?.ranking[0]?.model).toBe("m/leicht");
+			expect(store.getSuggestion("1")?.probabilities?.difficulty).toEqual({
+				easy: 0.1,
+				medium: 0.8,
+				hard: 0.7,
+			});
+			expect(store.getSuggestion("3")?.probabilities).toBeNull();
+		} finally {
+			migrated.close();
+		}
+	});
+
+	test("legacy clients write English values and late legacy rows read and group as English", () => {
+		const path = tempDb();
+		const store = open(path);
+		const legacy = JSON.parse(JSON.stringify(suggestion({ id: "old" })));
+		legacy.difficulty = "mittel";
+		legacy.probabilities = {
+			difficulty: { leicht: 0, mittel: 1, schwer: 0 },
+			task_type: {},
+			criticality: {},
+			best_candidate: {},
+		};
+		store.insertSuggestion(legacy);
+		const db = new Database(path);
+		try {
+			expect(db.query("SELECT difficulty FROM suggestions").get()).toEqual({
+				difficulty: "medium",
+			});
+			expect(store.getSuggestion("old")?.probabilities?.difficulty).toEqual({
+				easy: 0,
+				medium: 1,
+				hard: 0,
+			});
+			store.insertSuggestion(suggestion({ id: "new" }));
+			db.run(
+				"UPDATE suggestions SET difficulty = 'mittel', probabilities = ? WHERE id = 'old'",
+				[JSON.stringify(legacy.probabilities)],
+			);
+			for (const id of ["old", "new"]) {
+				db.run(
+					"INSERT INTO usages VALUES (?, 'm/a', 'low', 'report', '', 0, 0, 0, 0, 0, NULL, NULL, 1, NULL, NULL)",
+					[id],
+				);
+				db.run(
+					"INSERT INTO signals VALUES (?, 'report', 1, 1, 'report', 1, NULL, NULL)",
+					[id],
+				);
+			}
+			expect(store.getSuggestion("old")?.difficulty).toBe("medium");
+			expect(store.getSuggestion("old")?.probabilities?.difficulty).toEqual({
+				easy: 0,
+				medium: 1,
+				hard: 0,
+			});
+			expect(store.cellStats("code.bugfix")).toEqual([
+				{
+					task_type: "code.bugfix",
+					difficulty: "medium",
+					model: "m/a",
+					effort: "low",
+					n: 2,
+					sum_quality: 2,
+				},
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("populated v2 migrates to v4 without losing rows or outcomes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "spatz-v2-"));
 		dirs.push(dir);
 		const path = join(dir, "v2.db");
 		const db = new Database(path);
 		db.run(await Bun.file(join(import.meta.dir, "fixtures/v2.sql")).text());
-		db.run(`INSERT INTO suggestions VALUES ('old', 1, 'session', 'prompt', 'review', 'leicht', 'none', NULL, NULL, 'rules', '[]', 'legacy', 0, 0, 1, 0, 2, NULL);
+		db.run(`INSERT INTO suggestions VALUES ('old', 1, 'session', 'prompt', 'review', 'easy', 'none', NULL, NULL, 'rules', '[]', 'legacy', 0, 0, 1, 0, 2, NULL);
 			INSERT INTO usages VALUES ('old', 'm/a', 'low', 'report', '', 3, 4, 5, 6, 0, 1, 'note', 2);
 			INSERT INTO signals VALUES ('old', 'report', 1, 1, 'report', 2);
 			INSERT INTO usage_scopes VALUES ('session', 'transcript', 'prompt', 1, 2);`);
@@ -90,7 +236,7 @@ describe("schema", () => {
 		const migrated = openDatabase(path);
 		try {
 			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: 3,
+				user_version: 4,
 			});
 			for (const [i, table] of tables.entries()) {
 				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
@@ -112,7 +258,7 @@ describe("schema", () => {
 			migrated.close();
 		}
 	});
-	test("creates tables, the outcomes view and user_version 3", () => {
+	test("creates tables, the outcomes view and user_version 4", () => {
 		const path = tempDb();
 		open(path).dispose();
 		stores.length = 0;
@@ -135,17 +281,17 @@ describe("schema", () => {
 				{ name: "usage_scopes", type: "table" },
 			]),
 		);
-		expect(SCHEMA_VERSION).toBe(3);
-		expect(version?.user_version).toBe(3);
+		expect(SCHEMA_VERSION).toBe(4);
+		expect(version?.user_version).toBe(4);
 	});
 
-	test("a version 1 db migrates to version 3 and keeps its data", async () => {
+	test("a version 1 db migrates to version 4 and keeps its data", async () => {
 		const path = join(mkdtempSync(join(tmpdir(), "spatz-v1-")), "v1.db");
 		dirs.push(join(path, ".."));
 		const db = new Database(path, { create: true });
 		db.run(await Bun.file(join(import.meta.dir, "fixtures/v2.sql")).text());
 		db.run(
-			"INSERT INTO suggestions VALUES ('s1', 1, NULL, NULL, 'review', 'leicht', 'none', NULL, NULL, 'rules', '[]', 'r', 0, 0, 0, 0, 1, NULL)",
+			"INSERT INTO suggestions VALUES ('s1', 1, NULL, NULL, 'review', 'easy', 'none', NULL, NULL, 'rules', '[]', 'r', 0, 0, 0, 0, 1, NULL)",
 		);
 		db.run("DROP TABLE usage_scopes");
 		db.run("PRAGMA user_version = 1");
@@ -160,7 +306,7 @@ describe("schema", () => {
 			.get();
 		check.close();
 		expect(table).toEqual({ name: "usage_scopes" });
-		expect(version?.user_version).toBe(3);
+		expect(version?.user_version).toBe(4);
 	});
 
 	test("reopening keeps data and does not re-migrate", () => {
@@ -217,11 +363,11 @@ describe("suggestions", () => {
 			session_id: "sess",
 			prompt_id: "p1",
 			task_type: "review",
-			difficulty: "schwer",
+			difficulty: "hard",
 			criticality: "security",
 			probabilities: {
 				task_type: { review: 0.9, other: 0.1 },
-				difficulty: { leicht: 0.1, mittel: 0.2, schwer: 0.7 },
+				difficulty: { easy: 0.1, medium: 0.2, hard: 0.7 },
 				criticality: { security: 1 },
 				best_candidate: { "openai/gpt-6-sol:medium": 1 },
 			},
@@ -461,7 +607,7 @@ describe("cellStats", () => {
 		};
 		add("a", {}, 1, {});
 		add("b", {}, 0.5, {});
-		add("c", { difficulty: "schwer" }, 1, {});
+		add("c", { difficulty: "hard" }, 1, {});
 		add("d", {}, 1, { model: "openai/gpt-6-sol", effort: "low" });
 		add("e", { is_test: true }, 1, {});
 		add("f", { task_type: "review" }, 1, {});
@@ -474,7 +620,7 @@ describe("cellStats", () => {
 			expect.arrayContaining([
 				{
 					task_type: "code.bugfix",
-					difficulty: "mittel",
+					difficulty: "medium",
 					model: "anthropic/claude-opus-5.5",
 					effort: "high",
 					n: 2,
@@ -482,7 +628,7 @@ describe("cellStats", () => {
 				},
 				{
 					task_type: "code.bugfix",
-					difficulty: "schwer",
+					difficulty: "hard",
 					model: "anthropic/claude-opus-5.5",
 					effort: "high",
 					n: 1,
@@ -490,7 +636,7 @@ describe("cellStats", () => {
 				},
 				{
 					task_type: "code.bugfix",
-					difficulty: "mittel",
+					difficulty: "medium",
 					model: "openai/gpt-6-sol",
 					effort: "low",
 					n: 1,
@@ -515,7 +661,7 @@ describe("cellStats", () => {
 		add("e", "high", 0.5);
 		const cell = {
 			task_type: "code.bugfix",
-			difficulty: "mittel",
+			difficulty: "medium",
 			model: "anthropic/claude-opus-5.5",
 		};
 		const stats = store.cellStats("code.bugfix");

@@ -1,5 +1,5 @@
 // api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
-// Spec: "CLI-Schnittstelle", "Ablauf", "Zuordnung", "Genutztes Paar", "Privacy".
+// Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
 import {
 	buildCatalog,
 	parseModelsArg,

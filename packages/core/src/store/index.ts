@@ -1,9 +1,15 @@
 // store: bun:sqlite with schema, migrations (PRAGMA user_version), WAL and busy_timeout.
-// Spec: "Datenhaltung", outcomes view per "Signale".
+// Spec: "Storage", outcomes view per "Signals".
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Store } from "../contracts/deps.ts";
+import {
+	difficultySql,
+	normalizeDifficulty,
+	normalizeProbabilities,
+	normalizeReason,
+} from "../contracts/difficulty.ts";
 import type {
 	CellStat,
 	Outcome,
@@ -12,7 +18,7 @@ import type {
 	UsageRecord,
 } from "../contracts/types.ts";
 
-// No column holds task text (spec "Datenhaltung", "Privacy").
+// No column holds task text (spec "Storage", "Privacy").
 const SCHEMA_V1 = `
 CREATE TABLE suggestions (
 	id TEXT PRIMARY KEY,
@@ -125,7 +131,20 @@ ALTER TABLE signals ADD COLUMN agent_id TEXT;
 CREATE UNIQUE INDEX signals_turn ON signals (suggestion_id, source, turn_id, kind) WHERE turn_id IS NOT NULL;
 `;
 
-const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
+const SCHEMA_V4 = `
+UPDATE suggestions SET difficulty = ${difficultySql("difficulty")};
+UPDATE suggestions SET probabilities = json_set(probabilities, '$.difficulty', json((
+	SELECT json_group_object(${difficultySql("key")}, value)
+	FROM json_each(suggestions.probabilities, '$.difficulty')
+	WHERE key NOT IN ('leicht', 'mittel', 'schwer')
+		OR json_type(suggestions.probabilities, '$.difficulty.' || ${difficultySql("key")}) IS NULL
+))) WHERE json_type(probabilities, '$.difficulty') = 'object';
+UPDATE suggestions SET reason = replace(replace(reason,
+	'leicht+mittel+schwer level', 'easy+medium+hard level'),
+	'mittel+schwer level', 'medium+hard level');
+`;
+
+const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /** Opens the db with WAL and busy_timeout 5000 and migrates to SCHEMA_VERSION. */
@@ -186,7 +205,11 @@ export function openStore(dbPath: string): Store {
 				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id)`,
 			).run({
 				...r,
-				probabilities: r.probabilities && JSON.stringify(r.probabilities),
+				difficulty: normalizeDifficulty(r.difficulty),
+				reason: normalizeReason(r.reason),
+				probabilities:
+					r.probabilities &&
+					JSON.stringify(normalizeProbabilities(r.probabilities)),
 				ranking: JSON.stringify(r.ranking),
 				explored: Number(r.explored),
 				control: Number(r.control),
@@ -203,7 +226,11 @@ export function openStore(dbPath: string): Store {
 			if (!row) return null;
 			return {
 				...row,
-				probabilities: row.probabilities && JSON.parse(row.probabilities),
+				difficulty: normalizeDifficulty(row.difficulty),
+				reason: normalizeReason(row.reason),
+				probabilities: normalizeProbabilities(
+					row.probabilities ? JSON.parse(row.probabilities) : null,
+				),
 				ranking: JSON.parse(row.ranking),
 				explored: row.explored === 1,
 				control: row.control === 1,
@@ -214,10 +241,10 @@ export function openStore(dbPath: string): Store {
 		cellStats(taskType) {
 			return db
 				.query<CellStat, [TaskType]>(
-					`SELECT s.task_type, s.difficulty, o.model, o.effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
+					`SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
 					FROM suggestions s JOIN outcomes o ON o.suggestion_id = s.id
 					WHERE s.task_type = ? AND s.is_test = 0 AND o.model IS NOT NULL AND o.effort IS NOT NULL
-					GROUP BY s.task_type, s.difficulty, o.model, o.effort`,
+					GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.effort`,
 				)
 				.all(taskType);
 		},

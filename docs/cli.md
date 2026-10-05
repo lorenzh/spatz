@@ -102,7 +102,7 @@ The first line is always `suggestion_id: <uuid>`. The Claude Code hook reads thi
 | `ranking[].estimate` | number | Estimated success rate on the same level as `n`: `(1 + sum of quality) / (2 + n)`. With no data it is `0.5`. |
 | `reason` | string | One sentence that explains the choice. |
 | `classification.task_type` | string | `code.bugfix`, `code.feature`, `code.refactor`, `code.explain`, `review`, `spec`, `planning` or `other`. |
-| `classification.difficulty` | string | `leicht` (easy), `mittel` (medium) or `schwer` (hard). |
+| `classification.difficulty` | string | `easy`, `medium` or `hard`. |
 | `classification.criticality` | string | `none`, `business_logic`, `security` or `data_integrity`. |
 | `fallback_used` | boolean | `true` when keyword rules classified the task instead of Jev. |
 | `explored` | boolean | `true` when spatz picked a cheaper pair to collect data (exploration). |
@@ -117,13 +117,13 @@ $ spatz "Fix the off-by-one error in the pagination helper in src/list.ts" --mod
 suggestion_id: 5361b5cd-76f0-45c2-89f7-2609f2b83186
 1. anthropic/claude-opus-5.5:high  estimate=0.50  n=0
 reason: Without Jev and learned data the most expensive pair anthropic/claude-opus-5.5 (high) is recommended.
-task_type: other  difficulty: mittel  criticality: none
+task_type: other  difficulty: medium  criticality: none
 explored: false  control: false  fallback_used: true
 ```
 
 ```console
 $ spatz "Fix the off-by-one error in src/list.ts" --models claude-sonnet-5-5,gpt-6-sol --json
-{"suggestion_id":"aabe5a7a-3e89-4285-a1d1-7e323f243f75","ranking":[{"model":"anthropic/claude-sonnet-5.5","effort":"low","n":0,"estimate":0.5},{"model":"openai/gpt-6-sol","effort":"low","n":0,"estimate":0.5},{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":0,"estimate":0.5}],"reason":"Exploration: anthropic/claude-sonnet-5.5 (low) is cheaper than the normal pick and has the fewest outcomes in this cell.","classification":{"task_type":"other","difficulty":"mittel","criticality":"none"},"fallback_used":true,"explored":true,"control":false,"strategy":"rules","is_test":false}
+{"suggestion_id":"aabe5a7a-3e89-4285-a1d1-7e323f243f75","ranking":[{"model":"anthropic/claude-sonnet-5.5","effort":"low","n":0,"estimate":0.5},{"model":"openai/gpt-6-sol","effort":"low","n":0,"estimate":0.5},{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":0,"estimate":0.5}],"reason":"Exploration: anthropic/claude-sonnet-5.5 (low) is cheaper than the normal pick and has the fewest outcomes in this cell.","classification":{"task_type":"other","difficulty":"medium","criticality":"none"},"fallback_used":true,"explored":true,"control":false,"strategy":"rules","is_test":false}
 ```
 
 Both examples ran with `SPATZ_NO_JEV=1` and an empty database. That is why `fallback_used` is `true` and `n` is `0`.

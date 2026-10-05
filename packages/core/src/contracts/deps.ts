@@ -1,4 +1,5 @@
 // Injection seams. Unit tests pass fakes for all of these; no network, no real home dir.
+import type { DifficultyInput } from "./difficulty.ts";
 import type {
 	Agent,
 	CellStat,
@@ -90,7 +91,11 @@ export type RandomFn = () => number;
 // ---------- Store (implemented by store module with bun:sqlite) ----------
 
 export interface Store {
-	insertSuggestion(record: SuggestionRecord): void;
+	insertSuggestion(
+		record: Omit<SuggestionRecord, "difficulty"> & {
+			difficulty: DifficultyInput;
+		},
+	): void;
 	getSuggestion(id: string): SuggestionRecord | null;
 	/** Non-test outcomes with a used pair, grouped by (task_type, difficulty, model, effort), for one task_type (all difficulties). */
 	cellStats(taskType: TaskType): CellStat[];

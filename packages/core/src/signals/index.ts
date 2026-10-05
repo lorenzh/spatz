@@ -1,5 +1,5 @@
 // signals: pure interpretation of hook inputs (no IO, no persistence).
-// Spec: "Hooks und Signale" (Hooks, Signale, Zuordnung, Regeln für Hooks).
+// Spec: "Hooks and signals" (Hooks, Signals, Attribution, Hook rules).
 import type {
 	BashToolInput,
 	HookInput,

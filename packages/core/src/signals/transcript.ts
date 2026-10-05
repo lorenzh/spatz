@@ -1,5 +1,5 @@
 // signals: transcript parsing for usage (Stop and SubagentStop). Pure: takes JSONL text.
-// Spec: "Hooks", "Genutztes Paar". Facts: assistant entries have no promptId; dedupe by message.id.
+// Spec: "Hooks", "Used pair". Facts: assistant entries have no promptId; dedupe by message.id.
 import type { TranscriptUsage } from "../contracts/hooks.ts";
 
 export interface ModelUsage {

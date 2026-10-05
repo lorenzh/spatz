@@ -1,5 +1,5 @@
 // catalog: --models parsing, model-id rule, candidate expansion and cost order.
-// Spec: "Kandidaten und Metadaten", "Modell-IDs".
+// Spec: "Candidates and metadata", "Model IDs".
 import {
 	type Candidate,
 	type CandidateKey,

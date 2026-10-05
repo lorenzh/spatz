@@ -1,5 +1,5 @@
 // Thin CLI: argument parsing (node:util parseArgs) and output formatting only. No domain logic.
-// Spec: "CLI-Schnittstelle".
+// Spec: "CLI interface".
 import { parseArgs } from "node:util";
 import type {
 	Agent,

@@ -2,7 +2,7 @@
 
 spatz recommends a model and effort pair for a coding-agent task, and learns which pairs succeed.
 
-The motto is "nicht mit Kanonen auf Spatzen schießen". In English: do not use a cannon to shoot sparrows. Do not use the strongest model when a cheaper model is good enough.
+The motto is: do not use a cannon to shoot sparrows. Do not use the strongest model when a cheaper model is good enough.
 
 ## Status
 
@@ -126,7 +126,7 @@ See [RELEASING.md](RELEASING.md) for the release procedure.
    suggestion_id: fd8b7c1f-1f93-44f6-ac7b-b77ee287d1bb
    1. anthropic/claude-opus-5.5:high  estimate=0.50  n=0
    reason: Without Jev and learned data the most expensive pair anthropic/claude-opus-5.5 (high) is recommended.
-   task_type: other  difficulty: mittel  criticality: none
+   task_type: other  difficulty: medium  criticality: none
    explored: false  control: false  fallback_used: true  (dry-run)
    ```
 

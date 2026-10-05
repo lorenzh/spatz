@@ -5,7 +5,7 @@ describe("classifyByRules", () => {
 	test("returns the fixed fallback values and keeps the reason", () => {
 		expect(classifyByRules("Rename a variable", "timeout")).toEqual({
 			task_type: "other",
-			difficulty: "mittel",
+			difficulty: "medium",
 			criticality: "none",
 			best_candidate: null,
 			probabilities: null,

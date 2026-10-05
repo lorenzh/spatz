@@ -1,5 +1,6 @@
 // recommend: estimates per cell and the four strategies; pure, no IO.
-// Spec: "Empfehlung" (Zelle und Filter, Schätzung, Auswahl, Kritische Aufgaben, Exploration, Ausgabe).
+// Spec: "Recommendation" (Cell and filters, estimation, selection, critical tasks, exploration, output).
+import { normalizeDifficulty } from "../contracts/difficulty.ts";
 import {
 	type Candidate,
 	type Catalog,
@@ -44,7 +45,7 @@ function level(
 	const sums = new Map<string, { n: number; sum: number }>();
 	for (const s of history) {
 		if (s.task_type !== ctx.classification.task_type) continue;
-		if (!difficulties.includes(s.difficulty)) continue;
+		if (!difficulties.includes(normalizeDifficulty(s.difficulty))) continue;
 		const k = keyOf(s);
 		const cur = sums.get(k) ?? { n: 0, sum: 0 };
 		cur.n += s.n;
@@ -58,7 +59,7 @@ function level(
 }
 
 const cellLevel = (ctx: StrategyContext, history: CellStat[]) =>
-	level(ctx, history, [ctx.classification.difficulty]);
+	level(ctx, history, [normalizeDifficulty(ctx.classification.difficulty)]);
 
 function decision(
 	catalog: Catalog,
@@ -104,9 +105,9 @@ export function learned(
 	catalog: Catalog,
 	history: CellStat[],
 ): Decision | null {
-	const { difficulty } = ctx.classification;
+	const difficulty = normalizeDifficulty(ctx.classification.difficulty);
 	const levels: [Level, string][] = [[cellLevel(ctx, history), "cell"]];
-	if (difficulty !== "schwer") {
+	if (difficulty !== "hard") {
 		const harder = DIFFICULTIES.slice(DIFFICULTIES.indexOf(difficulty));
 		levels.push([level(ctx, history, harder), `${harder.join("+")} level`]);
 	}

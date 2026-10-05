@@ -127,7 +127,7 @@ describe("suggest", () => {
 		expect(s.explored && s.control).toBe(false);
 		expect(s.classification).toEqual({
 			task_type: "other",
-			difficulty: "mittel",
+			difficulty: "medium",
 			criticality: "none",
 		});
 		expect(s.ranking.length).toBeGreaterThanOrEqual(1);
@@ -222,7 +222,7 @@ describe("hook", () => {
 			hookEvents.agentTool,
 			hookEvents.subagentStop,
 			hookEvents.stop,
-			// Both are ignored by spec ("Regeln für Hooks").
+			// Both are ignored by spec ("Hook rules").
 			hookEvents.handback,
 			hookEvents.agentMessage,
 		]) {

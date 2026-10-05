@@ -1,5 +1,5 @@
 // catalog: OpenRouter model list with a local 24 h cache.
-// Spec: "Metadaten".
+// Spec: "Metadata".
 import type { Clock, Env, FetchFn } from "../contracts/deps.ts";
 import { DEFAULT_TUNING, type OpenRouterModel } from "../contracts/types.ts";
 

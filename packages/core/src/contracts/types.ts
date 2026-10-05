@@ -1,7 +1,7 @@
 // Shared data contracts for spatz. Owned by nobody: change only by agreement.
 // Spec: scratchpad/spatz-spec.md. Field names follow the spec (snake_case where the spec uses it).
 
-// ---------- Taxonomy (spec "Klassifikation mit Jev") ----------
+// ---------- Taxonomy (spec "Classification with Jev") ----------
 
 export const TASK_TYPES = [
 	"code.bugfix",
@@ -15,8 +15,8 @@ export const TASK_TYPES = [
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
 
-/** Rubric order matters: Jev score key "0" = leicht, "1" = mittel, "2" = schwer. */
-export const DIFFICULTIES = ["leicht", "mittel", "schwer"] as const;
+/** Rubric order matters: Jev score key "0" = easy, "1" = medium, "2" = hard. */
+export const DIFFICULTIES = ["easy", "medium", "hard"] as const;
 export type Difficulty = (typeof DIFFICULTIES)[number];
 
 export const CRITICALITIES = [
@@ -35,7 +35,7 @@ export const DEFAULT_EFFORTS: readonly Effort[] = ["low", "medium", "high"];
 
 export const JEV_MODEL = "jev-1.13.0";
 
-// ---------- Startwerte (spec: all are tunable start values) ----------
+// ---------- Initial values (spec: all are tunable start values) ----------
 
 export interface Tuning {
 	/** Learned choice: minimum n per candidate in the cell. Default 5. */
@@ -52,7 +52,7 @@ export interface Tuning {
 	exploreRate: number;
 	/** Jev timeout per request in ms. Default 1000. */
 	jevTimeoutMs: number;
-	/** If the top difficulty probability is below this, round up one level (ends at schwer). Default 0.5. */
+	/** If the top difficulty probability is below this, round up one level (ends at hard). Default 0.5. */
 	difficultyMinProbability: number;
 	/** A suggestion stays open for hook events until this much idle time. Default 2 h. */
 	openWindowMs: number;
@@ -79,7 +79,7 @@ export const DEFAULT_TUNING: Tuning = {
 	successQuality: 0.8,
 };
 
-// ---------- Candidates and catalog (spec "Kandidaten und Metadaten") ----------
+// ---------- Candidates and catalog (spec "Candidates and metadata") ----------
 
 /** One entry of --models after parsing, before OpenRouter lookup. */
 export interface RequestedModel {
@@ -168,7 +168,7 @@ export interface CellStat {
 	sum_quality: number;
 }
 
-// ---------- Suggestion (spec "Ausgabe") ----------
+// ---------- Suggestion (spec "Output") ----------
 
 export type StrategyName = "learned" | "jev-choice" | "rules" | "strongest";
 

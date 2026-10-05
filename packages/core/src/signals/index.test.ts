@@ -182,7 +182,7 @@ describe("extractSuggestionId", () => {
 	const id = "3f2b8c1e-7a4d-4e5f-9b6a-0c1d2e3f4a5b";
 	test("text line", () => {
 		expect(
-			extractSuggestionId(`Empfehlung: x\nsuggestion_id: ${id}\nreason: y`),
+			extractSuggestionId(`Recommendation: x\nsuggestion_id: ${id}\nreason: y`),
 		).toBe(id);
 	});
 	test("JSON", () => {

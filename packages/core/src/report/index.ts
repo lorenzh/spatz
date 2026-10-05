@@ -1,6 +1,7 @@
 // report: DuckDB read-only evaluation over the SQLite file (only loaded by spatz stats).
-// Spec: "Datenhaltung", "Erfolgskriterien und Messung".
+// Spec: "Storage", "Success criteria and measurement".
 import { DuckDBInstance } from "@duckdb/node-api";
+import { difficultySql } from "../contracts/difficulty.ts";
 import type {
 	PairStats,
 	ScopeStats,
@@ -28,7 +29,7 @@ const base = (q: number) => `
 WITH s AS (SELECT * FROM db.suggestions WHERE is_test = 0),
 oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, effort, quality >= ${q} AS success FROM outcomes')),
 o AS (
-	SELECT s.task_type, s.difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
+	SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success::INTEGER AS success,
 		COALESCE(o.model = json_extract_string(s.ranking, '$[0].model')
 			AND o.effort = json_extract_string(s.ranking, '$[0].effort'), false)::INTEGER AS adopted
