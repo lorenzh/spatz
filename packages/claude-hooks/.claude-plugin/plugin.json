@@ -1,0 +1,6 @@
+{
+	"name": "spatz-hooks",
+	"version": "0.1.0",
+	"description": "Record test and build outcomes and token usage with the spatz CLI on PATH.",
+	"author": { "name": "spatz" }
+}

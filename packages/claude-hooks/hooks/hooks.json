@@ -1,0 +1,46 @@
+{
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "Bash|Agent",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "spatz hook PostToolUse",
+						"async": true
+					}
+				]
+			}
+		],
+		"PostToolUseFailure": [
+			{
+				"matcher": "Bash",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "spatz hook PostToolUseFailure",
+						"async": true
+					}
+				]
+			}
+		],
+		"Stop": [
+			{
+				"hooks": [
+					{ "type": "command", "command": "spatz hook Stop", "async": true }
+				]
+			}
+		],
+		"SubagentStop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "spatz hook SubagentStop",
+						"async": true
+					}
+				]
+			}
+		]
+	}
+}

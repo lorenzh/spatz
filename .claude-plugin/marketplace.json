@@ -1,0 +1,19 @@
+{
+	"name": "spatz",
+	"owner": { "name": "lorenzh" },
+	"description": "Model recommendations and outcome recording for coding agents.",
+	"plugins": [
+		{
+			"name": "spatz",
+			"source": "./packages/claude-mod",
+			"version": "0.1.0",
+			"description": "Recommend and apply model and effort in Claude Code."
+		},
+		{
+			"name": "spatz-hooks",
+			"source": "./packages/claude-hooks",
+			"version": "0.1.0",
+			"description": "Record test and build outcomes and token usage with the spatz CLI."
+		}
+	]
+}

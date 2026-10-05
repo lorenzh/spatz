@@ -698,7 +698,10 @@ describe("record", () => {
 	test("auto turns recording off when spatz-hooks is enabled and says so once", async () => {
 		const plugins = {
 			exitCode: 0,
-			stdout: JSON.stringify([{ id: "spatz-hooks@spatz", enabled: true }]),
+			stdout: JSON.stringify([
+				{ id: "spatz@spatz", enabled: true },
+				{ id: "spatz-hooks@spatz", enabled: true },
+			]),
 			stderr: "",
 		};
 		const s = session({ mode: "show", record: "auto" }, { plugins });
@@ -714,6 +717,11 @@ describe("record", () => {
 	test("auto records when spatz-hooks is missing, disabled or the lookup fails", async () => {
 		for (const plugins of [
 			{ exitCode: 0, stdout: "[]", stderr: "" },
+			{
+				exitCode: 0,
+				stdout: JSON.stringify([{ id: "spatz@spatz", enabled: true }]),
+				stderr: "",
+			},
 			{
 				exitCode: 0,
 				stdout: JSON.stringify([{ id: "spatz-hooks@spatz", enabled: false }]),
