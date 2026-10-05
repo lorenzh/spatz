@@ -17,21 +17,21 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
 
 ## Select and dispatch
 
-1. List only model and effort pairs that this harness can actually dispatch. Use `<model>:<effort>+<effort>,<model>:<effort>` syntax. For verification or review, include only the other model family: Claude after GPT, GPT after Claude. If no such model is available, disclose that independent review is unavailable.
-
-   Done when the candidate list matches available dispatch controls and the review family constraint.
-
-2. Write one task sentence without secrets or customer data. The sentence is sent to TypeSafe AI for classification. Run this command through the shell tool before the dispatch:
+1. Write one task sentence without secrets or customer data. The sentence is sent to TypeSafe AI for classification. Run this command through the shell tool before the dispatch:
 
    ```sh
-   spatz "<the task in one sentence>" --models <available model:effort pairs> --json
+   spatz "<the task in one sentence>" --json
    ```
+
+   For verification or review, add `--family claude` after GPT work or `--family gpt` after Claude work. This filters candidates. It does not add models.
+
+   Default precedence: `SPATZ_MODELS` > project `.spatz.json` > user `~/.spatz/config.json` > harness preset. If you can dispatch extra models, set `models` in config. For example, Claude Code users with Codex can include GPT models. If the preset is wrong, narrow candidates with `--models <model>:<effort>+<effort>,<model>:<effort>` to pairs you can dispatch.
 
    Keep stdout unfiltered: hooks read `suggestion_id` from it. Add `--dry-run` when testing spatz itself, so tests do not count for learning. If spatz exits non-zero or returns no ranking, continue with the harness default and disclose the failure in one line. For a review, also disclose when this fallback cannot supply the other family.
 
    Done when the full output contains a ranking and suggestion ID, or the fallback is disclosed.
 
-3. Dispatch `ranking[0]` at its selected effort through the harness's dispatch tool. Show the choice in this format:
+2. Dispatch `ranking[0]` at its selected effort through the harness's dispatch tool. Show the choice in this format:
 
    ```text
    spatz: <model> [<effort>] (<strategy>, n=<n>) · <suggestion_id>

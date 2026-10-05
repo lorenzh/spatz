@@ -52,12 +52,18 @@ export async function loadConfig(
 	deps: Pick<CoreDeps, "env" | "homeDir" | "cwd">,
 ): Promise<Config> {
 	const spatzDir = join(deps.homeDir, ".spatz");
-	const [project, aliases, descriptions] = await Promise.all([
+	const [project, user, aliases, descriptions] = await Promise.all([
 		readJsonObject(join(deps.cwd, ".spatz.json")),
+		readJsonObject(join(spatzDir, "config.json")),
 		readJsonObject(join(spatzDir, "aliases.json")),
 		readJsonObject(join(spatzDir, "descriptions.json")),
 	]);
 	return {
+		...(project?.models !== undefined
+			? { models: { value: project.models, source: "project" as const } }
+			: user?.models !== undefined
+				? { models: { value: user.models, source: "user" as const } }
+				: {}),
 		jevEnabled: deps.env.SPATZ_NO_JEV !== "1" && project?.jev !== false,
 		tuning: DEFAULT_TUNING,
 		aliases: strings(aliases),

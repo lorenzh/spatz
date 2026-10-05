@@ -6,6 +6,11 @@ import {
 	toCanonicalId,
 } from "../catalog/index.ts";
 import { loadOpenRouterModels } from "../catalog/openrouter.ts";
+import {
+	filterFamily,
+	labelModelsError,
+	resolveModels,
+} from "../catalog/presets.ts";
 import { classify } from "../classify/index.ts";
 import type { CoreDeps, SpatzApi, Store } from "../contracts/deps.ts";
 import type {
@@ -396,6 +401,7 @@ export function createApi(
 		async suggest({
 			task,
 			models,
+			family,
 			dryRun,
 			scope,
 			source,
@@ -419,8 +425,15 @@ export function createApi(
 				throw new Error(
 					"a mod suggestion with --session needs --turn or --agent-id",
 				);
-			const requested = parseModelsArg(models);
 			const cfg = await getConfig();
+			const resolved = resolveModels(models, deps.env, cfg);
+			let parsed: ReturnType<typeof parseModelsArg>;
+			try {
+				parsed = parseModelsArg(resolved.value);
+			} catch (error) {
+				throw labelModelsError(error, resolved.source);
+			}
+			const requested = filterFamily(parsed, family, cfg.aliases);
 			const openRouter = await loadOpenRouterModels({
 				fetch: deps.fetch,
 				env: deps.env,
@@ -469,6 +482,7 @@ export function createApi(
 				if (session) store.linkSession(id, session, null, now);
 				return {
 					suggestion_id: id,
+					models_source: resolved.source,
 					ranking: d.ranking,
 					reason: d.reason,
 					classification: {

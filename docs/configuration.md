@@ -1,8 +1,8 @@
 ---
 title: spatz configuration
-description: Environment variables, files under ~/.spatz, the per-project opt-out file, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
+description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics]
+keywords: [models, family, presets, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics]
 ---
 
 # spatz configuration
@@ -19,6 +19,7 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | `SPATZ_NO_JEV` | not set | When the value is exactly `1`, spatz never sends the task text to Jev. Other values have no effect. |
 | `SPATZ_DEBUG` | not set | When the value is exactly `1`, hooks write fixed diagnostics to stderr. Hook commands still exit with code 0. |
 | `OPENROUTER_API_KEY` | not set | When set, spatz sends it as `Authorization: Bearer <key>` with the OpenRouter model-list request. The request works without it. |
+| `SPATZ_MODELS` | not set | Default candidate list using the `--models` grammar. Overrides project and user defaults. |
 | `HOME` | home directory of the OS user | spatz keeps all its files in `$HOME/.spatz`. |
 
 The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it. See [DuckDB sqlite extension](#duckdb-sqlite-extension).
@@ -32,9 +33,10 @@ The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it
 | `~/.spatz/duckdb-extensions/` | DuckDB extension directory | `spatz stats` | The DuckDB sqlite extension. |
 | `~/.spatz/aliases.json` | JSON object | you | Model id mapping. Optional. |
 | `~/.spatz/descriptions.json` | JSON object | you | Model descriptions for Jev. Optional. |
-| `<cwd>/.spatz.json` | JSON object | you | Per-project Jev opt-out. Optional. |
+| `<cwd>/.spatz.json` | JSON object | you | Project models and Jev opt-out. Optional. |
+| `~/.spatz/config.json` | JSON object | you | User default models. Optional. |
 
-spatz creates `~/.spatz` when it opens the database. If an optional file is missing, has invalid JSON or is not an object, spatz ignores it. In `aliases.json` and `descriptions.json`, spatz ignores each entry whose value is not a string. In `.spatz.json`, spatz reads only the boolean `"jev": false`.
+spatz creates `~/.spatz` when it opens the database. If an optional file is missing, has invalid JSON or is not an object, spatz ignores it. In `aliases.json` and `descriptions.json`, spatz ignores each entry whose value is not a string. In `.spatz.json`, spatz also reads `models`.
 
 ### Database: ~/.spatz/spatz.db
 
@@ -92,12 +94,52 @@ The description file gives Jev one short text per canonical model id. Jev uses i
 }
 ```
 
-### Per-project opt-out: .spatz.json
+### Default models
 
-If the working directory of the `spatz` process holds `.spatz.json` with `"jev": false`, spatz does not send the task text to Jev. spatz reads only the working directory, not parent directories. Run `spatz` from the project root for this file to apply.
+Set `models` to a string in `<cwd>/.spatz.json` or `~/.spatz/config.json`:
 
 ```json
-{ "jev": false }
+{ "models": "claude-opus-5-5:low+medium+high,gpt-6-astra:low+medium+high" }
+```
+
+Use only models and efforts that your harness can dispatch.
+For example, Claude Code users who dispatch GPT through Codex can configure both families.
+The mod continues to pass its own `models` userConfig as `--models`.
+
+Precedence: `--models` > `SPATZ_MODELS` > project `models` > user `models` > harness preset.
+All values use the [CLI model grammar](cli.md#the---models-grammar).
+Empty lists and unknown efforts fail with exit 1. Non-string defaults fail with exit 2 when selected.
+A higher-priority source overrides an invalid lower-priority value.
+
+### Harness detection
+
+spatz reads the environment of its own process:
+
+| Marker | Preset |
+| --- | --- |
+| Nonempty `CODEX_THREAD_ID` | `gpt-6-astra`, `gpt-6-luna` |
+| `CLAUDECODE=1` or nonempty `CLAUDE_CODE_ENTRYPOINT` | `claude-opus-5-5`, `claude-sonnet-5-5` |
+
+Both presets use `low+medium+high`. `CODEX_COMPANION_*` variables do not detect Codex.
+Codex wins when both markers exist. This selects the inner harness when Codex runs inside a Claude Code shell command.
+Environment markers cannot establish arbitrary nesting order. For Claude launched inside Codex, set a model default or pass `--models`.
+
+Codex [injects `CODEX_THREAD_ID` into command environments](https://github.com/openai/codex/blob/main/codex-rs/core/src/exec_env.rs).
+Its [effort definitions](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs) include `low`, `medium` and `high`.
+The implementation environment confirmed `CLAUDECODE=1` and `CLAUDE_CODE_ENTRYPOINT=cli` in Claude Code.
+
+The presets live in `packages/core/src/catalog/presets.ts` and are reviewed and updated per release.
+They describe harness defaults, not account entitlements. If a preset does not match your dispatch tools, use `--models` or a configured default.
+Without a detected harness or model default, spatz exits 2 with configuration instructions.
+
+### Per-project configuration: .spatz.json
+
+spatz reads this file only from its working directory, not parent directories.
+Run spatz from the project root for this file to apply.
+`"jev": false` stops spatz from sending task text to Jev. You can combine it with `models`:
+
+```json
+{ "jev": false, "models": "claude-sonnet-5-5" }
 ```
 
 ## Fixed tuning values

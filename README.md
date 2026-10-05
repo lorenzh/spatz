@@ -19,7 +19,7 @@ You or your coding agent run the task with the recommended pair.
 Different tasks need different models and effort levels.
 spatz combines task classification with results from your previous tasks.
 
-- **Use your available models.** Pass the candidates with `--models`.
+- **Use your available models.** Start with harness defaults or set your own candidates.
 - **Learn from results.** Record outcomes through hooks or `spatz report`.
 - **Compare performance.** Use `spatz stats` to see results per task type or routing scope.
 - **Connect to coding agents.** Hooks support Claude Code and Codex CLI. Other agents can use the CLI directly.
@@ -45,15 +45,15 @@ For the unstable nightly version, use `npm install -g @spatz/cli@nightly`.
 
 ### 2. Ask for a recommendation
 
-Pass the task and the model pairs that your agent can run:
+From Claude Code or Codex, pass the task:
 
 ```bash
-spatz "Fix the off-by-one error in src/list.ts" \
-  --models claude-opus-5-5:high+medium,claude-sonnet-5-5:medium+low
+spatz "Fix the off-by-one error in src/list.ts"
 ```
 
-Each candidate uses `<model-id>:<effort>+<effort>...`.
-Use model IDs and efforts that your environment supports.
+spatz uses a preset for the detected harness.
+Override it with `--models`, `SPATZ_MODELS`, or `models` in [configuration files](docs/configuration.md#default-models).
+Use `--family claude` or `--family gpt` to filter candidates for a review.
 The output includes a `suggestion_id` and a ranked list of pairs.
 Add `--json` for machine-readable output.
 

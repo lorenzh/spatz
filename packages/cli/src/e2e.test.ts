@@ -172,10 +172,10 @@ describe("suggest", () => {
 		expect(r.stdout).toContain("fallback_used: true");
 	});
 
-	test("missing --models is a usage error (exit 2)", async () => {
+	test("no models and no harness is a usage error (exit 2)", async () => {
 		const r = await spatz([TASK]);
 		expect(r.code).toBe(2);
-		expect(r.stderr).toContain("missing --models");
+		expect(r.stderr).toContain("No candidate models found");
 		expect(r.stdout).toBe("");
 	});
 
@@ -534,4 +534,116 @@ test("mod CLI stores explicit attribution, usage replays, direct reports and sco
 		cache_read_share: 0.6,
 	});
 	expect(scopes?.some((r) => r.scope === null)).toBe(true);
+});
+
+describe("candidate resolution CLI", () => {
+	test.each([
+		[
+			{ CLAUDECODE: "1", CODEX_COMPANION_SESSION_ID: "plugin" },
+			"preset:claude-code",
+			"anthropic/",
+		],
+		[{ CODEX_THREAD_ID: "inner", CLAUDECODE: "1" }, "preset:codex", "openai/"],
+		[{ SPATZ_MODELS: "gpt-6-luna:low", CLAUDECODE: "1" }, "env", "openai/"],
+	] as const)("resolves %j", async (env, source, prefix) => {
+		const r = await spatz([TASK, "--dry-run", "--json"], undefined, env);
+		expect(r.code).toBe(0);
+		const s: Suggestion = JSON.parse(r.stdout);
+		expect(s.models_source).toBe(source);
+		expect(s.ranking.every((c) => c.model.startsWith(prefix))).toBe(true);
+	});
+
+	test("flag > env > project > user > preset through real config files", async () => {
+		const user = join(home, ".spatz/config.json");
+		const project = join(home, ".spatz.json");
+		try {
+			await Bun.write(user, JSON.stringify({ models: "gpt-6-luna:low" }));
+			const run = async (args: string[] = [], env = { CLAUDECODE: "1" }) => {
+				const r = await spatz(
+					[TASK, "--dry-run", "--json", ...args],
+					undefined,
+					env,
+				);
+				expect(r.code).toBe(0);
+				return JSON.parse(r.stdout) as Suggestion;
+			};
+			expect((await run()).models_source).toBe("user");
+			await Bun.write(
+				project,
+				JSON.stringify({ jev: false, models: "claude-sonnet-5-5:medium" }),
+			);
+			expect((await run()).models_source).toBe("project");
+			const env = { CLAUDECODE: "1", SPATZ_MODELS: "gpt-6-astra:high" };
+			expect((await run([], env)).models_source).toBe("env");
+			const explicit = await run(
+				["--models", "claude-opus-5-5:high,gpt-6-luna:low", "--family", "gpt"],
+				env,
+			);
+			expect(explicit.models_source).toBe("flag");
+			expect(explicit.ranking.map((c) => c.model)).toEqual([
+				"openai/gpt-6-luna",
+			]);
+			await Bun.write(project, JSON.stringify({ models: [] }));
+			const invalid = await spatz([TASK]);
+			expect(invalid.code).toBe(2);
+			expect(invalid.stderr).toContain("models must be a string");
+			expect((await run(["--models", "gpt-6-luna"])).models_source).toBe(
+				"flag",
+			);
+		} finally {
+			await rm(user, { force: true });
+			await rm(project, { force: true });
+		}
+	});
+
+	test.each(["claude", "anthropic", "gpt", "openai"])(
+		"--family %s filters explicit models",
+		async (family) => {
+			const r = await spatz([
+				TASK,
+				"--models",
+				"claude-opus-5-5,gpt-6-luna",
+				"--family",
+				family,
+				"--dry-run",
+				"--json",
+			]);
+			expect(r.code).toBe(0);
+			const s: Suggestion = JSON.parse(r.stdout);
+			const prefix =
+				family === "claude" || family === "anthropic"
+					? "anthropic/"
+					: "openai/";
+			expect(s.ranking.every((c) => c.model.startsWith(prefix))).toBe(true);
+			expect(s.models_source).toBe("flag");
+		},
+	);
+
+	test.each([
+		[["--family", "gpt"], { CLAUDECODE: "1" }, 2, "no matching candidates"],
+		[
+			["--models", "gpt-6-luna", "--family", "unknown"],
+			{},
+			2,
+			"--family must be",
+		],
+		[[], { CODEX_COMPANION_SESSION_ID: "plugin" }, 2, "--models"],
+		[[], { SPATZ_MODELS: "" }, 2, "No candidate models found"],
+		[
+			[],
+			{ SPATZ_MODELS: "gpt-6-luna:turbo" },
+			1,
+			"SPATZ_MODELS: unknown effort",
+		],
+		[["--models", " "], {}, 2, "No candidate models found"],
+	] as [string[], Record<string, string>, number, string][])(
+		"rejects %j with %j",
+		async (args, env, code, message) => {
+			const r = await spatz([TASK, ...args], undefined, env);
+			expect(r.code).toBe(code);
+			expect(r.stdout).toBe("");
+			expect(r.stderr).toContain(message);
+			if (code === 2) expect(r.stderr).toContain("usage:");
+		},
+	);
 });

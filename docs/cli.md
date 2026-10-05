@@ -11,7 +11,7 @@ spatz has six command forms. Each command calls the `@spatz/core` API and format
 
 ```text
 spatz --version
-spatz "<task>" --models <list> [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
+spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
@@ -29,14 +29,15 @@ The output is plain text, even with `--json`.
 
 ## spatz "\<task\>"
 
-This command recommends a pair of model and effort for one task. spatz classifies the task, ranks the candidates from `--models`, and stores the suggestion. spatz does not store the task text.
+This command recommends a pair of model and effort for one task. spatz classifies the task, ranks the resolved candidates, and stores the suggestion. spatz does not store the task text.
 
 ### Flags
 
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `"<task>"` | string, first positional argument | required | The task text. Put it in quotes. spatz reads only the first positional argument and ignores the others. |
-| `--models <list>` | string | required | The candidates you can use. See [The --models grammar](#the---models-grammar). |
+| `--models <list>` | string | config or harness preset | The candidates you can use. See [The --models grammar](#the---models-grammar). |
+| `--family <family>` | string | no filter | Keep `claude`/`anthropic` or `gpt`/`openai` candidates. Applied after resolution, including explicit `--models`. An empty result exits 2. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 | `--dry-run` | boolean | `false` | Mark the suggestion as a test (`is_test: true`). A test suggestion never counts for learning or for `spatz stats`. |
 | `--scope <scope>` | string | `null` | Store `step`, `turn`, `subagent`, `session` or `escalate`. This labels the routing decision. |
@@ -52,6 +53,29 @@ The CLI stores the scope label. The caller chooses the decision points.
 spatz "Review the parser" --models claude-sonnet-5-5:high \
   --scope subagent --session session-1 --turn turn-1 \
   --agent-id agent-1 --source claude-code-mod --json
+```
+
+### Candidate resolution
+
+spatz uses the first available source:
+
+1. `--models`
+2. `SPATZ_MODELS`
+3. `models` in `<cwd>/.spatz.json`
+4. `models` in `~/.spatz/config.json`
+5. A preset for the detected harness
+
+All sources use the grammar below. An empty or blank value counts as unset, so the next source applies. An invalid selected value fails instead of falling through, and the error names its source (for example `SPATZ_MODELS:`).
+Without a source, spatz exits 2 and names the flag and configuration options.
+JSON reports the selected source as `models_source`. A family filter does not change that source.
+
+Claude Code gets Opus 5.5 and Sonnet 5.5. Codex gets GPT-6 Astra and GPT-6 Luna.
+Both presets use `low+medium+high`. See [harness detection](configuration.md#harness-detection) for markers and nesting rules.
+`--family` filters the resolved candidates. It does not add models from another preset.
+For cross-family reviews, configure all models you can dispatch before filtering.
+
+```sh
+spatz "Review the parser" --family gpt --json
 ```
 
 ### The --models grammar
@@ -95,6 +119,7 @@ The first line is always `suggestion_id: <uuid>`. The Claude Code hook reads thi
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `suggestion_id` | string (UUID) | Id for `spatz report`. |
+| `models_source` | string | `flag`, `env`, `project`, `user`, `preset:claude-code` or `preset:codex`. |
 | `ranking` | array, 1 to 3 entries | `ranking[0]` is the recommendation. The next entries are the next more expensive candidates. |
 | `ranking[].model` | string | Canonical OpenRouter id. |
 | `ranking[].effort` | string | `low`, `medium`, `high`, `xhigh` or `max`. |
@@ -123,7 +148,7 @@ explored: false  control: false  fallback_used: true
 
 ```console
 $ spatz "Fix the off-by-one error in src/list.ts" --models claude-sonnet-5-5,gpt-6-sol --json
-{"suggestion_id":"aabe5a7a-3e89-4285-a1d1-7e323f243f75","ranking":[{"model":"anthropic/claude-sonnet-5.5","effort":"low","n":0,"estimate":0.5},{"model":"openai/gpt-6-sol","effort":"low","n":0,"estimate":0.5},{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":0,"estimate":0.5}],"reason":"Exploration: anthropic/claude-sonnet-5.5 (low) is cheaper than the normal pick and has the fewest outcomes in this cell.","classification":{"task_type":"other","difficulty":"medium","criticality":"none"},"fallback_used":true,"explored":true,"control":false,"strategy":"rules","is_test":false}
+{"suggestion_id":"aabe5a7a-3e89-4285-a1d1-7e323f243f75","models_source":"flag","ranking":[{"model":"anthropic/claude-sonnet-5.5","effort":"low","n":0,"estimate":0.5},{"model":"openai/gpt-6-sol","effort":"low","n":0,"estimate":0.5},{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":0,"estimate":0.5}],"reason":"Exploration: anthropic/claude-sonnet-5.5 (low) is cheaper than the normal pick and has the fewest outcomes in this cell.","classification":{"task_type":"other","difficulty":"medium","criticality":"none"},"fallback_used":true,"explored":true,"control":false,"strategy":"rules","is_test":false}
 ```
 
 Both examples ran with `SPATZ_NO_JEV=1` and an empty database. That is why `fallback_used` is `true` and `n` is `0`.
@@ -345,6 +370,6 @@ $ spatz stats --json
 | --- | --- | --- |
 | 0 | Success. `spatz hook` always returns 0. | |
 | 1 | Runtime error. spatz prints `spatz: <message>` to stderr. | Unknown effort in `--models`. No usable candidate in `--models`. Invalid `--effort` in `report`. Unknown `suggestion_id`. Database missing for `stats`. DuckDB extension download failed. |
-| 2 | Usage error. spatz prints the message and the usage text to stderr. | Missing task, `--models`, `<suggestion_id>`, `--model`, `--effort` or `--result`. `--result` not `pass`, `partial` or `fail`. `--rounds` not a non-negative integer. Invalid `--type`. Unknown flag. |
+| 2 | Usage error. spatz prints the message and the usage text to stderr. | No candidate source. Invalid `--family` or no family matches. Non-string `models` default. Missing task, `<suggestion_id>`, `--model`, `--effort` or `--result`. `--result` not `pass`, `partial` or `fail`. `--rounds` not a non-negative integer. Invalid `--type`. Unknown flag. |
 
 An invalid effort gives code 1 in `--models` and in `report --effort`, because the core checks it. An invalid `--result` gives code 2, because the CLI checks it.
