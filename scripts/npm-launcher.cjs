@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { spawnSync } = require("node:child_process");
+const { constants } = require("node:os");
 const { dirname, join } = require("node:path");
 
 const packages = {
@@ -33,5 +34,7 @@ if (child.error) {
 	console.error(`spatz: ${child.error.message}`);
 	process.exit(1);
 }
-if (child.signal) process.kill(process.pid, child.signal);
-else process.exit(child.status ?? 1);
+if (child.signal) {
+	process.kill(process.pid, child.signal);
+	process.exit(128 + constants.signals[child.signal]);
+} else process.exit(child.status ?? 1);

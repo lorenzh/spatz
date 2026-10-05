@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	buildNpmPackages,
@@ -34,6 +34,16 @@ test("dist-tags separate stable, prerelease, and nightly versions", () => {
 	expect(npmDistTag("v1.2.3+build-hyphen")).toBe("latest");
 	expect(npmDistTag("1.2.3-rc.1")).toBe("next");
 	expect(npmDistTag("1.2.3-nightly.20261005+0123456")).toBe("nightly");
+});
+
+test("older stable releases preserve latest using a major/minor dist-tag", () => {
+	for (const latest of [undefined, null, "", "0.0.0", "1.2.2", "1.2.3"])
+		expect(npmDistTag("1.2.3", latest)).toBe("latest");
+	for (const latest of ["1.2.4", "1.10.0", "2.0.0"])
+		expect(npmDistTag("v1.2.3+build.1", latest)).toBe("v1.2-latest");
+	expect(npmDistTag("1.10.0", "1.9.0")).toBe("latest");
+	expect(npmDistTag("1.2.3-rc.1", "2.0.0")).toBe("next");
+	expect(npmDistTag("1.2.3-nightly.20261005+0123456", "2.0.0")).toBe("nightly");
 });
 
 test.skipIf(process.platform === "win32")(
@@ -105,6 +115,9 @@ test.skipIf(process.platform === "win32")(
 					},
 				});
 				expect(main.optionalDependencies[pkg.name]).toBe(main.version);
+				expect(pkg.libc).toEqual(
+					target.startsWith("linux") ? ["glibc"] : undefined,
+				);
 				expect(pkg.files).toContain("duckdb.node");
 				expect(
 					await Bun.file(join(out, `cli-${target}/duckdb.node`)).text(),
@@ -144,6 +157,14 @@ test.skipIf(process.platform === "win32")(
 				env: { ...process.env, HOME: temp },
 			});
 			expect(signaled.signalCode).toBe("SIGTERM");
+			await Bun.write(
+				join(platformDir, "spatz"),
+				'#!/bin/sh\nkill -PIPE "$$"\n',
+			);
+			const piped = Bun.spawnSync(["node", join(out, "cli/bin/spatz.js")], {
+				env: { ...process.env, HOME: temp },
+			});
+			expect(piped.exitCode).toBe(128 + constants.signals.SIGPIPE);
 			const unsupported = Bun.spawnSync(
 				[
 					"node",

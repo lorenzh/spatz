@@ -34,13 +34,13 @@ export function npmVersion(input: string): string {
 	return version.replace(/\+.*$/, "");
 }
 
-export function npmDistTag(version: string): string {
+export function npmDistTag(version: string, latest?: string | null): string {
 	const mapped = npmVersion(version);
-	return /-nightly\.[0-9]{8}\.g[a-f0-9]+$/.test(mapped)
-		? "nightly"
-		: releaseVersion(`v${mapped}`).prerelease
-			? "next"
-			: "latest";
+	if (/-nightly\.[0-9]{8}\.g[a-f0-9]+$/.test(mapped)) return "nightly";
+	if (releaseVersion(`v${mapped}`).prerelease) return "next";
+	return Bun.semver.order(mapped, npmVersion(latest || "0.0.0")) < 0
+		? `v${mapped.split(".").slice(0, 2).join(".")}-latest`
+		: "latest";
 }
 
 export async function buildNpmPackages(
@@ -92,7 +92,7 @@ export async function buildNpmPackages(
 			const packageName = `@spatz/cli-${target}`;
 			await Bun.write(
 				join(dir, "package.json"),
-				`${JSON.stringify({ name: packageName, version, description: `spatz CLI binary for ${target}`, license: "MIT", repository, os: [target.split("-")[0]], cpu: [target.split("-")[1]], files: await readdir(dir), preferUnplugged: true }, null, 2)}\n`,
+				`${JSON.stringify({ name: packageName, version, description: `spatz CLI binary for ${target}`, license: "MIT", repository, os: [target.split("-")[0]], cpu: [target.split("-")[1]], ...(target.startsWith("linux") ? { libc: ["glibc"] } : {}), files: await readdir(dir), preferUnplugged: true }, null, 2)}\n`,
 			);
 			await copyFile(
 				new URL("../LICENSE", import.meta.url),

@@ -26,7 +26,7 @@ Versions such as `v0.2.0-rc.1` produce prereleases.
 Build metadata alone does not make a prerelease: `v0.2.0+build.1` remains a stable release.
 
 The nightly workflow runs daily at 03:00 UTC and accepts manual runs from GitHub Actions.
-The workflow compares `main` with the previous nightly commit.
+The workflow builds its triggering commit (`github.sha`) and compares it with the previous nightly commit.
 Changes under `packages/`, `scripts/`, `package.json`, `bun.lock`, or `.github/workflows/` trigger a build.
 Documentation-only changes do not trigger a build.
 If Git cannot resolve the previous commit, the workflow builds.
@@ -55,7 +55,9 @@ See [README.md](README.md#releases) for download and installation instructions.
 ## npm packages
 
 `.github/workflows/npm-publish.yml` publishes the verified GitHub release archives to npm.
-It runs after a successful `Release` or `Nightly` workflow.
+It runs after a successful `Release` or `Nightly` workflow from the same repository.
+`Release` runs must use `release.yml` with a `push` event.
+`Nightly` runs must use `nightly.yml` with a `schedule` or `workflow_dispatch` event.
 The originating run must have a successful `release` job.
 For nightlies, the release commit must also match that run's `head_sha`.
 Even when the commit matches, a skipped nightly build does not publish to npm.
@@ -71,7 +73,7 @@ The packages are:
 
 If the Windows archive is absent, the workflow omits its npm package.
 
-Platform packages keep DuckDB sidecars beside the executable.
+Platform packages keep DuckDB sidecars beside the executable. Linux packages require glibc.
 The launcher needs Node.js 18 or newer. Users do not need a separate Bun installation.
 
 ### Trusted publishing setup
@@ -103,7 +105,10 @@ Merge this workflow into `main` before expecting automatic runs.
 The `g` prefix keeps numeric SHAs with leading zeros valid in npm versions.
 For non-nightly versions, npm drops `+build` metadata. Such releases share the same npm version.
 Platform packages publish first. The main package publishes last.
+Publish jobs run one at a time. Stable releases compare their version with `@spatz/cli`'s current `latest` version.
+Older stable releases use `v<major>.<minor>-latest` instead. A missing `latest` or the `0.0.0` placeholder counts as the lowest version.
 Retries skip any package version already on npm, so a partial publish can resume.
+Retries also skip E403 errors that say the version was already published.
 They do not replace existing versions or move dist-tags for skipped packages.
 A forced nightly on the same UTC date and commit has the same npm version.
 The workflow skips that existing version.

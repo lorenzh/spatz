@@ -16,7 +16,17 @@ permissions:
 
 jobs:
   resolve:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       ((github.event.workflow_run.name == 'Release' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.path == '.github/workflows/release.yml') ||
+        (github.event.workflow_run.name == 'Nightly' &&
+         (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') &&
+         github.event.workflow_run.path == '.github/workflows/nightly.yml')))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,7 +93,7 @@ jobs:
       contents: read
       id-token: write
     concurrency:
-      group: npm-publish-${{ needs.resolve.outputs.tag }}
+      group: npm-publish
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
@@ -124,7 +134,18 @@ jobs:
       - name: Assemble npm packages
         run: bun scripts/npm-packages.ts archives "$RELEASE_VERSION" npm-packages
       - name: Publish platform packages before the launcher
+        id: publish
         run: |
+          if [[ "$DIST_TAG" == latest ]]; then
+            if ! npm view @spatz/cli dist-tags.latest --json > latest.json 2> latest.err; then
+              if ! jq -e '.error.code == "E404"' latest.json > /dev/null; then
+                cat latest.err >&2
+                exit 1
+              fi
+              echo 'null' > latest.json
+            fi
+            DIST_TAG="$(bun -e 'import { npmDistTag } from "./scripts/npm-packages.ts"; const text = await Bun.file("latest.json").text(); console.log(npmDistTag(process.env.RELEASE_VERSION, text.trim() ? JSON.parse(text) : undefined));')"
+          fi
           for dir in npm-packages/cli-* npm-packages/cli; do
             name="$(jq -r .name "$dir/package.json")"
             version="$(jq -r .version "$dir/package.json")"
@@ -137,5 +158,12 @@ jobs:
               cat view.err >&2
               exit 1
             fi
-            (cd "$dir" && npm publish --access public --provenance --tag "$DIST_TAG")
+            if (cd "$dir" && npm publish --access public --provenance --tag "$DIST_TAG" --json) > publish.json 2> publish.err; then
+              cat publish.json
+            elif jq -e '.error.code == "E403" and ([.error.summary, .error.detail] | map(. // "") | join(" ") | ascii_downcase | contains("cannot publish over the previously published version"))' publish.json > /dev/null; then
+              echo "Skipping existing $name@$version"
+            else
+              cat publish.json publish.err >&2
+              exit 1
+            fi
           done
