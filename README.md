@@ -4,6 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/lorenzh/spatz)](https://github.com/lorenzh/spatz/releases/latest)
+[![Bun 1.4](https://img.shields.io/badge/Bun-1.4-black?logo=bun)](https://bun.sh)
 
 Do not use a cannon to shoot sparrows.
 
