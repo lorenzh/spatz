@@ -1,0 +1,75 @@
+name: Build release archives
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      ref:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+          - runner: macos-latest
+            os: darwin
+            arch: arm64
+          # macos-13 was retired in December 2025.
+          - runner: macos-15-intel
+            os: darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_OS: ${{ matrix.os }}
+      RELEASE_ARCH: ${{ matrix.arch }}
+      SPATZ_NO_JEV: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.0'
+      - name: Set version and verify native target
+        run: |
+          test "$(bun -p 'process.platform')" = "$RELEASE_OS"
+          test "$(bun -p 'process.arch')" = "$RELEASE_ARCH"
+          bun scripts/release-version.ts "v$RELEASE_VERSION"
+      - run: bun install --frozen-lockfile
+      - name: Install DuckDB SQLite extension for offline tests
+        run: |
+          bun packages/cli/src/cli.ts 'release setup' --models gpt-6-luna --dry-run
+          bun packages/cli/src/cli.ts stats
+      - run: bun test
+      - run: bun run typecheck
+      - run: bun run lint
+      - name: Build and smoke-test extracted archive
+        run: |
+          bun scripts/build-release.ts "$RELEASE_VERSION"
+          bun scripts/smoke-release.ts "dist/spatz-cli-$RELEASE_VERSION-$RELEASE_OS-$RELEASE_ARCH.tar.gz" "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+          compression-level: 0

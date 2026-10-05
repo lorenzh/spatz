@@ -10,6 +10,10 @@ import type {
 	TaskType,
 } from "@spatz/core";
 import { TASK_TYPES } from "@spatz/core";
+import pkg from "../package.json";
+
+declare const SPATZ_VERSION: string | undefined;
+const VERSION = typeof SPATZ_VERSION === "string" ? SPATZ_VERSION : pkg.version;
 
 export interface CliIO {
 	stdout(text: string): void;
@@ -18,6 +22,7 @@ export interface CliIO {
 }
 
 const USAGE = `usage:
+  spatz --version
   spatz "<task>" --models <list> [--json] [--dry-run]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--json]
   spatz hook <event> [--agent codex]
@@ -71,6 +76,7 @@ function parse(argv: string[]) {
 			args: argv,
 			allowPositionals: true,
 			options: {
+				version: { type: "boolean" },
 				json: { type: "boolean" },
 				models: { type: "string" },
 				"dry-run": { type: "boolean" },
@@ -117,6 +123,10 @@ export async function main(
 			values: v,
 			positionals: [cmd, ...rest],
 		} = parse(argv);
+		if (v.version) {
+			io.stdout(VERSION);
+			return 0;
+		}
 		json = v.json ?? false;
 		if (cmd === "report") {
 			const suggestionId = required(rest[0], "<suggestion_id>");

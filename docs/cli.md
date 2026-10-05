@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage]
+keywords: [command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, version]
 ---
 
 # spatz CLI reference
@@ -10,6 +10,7 @@ keywords: [command line, commands, flags, options, models, effort, json output, 
 spatz has four commands. Each command calls the `@spatz/core` API and formats the result. The CLI has no other logic.
 
 ```text
+spatz --version
 spatz "<task>" --models <list> [--json] [--dry-run]
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--json]
 spatz hook <event> [--agent codex]
@@ -17,6 +18,12 @@ spatz stats [--type <t>] [--json]
 ```
 
 Related docs: [hooks.md](hooks.md) for Claude Code and Codex integrations, [configuration.md](configuration.md) for environment variables and files.
+
+## spatz --version
+
+Prints the CLI version and exits with code 0 without opening the database.
+Release builds use the version set at build time. Development runs use `packages/cli/package.json`.
+The output is plain text, even with `--json`.
 
 ## spatz "\<task\>"
 
