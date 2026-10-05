@@ -526,6 +526,18 @@ describe("hook", () => {
 		expect(err).toEqual([]);
 	});
 
+	test("accepts --agent codex and keeps hook execution quiet", async () => {
+		const { io, out, err } = fakeIO(async () => '{"hook_event_name":"Stop"}');
+		const { api, calls } = fakeApi();
+		expect(await main(["hook", "Stop", "--agent", "codex"], io, api)).toBe(0);
+		expect(calls[0]?.args).toEqual([
+			"codex:Stop",
+			'{"hook_event_name":"Stop"}',
+		]);
+		expect(out).toEqual([]);
+		expect(err).toEqual([]);
+	});
+
 	test("exits 0 when api.handleHook throws", async () => {
 		const { io, out, err } = fakeIO();
 		const { api } = fakeApi({

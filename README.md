@@ -12,12 +12,12 @@ What works:
 
 - Recommendations from the candidates that you give with `--models`.
 - Task classification with Jev, or with local keyword rules when Jev is off.
-- Learning from Claude Code hooks and from `spatz report`.
+- Learning from Claude Code and Codex CLI hooks, and from `spatz report`.
 - Statistics per task type with `spatz stats`.
 
 What does not work yet:
 
-- Signal collection works only with Claude Code hooks. Other coding agents can only use `spatz report`.
+- Signal collection works only with Claude Code and Codex CLI hooks. Other coding agents can only use `spatz report`.
 - There is no MCP server.
 - There is no npm package. You run spatz from a clone of this repository.
 
@@ -35,7 +35,7 @@ flowchart LR
     K --> E
     E --> R[Ranking of --models candidates]
     R --> U[You or your agent pick a pair]
-    U --> H[Claude Code hooks]
+    U --> H[Claude Code or Codex hooks]
     U --> S[spatz report]
     H --> O[(Outcomes in ~/.spatz/spatz.db)]
     S --> O

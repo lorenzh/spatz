@@ -99,6 +99,19 @@ export type HookInput =
 	| SubagentStopInput
 	| StopInput;
 
+export interface CodexHookInput {
+	session_id: string;
+	transcript_path: string;
+	cwd?: string;
+	turn_id?: string;
+	model?: string;
+	hook_event_name: string;
+	tool_name?: string;
+	tool_input?: unknown;
+	tool_response?: unknown;
+	tool_use_id?: string;
+}
+
 export type HookEventName = HookInput["hook_event_name"];
 
 // ---------- Transcript JSONL (one JSON object per line) ----------

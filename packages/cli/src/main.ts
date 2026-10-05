@@ -20,7 +20,7 @@ export interface CliIO {
 const USAGE = `usage:
   spatz "<task>" --models <list> [--json] [--dry-run]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--json]
-  spatz hook <event>
+  spatz hook <event> [--agent codex]
   spatz stats [--type <t>] [--json]`;
 
 const RESULTS: readonly string[] = ["pass", "partial", "fail"];
@@ -101,7 +101,11 @@ export async function main(
 	if (argv[0] === "hook") {
 		// Hooks must never block the session: no output, always exit 0.
 		try {
-			await api.handleHook(argv[1] ?? "", await io.readStdin());
+			const agentAt = argv.indexOf("--agent");
+			const agent = agentAt >= 0 ? argv[agentAt + 1] : undefined;
+			const event = argv[1] ?? "";
+			const stdin = await io.readStdin();
+			await api.handleHook(agent === "codex" ? `codex:${event}` : event, stdin);
 		} catch {}
 		return 0;
 	}
