@@ -43,9 +43,11 @@ jobs:
           date="$(date -u +%Y%m%d)"
           base="$(bun -p 'require("./packages/cli/package.json").version')"
           bun scripts/release-version.ts "v${base%%+*}-nightly.$date+${sha:0:7}"
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "date=$date" >> "$GITHUB_OUTPUT"
+          {
+            echo 'changed=true'
+            echo "sha=$sha"
+            echo "date=$date"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -76,7 +78,7 @@ jobs:
         run: |
           cd dist
           cat ./*.sha256 > SHA256SUMS
-          bun -e 'const { createHash } = require("node:crypto"); for (const line of (await Bun.file("SHA256SUMS").text()).trim().split("\n")) { const [expected, file] = line.split(/\s+/, 2); const actual = createHash("sha256").update(await Bun.file(file).bytes()).digest("hex"); if (actual !== expected) throw new Error(`Checksum failed: ${file}`); }'
+          sha256sum --check SHA256SUMS
           existing="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == "nightly") | .id')"
           if [[ -n "$existing" ]]; then
             gh release delete nightly --yes --cleanup-tag

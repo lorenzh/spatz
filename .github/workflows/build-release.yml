@@ -94,7 +94,10 @@ jobs:
           bun-version: '1.4.0'
       - name: Set version
         shell: pwsh
-        run: bun scripts/release-version.ts "v$env:RELEASE_VERSION"
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
+          bun scripts/release-version.ts "v$env:RELEASE_VERSION"
       - run: bun install --frozen-lockfile
       - name: Install DuckDB SQLite extension for offline tests
         run: |
@@ -106,11 +109,14 @@ jobs:
       - name: Build and smoke-test on Windows
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
           bun scripts/build-release.ts $env:RELEASE_VERSION
           $archive = "dist/spatz-cli-$($env:RELEASE_VERSION.Replace('+', '-'))-$env:RELEASE_OS-$env:RELEASE_ARCH.zip"
-          Expand-Archive $archive dist/extracted
-          $exe = (Resolve-Path dist/extracted/*/spatz.exe).Path
-          if ((& $exe --version) -ne "spatz $env:RELEASE_VERSION") { throw 'Version smoke test failed' }
+          $extract = Join-Path $env:RUNNER_TEMP 'spatz-release-smoke'
+          Expand-Archive $archive $extract
+          $exe = (Resolve-Path (Join-Path $extract '*/spatz.exe')).Path
+          if ((& $exe --version).Trim() -ne $env:RELEASE_VERSION) { throw 'Version smoke test failed' }
           $env:SPATZ_NO_JEV = '1'
           & $exe 'release smoke test' --models gpt-6-luna --dry-run
           & $exe stats

@@ -85,12 +85,7 @@ export async function buildRelease(version = pkg.version, outDir = "dist") {
 		);
 		const pack = Bun.spawn(
 			process.platform === "win32"
-				? [
-						"powershell",
-						"-NoProfile",
-						"-Command",
-						`Compress-Archive -Path '${dir}' -DestinationPath '${archive}'`,
-					]
+				? ["tar.exe", "-a", "-cf", archive, "-C", stage, name]
 				: ["tar", "-czf", archive, "-C", stage, name],
 			{ stdout: "inherit", stderr: "inherit" },
 		);
