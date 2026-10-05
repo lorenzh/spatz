@@ -405,6 +405,11 @@ export function createApi(
 				if (value !== undefined && !value.trim())
 					throw new Error(`invalid ${name}`);
 			}
+			// A subagent's id exists only after its spawn: link it later with `link`.
+			if (source === "claude-code-mod" && session && !turn && !agentId)
+				throw new Error(
+					"a mod suggestion with --session needs --turn or --agent-id",
+				);
 			const requested = parseModelsArg(models);
 			const cfg = await getConfig();
 			const openRouter = await loadOpenRouterModels({
@@ -468,6 +473,21 @@ export function createApi(
 					strategy: d.strategy,
 					is_test: dryRun,
 				};
+			});
+		},
+
+		async link({ suggestionId, agentId, session }) {
+			for (const [name, value] of Object.entries({ agentId, session }))
+				if (!value.trim()) throw new Error(`invalid ${name}`);
+			const now = deps.clock.now();
+			return withStore((store) => {
+				const suggestion = store.getSuggestion(suggestionId);
+				if (!suggestion)
+					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				if (suggestion.agent_id === agentId) return;
+				if (suggestion.agent_id !== null)
+					throw new Error(`${suggestionId} is already linked to another agent`);
+				store.linkSession(suggestionId, session, null, now, agentId);
 			});
 		},
 

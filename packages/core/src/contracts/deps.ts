@@ -217,6 +217,12 @@ export interface UsageInput {
 	cacheCreation: number;
 }
 
+export interface LinkInput {
+	suggestionId: string;
+	agentId: string;
+	session: string;
+}
+
 export interface StatsInput {
 	by?: "scope";
 	type?: TaskType;
@@ -225,6 +231,8 @@ export interface StatsInput {
 export interface SpatzApi {
 	suggest(input: SuggestInput): Promise<Suggestion>;
 	usage(input: UsageInput): Promise<UsageRecord>;
+	/** Gives a suggestion made before its subagent existed the real agent id and the session. Idempotent. */
+	link(input: LinkInput): Promise<void>;
 	report(input: ReportInput): Promise<Outcome | null>;
 	/** Never throws; swallows every error (hooks must not block the session). */
 	handleHook(event: string, stdin: string): Promise<void>;

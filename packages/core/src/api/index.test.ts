@@ -1254,6 +1254,58 @@ describe("stats", () => {
 });
 
 describe("direct mod attribution", () => {
+	test("a spawn suggestion never closes the main window and link gives it the real agent id", async () => {
+		const s = setup();
+		const main = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			source: "claude-code-mod",
+			turn: "t1",
+		});
+		s.setNow(T0 + 1);
+		const spawn = await s.api.suggest({
+			...suggestInput(),
+			source: "claude-code-mod",
+			scope: "subagent",
+		});
+		expect(s.store.getSuggestion(main.suggestion_id)?.closed_at).toBeNull();
+		expect(s.store.getSuggestion(spawn.suggestion_id)).toMatchObject({
+			agent_id: null,
+			session_id: null,
+		});
+		s.setNow(T0 + 2);
+		const input = {
+			suggestionId: spawn.suggestion_id,
+			agentId: "a1",
+			session: SESSION,
+		};
+		await s.api.link(input);
+		await s.api.link(input);
+		expect(s.store.getSuggestion(spawn.suggestion_id)).toMatchObject({
+			agent_id: "a1",
+			session_id: SESSION,
+		});
+		expect(s.store.getSuggestion(main.suggestion_id)?.closed_at).toBeNull();
+		await expect(s.api.link({ ...input, agentId: "a2" })).rejects.toThrow(
+			"already linked",
+		);
+		await expect(
+			s.api.link({ ...input, suggestionId: "nope" }),
+		).rejects.toThrow("unknown suggestion_id");
+		await expect(s.api.link({ ...input, agentId: " " })).rejects.toThrow();
+	});
+
+	test("a mod suggestion with a session needs a turn or an agent id", async () => {
+		const s = setup();
+		await expect(
+			s.api.suggest({
+				...suggestInput(),
+				session: SESSION,
+				source: "claude-code-mod",
+			}),
+		).rejects.toThrow("needs --turn or --agent-id");
+	});
+
 	test("stats opens the store first so migrations run on an old database", async () => {
 		const s = setup();
 		const order: string[] = [];
@@ -1493,6 +1545,7 @@ test("usage command output never relinks a suggestion through Bash detection", a
 	const { suggestion_id } = await s.api.suggest({
 		...suggestInput(),
 		session: "original",
+		turn: "t",
 		source: "claude-code-mod",
 	});
 	await s.api.handleHook(
@@ -1553,6 +1606,7 @@ test("transcript rewrites keep main and two agent windows separate", async () =>
 			...suggestInput(),
 			session: SESSION,
 			agentId,
+			...(!agentId && { turn: "t0" }),
 			source: "claude-code-mod",
 			scope: agentId ? "subagent" : "turn",
 		});

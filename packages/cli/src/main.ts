@@ -11,7 +11,6 @@ import type {
 	Suggestion,
 	TaskType,
 } from "@spatz/core";
-import { TASK_TYPES } from "@spatz/core";
 import pkg from "../package.json";
 
 declare const SPATZ_VERSION: string | undefined;
@@ -30,6 +29,7 @@ const USAGE = `usage:
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
   spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
   spatz hook <event> [--agent codex]
+  spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
   spatz stats [--type <t>] [--by scope] [--json]`;
 
 const RESULTS: readonly string[] = ["pass", "partial", "fail"];
@@ -174,6 +174,22 @@ export async function main(
 				text: () =>
 					`usage recorded: ${input.suggestionId}  turn: ${input.turn}`,
 			});
+		} else if (cmd === "link") {
+			const input = {
+				suggestionId: required(rest[0], "<suggestion_id>"),
+				agentId: required(v["agent-id"], "--agent-id"),
+				session: required(v.session, "--session"),
+			};
+			run = async () => {
+				await api.link(input);
+				return {
+					result: {
+						suggestion_id: input.suggestionId,
+						agent_id: input.agentId,
+					},
+					text: () => `linked: ${input.suggestionId}  agent: ${input.agentId}`,
+				};
+			};
 		} else if (cmd === "report") {
 			const suggestionId = required(rest[0], "<suggestion_id>");
 			const model = required(v.model, "--model");

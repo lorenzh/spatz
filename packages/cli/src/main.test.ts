@@ -90,6 +90,9 @@ function fakeApi(overrides: Partial<SpatzApi> = {}) {
 		usage: async () => {
 			throw new Error("unexpected usage");
 		},
+		link: async () => {
+			throw new Error("unexpected link");
+		},
 		suggest: async (input: SuggestInput) => {
 			calls.push({ method: "suggest", args: [input] });
 			return suggestion;
@@ -736,6 +739,35 @@ describe("mod CLI", () => {
 			},
 		]);
 	});
+	test("link passes the agent id and session and prints JSON", async () => {
+		const { io, stdout } = fakeIO();
+		const seen: unknown[] = [];
+		const { api } = fakeApi({
+			link: async (input) => {
+				seen.push(input);
+				return { suggestion_id: input.suggestionId } as never;
+			},
+		});
+		expect(
+			await main(
+				["link", "id", "--agent-id", "a1", "--session", "s", "--json"],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(seen).toEqual([{ suggestionId: "id", agentId: "a1", session: "s" }]);
+		expect(JSON.parse(stdout())).toEqual({
+			suggestion_id: "id",
+			agent_id: "a1",
+		});
+		for (const argv of [
+			["link", "--agent-id", "a1", "--session", "s"],
+			["link", "id", "--session", "s"],
+			["link", "id", "--agent-id", "a1"],
+		])
+			expect(await main(argv, fakeIO().io, fakeApi().api)).toBe(2);
+	});
+
 	test("usage passes token counts and turn and prints JSON", async () => {
 		const { io, stdout } = fakeIO();
 		const seen: unknown[] = [];
