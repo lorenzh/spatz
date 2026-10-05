@@ -6,7 +6,7 @@ import { pluginNames, syncPluginAssets } from "./plugin-assets.ts";
 
 test("shipped skills equal the source and launchers pin their plugin version", async () => {
 	const cli = await Bun.file("packages/cli/package.json").json();
-	const source = await Bun.file(resolve("skills/spatz/SKILL.md")).text();
+	const source = await Bun.file(resolve("skills/routing/SKILL.md")).text();
 	for (const name of pluginNames) {
 		const dir = resolve("packages", name);
 		const manifest =
@@ -15,7 +15,7 @@ test("shipped skills equal the source and launchers pin their plugin version", a
 			join(dir, manifest, "plugin.json"),
 		).json();
 		expect(version).toBe(cli.version);
-		expect(await Bun.file(join(dir, "skills/spatz/SKILL.md")).text()).toBe(
+		expect(await Bun.file(join(dir, "skills/routing/SKILL.md")).text()).toBe(
 			source,
 		);
 		const launcher = await Bun.file(join(dir, "bin/spatz")).text();
@@ -116,7 +116,7 @@ test.skipIf(process.platform === "win32")(
 test("plugin asset sync rejects invalid versions before writing launchers", async () => {
 	const root = await mkdtemp(join(tmpdir(), "spatz-plugin-version-"));
 	try {
-		await Bun.write(join(root, "skills/spatz/SKILL.md"), "skill\n");
+		await Bun.write(join(root, "skills/routing/SKILL.md"), "skill\n");
 		const manifest = join(
 			root,
 			"packages/claude-mod/.claude-plugin/plugin.json",

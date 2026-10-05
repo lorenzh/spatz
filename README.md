@@ -179,7 +179,7 @@ Keep the suggestion output unfiltered so the hooks can read its ID.
 After the task, ask the agent to report the actual pair and result with `spatz report`.
 Run `spatz stats` to see recorded outcomes.
 
-Every plugin ships the `spatz` routing skill. You do not need to edit your agent instructions.
+Every plugin ships the `routing` skill (`/spatz:routing`, `/spatz-mod:routing`, or `spatz:routing` in Codex). The mod's `/spatz` command checks status and changes mode or scope. You do not need to edit your agent instructions.
 Every plugin can run without a global CLI through its bundled launcher using Bun or npx.
 The first run downloads about 60 MB. Codex hooks time out after 10 seconds.
 For this setup, warm the launcher before the first session with `"<plugin root>/bin/spatz" --version`.

@@ -169,9 +169,9 @@ See [Codex hooks](hooks.md#codex-cli) for the events and limits.
 
 ## Routing skill
 
-Each plugin ships the same `spatz` skill under `skills/spatz/SKILL.md`.
+Each plugin ships the same `routing` skill under `skills/routing/SKILL.md` (`/spatz:routing` for the hooks plugin, `/spatz-mod:routing` for the mod, and `spatz:routing` for Codex).
 It asks agents to rank available model and effort pairs before delegation.
 It also covers reviews by the other model family and explicit outcome reports.
 The skill requests agent behavior. It does not add dispatch tools or switch models itself.
 When both Claude plugins are enabled, use either copy for a dispatch, not both.
-The mod's `/spatz` status command remains separate from the namespaced plugin skill.
+The mod's `/spatz` command checks status and changes mode or scope. It is separate from the namespaced `routing` skill.

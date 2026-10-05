@@ -168,7 +168,7 @@ The publish workflow always requires the complete Linux/macOS set.
 
 ## Plugin assets
 
-Edit `skills/spatz/SKILL.md` as the single source for all plugin skills.
+Edit `skills/routing/SKILL.md` as the single source for all plugin skills.
 Run `bun scripts/plugin-assets.ts` after changes and commit the generated copies and launchers.
 The release version script and plugin archive build also run this step.
 Each `bin/spatz` pins the version from its plugin manifest.

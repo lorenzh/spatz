@@ -10,7 +10,7 @@ export const pluginNames = [
 
 /** Keep Git installs and release archives self-contained, without symlinks. */
 export async function syncPluginAssets(root = resolve(import.meta.dir, "..")) {
-	const skill = await Bun.file(join(root, "skills/spatz/SKILL.md")).text();
+	const skill = await Bun.file(join(root, "skills/routing/SKILL.md")).text();
 	for (const name of pluginNames) {
 		const dir = join(root, "packages", name);
 		const manifest =
@@ -20,8 +20,8 @@ export async function syncPluginAssets(root = resolve(import.meta.dir, "..")) {
 		).json();
 		releaseVersion(`v${version}`);
 		await mkdir(join(dir, "bin"), { recursive: true });
-		await mkdir(join(dir, "skills/spatz"), { recursive: true });
-		await Bun.write(join(dir, "skills/spatz/SKILL.md"), skill);
+		await mkdir(join(dir, "skills/routing"), { recursive: true });
+		await Bun.write(join(dir, "skills/routing/SKILL.md"), skill);
 		const launcher = join(dir, "bin/spatz");
 		await Bun.write(
 			launcher,

@@ -36,7 +36,7 @@ test("release versions stamp the CLI, all plugins and marketplace entries", asyn
 		"packages/claude-hooks/.claude-plugin/plugin.json",
 		"packages/codex-hooks/.codex-plugin/plugin.json",
 		".claude-plugin/marketplace.json",
-		"skills/spatz/SKILL.md",
+		"skills/routing/SKILL.md",
 	] as const;
 	try {
 		for (const path of paths)
