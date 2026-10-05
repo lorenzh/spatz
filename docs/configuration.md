@@ -2,12 +2,12 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, the per-project opt-out file, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning]
+keywords: [environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics]
 ---
 
 # spatz configuration
 
-You configure spatz with four environment variables and optional JSON files. The tuning values are fixed in the code.
+You configure spatz with environment variables and optional JSON files. The tuning values are fixed in the code.
 
 For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 
@@ -17,6 +17,7 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | --- | --- | --- |
 | `TYPESAFE_AI_API_KEY` | not set | API key for Jev (TypeSafe AI). When it is not set, spatz classifies with keyword rules (`fallback_used: true`). |
 | `SPATZ_NO_JEV` | not set | When the value is exactly `1`, spatz never sends the task text to Jev. Other values have no effect. |
+| `SPATZ_DEBUG` | not set | When the value is exactly `1`, hooks write fixed diagnostics to stderr. Hook commands still exit with code 0. |
 | `OPENROUTER_API_KEY` | not set | When set, spatz sends it as `Authorization: Bearer <key>` with the OpenRouter model-list request. The request works without it. |
 | `HOME` | home directory of the OS user | spatz keeps all its files in `$HOME/.spatz`. |
 
