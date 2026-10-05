@@ -1,3 +1,5 @@
+<img src="docs/assets/logo.svg" alt="spatz logo" width="96" height="96">
+
 # spatz
 
 **Choose a model and effort for your coding task. Learn from the result.**
