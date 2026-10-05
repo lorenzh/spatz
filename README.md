@@ -103,14 +103,14 @@ See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recomme
 
 | Integration | What it does | Setup |
 | --- | --- | --- |
-| Claude Code `spatz-hooks` plugin | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
-| Codex `spatz-hooks` plugin | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
-| Claude Code `spatz` plugin (mod) | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
+| Claude Code `spatz` plugin | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
+| Codex `spatz` plugin | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
+| Claude Code `spatz-mod` plugin (mod) | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
 | Other agents | Request recommendations and report outcomes through the CLI. | [Installation](docs/installation.md) | CLI and plugin setup, runtime requirements, and release-specific installs. |
 | [CLI reference](docs/cli.md) |
 
 The Claude Code mod supports `step`, `turn`, `subagent`, `session`, and `escalate` routing scopes.
-Hooks and the mod can run together. The mod's `record: auto` avoids duplicate usage recording with the `spatz-hooks` plugin.
+Hooks and the mod can run together. The mod's `record: auto` avoids duplicate usage recording with the `spatz` hooks plugin.
 
 ### Install for Claude Code
 
@@ -122,7 +122,7 @@ The mod needs Claude Code 2.1.287 or newer.
 
    ```text
    /plugin marketplace add lorenzh/spatz
-   /plugin install spatz-hooks@spatz
+   /plugin install spatz@spatz
    ```
 
    The hooks record test/build results and model usage. They do not switch models.
@@ -130,7 +130,7 @@ The mod needs Claude Code 2.1.287 or newer.
 2. Optional: install the mod for automatic recommendations:
 
    ```text
-   /plugin install spatz@spatz
+   /plugin install spatz-mod@spatz
    ```
 
    The mod defaults to `show` mode. To apply recommendations to subagents, run:
@@ -157,7 +157,7 @@ Install the [spatz CLI](#quickstart) first and check `spatz --version` in your t
 
    ```bash
    codex plugin marketplace add lorenzh/spatz
-   codex plugin add spatz-hooks@spatz
+   codex plugin add spatz@spatz
    codex plugin list
    ```
 

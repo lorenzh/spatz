@@ -7,7 +7,7 @@ description: Spatz model and effort selection. Use when an agent is about to dis
 
 **Before every dispatch you route yourself, get a fresh ranking and use its first pair.** Task size, urgency, and a previous ranking do not replace this call.
 
-When the spatz Claude Code mod is installed (the `spatz:spatz` skill is available or the `/spatz` command exists), do not call spatz for Claude Code subagents; the mod routes them. Still use spatz for other dispatches, such as Codex runs or other harnesses, and report outcomes as usual.
+When the spatz Claude Code mod is installed (the `/spatz-mod:spatz` skill is available), do not call spatz for Claude Code subagents; the mod routes them. Still use spatz for other dispatches, such as Codex runs or other harnesses, and report outcomes as usual.
 
 ## Run the CLI
 

@@ -695,31 +695,50 @@ describe("record", () => {
 		expect(s.usages()).toEqual([]);
 	});
 
-	test("auto turns recording off when spatz-hooks is enabled and says so once", async () => {
-		const plugins = {
-			exitCode: 0,
-			stdout: JSON.stringify([
-				{ id: "spatz@spatz", enabled: true },
-				{ id: "spatz-hooks@spatz", enabled: true },
-			]),
-			stderr: "",
-		};
-		const s = session({ mode: "show", record: "auto" }, { plugins });
-		await s.spawn({});
-		await s.step({ turnId: "r1", agentId: "a1" });
-		await s.step({ turnId: "r1", agentId: "a1", index: 1 });
-		await s.complete({ turnId: "r1", agentId: "a1", usage: turnUsage });
-		expect(s.usages()).toEqual([]);
-		expect(s.toasts.filter((t) => t.includes("spatz-hooks"))).toHaveLength(1);
-		expect(s.argvs.filter((a) => a[0] === "claude")).toHaveLength(1);
+	test("auto disables recording for the new hooks plugin and ignores the mod id", async () => {
+		for (const id of ["spatz@spatz", "spatz-hooks@spatz"]) {
+			const s = session(
+				{ mode: "show", record: "auto" },
+				{
+					plugins: {
+						exitCode: 0,
+						stdout: JSON.stringify([
+							{ id: "spatz-mod@spatz", enabled: true },
+							{ id, enabled: true },
+						]),
+						stderr: "",
+					},
+				},
+			);
+			await s.spawn({});
+			await s.step({ turnId: "r1", agentId: "a1" });
+			await s.complete({ turnId: "r1", agentId: "a1", usage: turnUsage });
+			expect(s.usages()).toEqual([]);
+			expect(
+				s.toasts.filter((t) => t.includes("usage recording is off")),
+			).toHaveLength(1);
+		}
+		const mod = session(
+			{ mode: "show", record: "auto" },
+			{
+				plugins: {
+					exitCode: 0,
+					stdout: JSON.stringify([{ id: "spatz-mod@spatz", enabled: true }]),
+					stderr: "",
+				},
+			},
+		);
+		await mod.spawn({});
+		await mod.step({ turnId: "r1", agentId: "a1" });
+		expect(mod.usages()).toHaveLength(1);
 	});
 
-	test("auto records when spatz-hooks is missing, disabled or the lookup fails", async () => {
+	test("auto records when hooks plugin is missing, disabled or the lookup fails", async () => {
 		for (const plugins of [
 			{ exitCode: 0, stdout: "[]", stderr: "" },
 			{
 				exitCode: 0,
-				stdout: JSON.stringify([{ id: "spatz@spatz", enabled: true }]),
+				stdout: JSON.stringify([{ id: "spatz-mod@spatz", enabled: true }]),
 				stderr: "",
 			},
 			{

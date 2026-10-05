@@ -1,5 +1,5 @@
 {
-	"name": "spatz",
+	"name": "spatz-mod",
 	"version": "0.1.1",
 	"description": "Recommends Claude models and effort with spatz and can apply them to subagents and the main session.",
 	"author": { "name": "spatz" },
@@ -26,7 +26,7 @@
 			"type": "string",
 			"title": "Record usage",
 			"default": "auto",
-			"description": "auto (off while the spatz-hooks plugin is enabled), on or off"
+			"description": "auto (off while the spatz plugin is enabled), on or off"
 		},
 		"minPromptChars": {
 			"type": "number",

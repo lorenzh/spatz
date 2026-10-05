@@ -2,12 +2,12 @@
 title: The spatz Claude Code mod
 description: How the spatz mod for Claude Code recommends and applies model and effort, the five routing scopes with their trade-offs, the /spatz commands, all config keys with defaults, fail-open behaviour, usage recording and privacy.
 tags: [claude-mod, claude-code, routing, spatz]
-keywords: [mod, plugin, scope, step, turn, subagent, session, escalate, apply, show, off, /spatz, record, spatz-hooks, main, prompt cache, fail open, userConfig, alias, effort, model switch]
+keywords: [mod, plugin, scope, step, turn, subagent, session, escalate, apply, show, off, /spatz, record, spatz, main, prompt cache, fail open, userConfig, alias, effort, model switch]
 ---
 
 # The spatz Claude Code mod
 
-The `spatz` plugin is the Claude Code mod in `packages/claude-mod`.
+The `spatz-mod` plugin is the Claude Code mod in `packages/claude-mod`.
 It asks the `spatz` CLI for a recommendation.
 In `show` mode it shows the recommendation. In `apply` mode it also changes model and effort.
 The mod needs Claude Code 2.1.287 or newer.
@@ -20,11 +20,11 @@ Install the CLI through the [installation guide](installation.md), then run thes
 
 ```text
 /plugin marketplace add lorenzh/spatz
-/plugin install spatz@spatz
+/plugin install spatz-mod@spatz
 ```
 
 For local development, use `claude --plugin-dir packages/claude-mod`.
-The plugin name is `spatz`. The workspace package remains `@spatz/claude-mod`.
+The plugin name is `spatz-mod`. The workspace package remains `@spatz/claude-mod`.
 
 The mod never edits a prompt. It stores no task text. [hooks.md](hooks.md) describes the other way to feed spatz: the settings hooks, which only observe.
 
@@ -105,11 +105,11 @@ After each request and at the end of each turn, the mod can call `spatz usage` w
 
 - `on`: always record.
 - `off`: never record.
-- `auto` (default): do not record when the `spatz-hooks` plugin is enabled, otherwise record.
+- `auto` (default): do not record when the `spatz` hooks plugin is enabled, otherwise record.
 
 For `auto`, the mod runs `claude plugin list --json` once per session.
-It checks for an enabled plugin whose id starts with `spatz-hooks@`.
-The mod's own id, `spatz@spatz`, does not turn recording off.
+It checks for an enabled plugin whose id starts with `spatz@` or the legacy `spatz-hooks@`.
+The mod's id, `spatz-mod@spatz`, does not turn recording off.
 When the hooks plugin is enabled, the mod shows one notice that recording is off.
 If the lookup fails, the mod records. The mod records usage only, without outcomes.
 Hand-written hooks and `--plugin-dir` hooks are not installed plugins. With those hooks, set `record: off` yourself.
@@ -119,7 +119,7 @@ Hand-written hooks and `--plugin-dir` hooks are not installed plugins. With thos
 The mod never blocks a request.
 
 - A missing `spatz`, a non-zero exit, invalid JSON or an unsupported model leaves the request unchanged.
-- The recommendation call stops after 6 seconds. A `spatz usage` call stops after 2 seconds. The check for `spatz-hooks` stops after 3 seconds.
+- The recommendation call stops after 6 seconds. A `spatz usage` call stops after 2 seconds. The check for `spatz` stops after 3 seconds.
 - A denied spawn, or a spawn result without an agent id, creates no link to an agent. A failed `spatz link` call (2 seconds) changes nothing else.
 - If the decision for a request fails with an error, the mod logs one debug line and sends the request unchanged.
 - Each hook passes the event on exactly once.

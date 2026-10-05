@@ -30,7 +30,9 @@ export async function buildPlugins(
 				`Version mismatch for ${plugin.name}; run release-version.ts`,
 			);
 		const name =
-			plugin.name === "spatz" ? "spatz-claude-plugin" : "spatz-claude-hooks";
+			plugin.name === "spatz-mod"
+				? "spatz-claude-plugin"
+				: "spatz-claude-hooks";
 		const archive = join(out, `${name}-${version.replaceAll("+", "-")}.zip`);
 		// zip updates existing files; remove an old archive so deleted files cannot survive.
 		await rm(archive, { force: true });
@@ -70,7 +72,7 @@ export async function buildPlugins(
 		stderr: "inherit",
 	});
 	if (await codexPack.exited)
-		throw new Error("Plugin archive failed: spatz-hooks (Codex)");
+		throw new Error("Plugin archive failed: spatz (Codex)");
 	const codexSha256 = createHash("sha256")
 		.update(await Bun.file(codexArchive).bytes())
 		.digest("hex");

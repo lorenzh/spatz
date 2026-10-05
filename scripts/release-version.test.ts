@@ -76,8 +76,8 @@ test("release versions stamp the CLI, all plugins and marketplace entries", asyn
 					],
 				),
 			).toEqual([
-				["spatz", tag.slice(1), "./packages/claude-mod"],
-				["spatz-hooks", tag.slice(1), "./packages/claude-hooks"],
+				["spatz-mod", tag.slice(1), "./packages/claude-mod"],
+				["spatz", tag.slice(1), "./packages/claude-hooks"],
 			]);
 		}
 		await expect(setReleaseVersion("vnot-semver", root)).rejects.toThrow(

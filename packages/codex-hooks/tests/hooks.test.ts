@@ -3,7 +3,7 @@ import manifest from "../.codex-plugin/plugin.json";
 import { hooks } from "../hooks/hooks.json";
 
 test("the Codex plugin runs the two spatz hooks with a 10-second timeout", () => {
-	expect(manifest.name).toBe("spatz-hooks");
+	expect(manifest.name).toBe("spatz");
 	expect(Object.keys(hooks).sort()).toEqual(["PostToolUse", "Stop"]);
 	for (const [event, matcher] of [
 		["PostToolUse", "Bash"],

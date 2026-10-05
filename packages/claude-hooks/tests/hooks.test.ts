@@ -3,7 +3,7 @@ import manifest from "../.claude-plugin/plugin.json";
 import { hooks } from "../hooks/hooks.json";
 
 test("the hooks plugin runs the four spatz events asynchronously", () => {
-	expect(manifest.name).toBe("spatz-hooks");
+	expect(manifest.name).toBe("spatz");
 	expect(Object.keys(hooks).sort()).toEqual([
 		"PostToolUse",
 		"PostToolUseFailure",

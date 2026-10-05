@@ -2,7 +2,7 @@
 	"name": "spatz",
 	"plugins": [
 		{
-			"name": "spatz-hooks",
+			"name": "spatz",
 			"source": {
 				"source": "local",
 				"path": "./packages/codex-hooks"

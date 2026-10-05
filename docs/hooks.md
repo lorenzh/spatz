@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz-hooks]
+keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz]
 ---
 
 # Claude Code hooks for spatz
@@ -21,7 +21,7 @@ Run these commands in Claude Code. See the [installation guide](installation.md)
 
 ```text
 /plugin marketplace add lorenzh/spatz
-/plugin install spatz-hooks@spatz
+/plugin install spatz@spatz
 ```
 
 The plugin runs the four commands below with the same matchers and `async: true`.
@@ -31,7 +31,7 @@ No separate CLI install is needed when either package runner is available.
 The first run downloads about 60 MB. Package runners use the plugin's version.
 Remove hand-written `spatz hook` entries from `~/.claude/settings.json` and project settings to avoid duplicate calls.
 Keep unrelated hooks.
-With the `spatz` mod, leave `record: auto` so the hooks plugin handles recording.
+With the `spatz-mod` plugin, leave `record: auto` so the `spatz` hooks plugin handles recording.
 
 ### Manual settings
 
@@ -216,16 +216,16 @@ When you install the hooks plugin, remove equivalent hand-written entries from `
 
 ## Codex CLI
 
-Install the `spatz-hooks` Codex plugin:
+Install the `spatz` Codex plugin:
 
 ```text
 codex plugin marketplace add lorenzh/spatz
-codex plugin add spatz-hooks@spatz
+codex plugin add spatz@spatz
 ```
 
 The plugin runs these hooks synchronously with a 10-second timeout. Codex skips plugin hooks until you review and trust them through `/hooks`.
 [Codex supplies `PLUGIN_ROOT`](https://learn.chatgpt.com/docs/hooks#plugin-bundled-hooks), which points to the installed plugin directory. Remove hand-written `spatz hook … --agent codex` entries from `~/.codex/hooks.json` when installing the plugin, or events are recorded twice.
-The plugin's `packages/codex-hooks/hooks/hooks.json` calls `sh "${PLUGIN_ROOT}/bin/spatz"`. Warm the pinned CLI once with `"<plugin root>/bin/spatz" --version`. Codex installs it at `~/.codex/plugins/cache/spatz/spatz-hooks/<version>`; confirm the path from Codex's plugin listing. Claude Code's installed plugin path is shown by `/plugin` and is usually `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`.
+The plugin's `packages/codex-hooks/hooks/hooks.json` calls `sh "${PLUGIN_ROOT}/bin/spatz"`. Warm the pinned CLI once with `"<plugin root>/bin/spatz" --version`. Codex installs it at `~/.codex/plugins/cache/spatz/spatz/<version>`; confirm the path from Codex's plugin listing. Claude Code's installed plugin path is shown by `/plugin` and is usually `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`.
 Direct `npx -y @spatz/cli --version` warms `@latest`, while Bun uses a separate cache. A cold plugin download can exceed Codex's 10-second hook timeout.
 
 Without the plugin, use a hand-written `~/.codex/hooks.json` with plain `spatz` on `PATH`:

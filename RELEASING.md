@@ -56,10 +56,12 @@ See [README.md](README.md#releases) for download and installation instructions.
 
 The shared build workflow packs all three plugin directories once on Linux for releases and nightlies:
 
-- `spatz-claude-plugin-<version>.zip`: the `spatz` mod.
-- `spatz-claude-hooks-<version>.zip`: the `spatz-hooks` command hooks.
-- `spatz-codex-hooks-<version>.zip`: the Codex `spatz-hooks` plugin.
+- `spatz-claude-plugin-<version>.zip`: the `spatz-mod` plugin.
+- `spatz-claude-hooks-<version>.zip`: the `spatz` command hooks.
+- `spatz-codex-hooks-<version>.zip`: the Codex `spatz` plugin.
 - `marketplace.json`: the release marketplace with HTTPS archive URLs and SHA-256 pins.
+
+These archive filenames remain stable across the plugin ID rename.
 
 Each file has a `.sha256` companion and an entry in `SHA256SUMS`.
 Asset filenames replace `+` with `-`. Versions inside manifests keep the original SemVer string.
