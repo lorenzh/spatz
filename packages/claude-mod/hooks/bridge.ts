@@ -78,7 +78,10 @@ function claudeModel(id: unknown): string | null {
 	if (typeof id !== "string" || !id.startsWith("anthropic/claude-"))
 		return null;
 	const model = id.slice("anthropic/".length).replaceAll(".", "-");
-	return model === "claude-haiku-4-5" ? (ALIASES.haiku ?? model) : model;
+	return (
+		Object.values(ALIASES).find((id) => id.replace(/-\d{8}$/, "") === model) ??
+		model
+	);
 }
 
 export async function suggest(

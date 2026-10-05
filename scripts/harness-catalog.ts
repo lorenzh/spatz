@@ -64,17 +64,25 @@ export function parseClaudeModelCatalog(source: string): HarnessModel[] {
 				row.section === "main" &&
 				row.disabled !== true &&
 				Array.isArray(row.offered_on) &&
-				row.offered_on.includes("first_party") &&
-				typeof row.id === "string" &&
-				/^[a-z0-9][a-z0-9._-]{0,63}$/.test(row.id),
+				row.offered_on.includes("first_party"),
 		)
 		.map((row) => {
+			if (
+				typeof row.id !== "string" ||
+				!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(row.id)
+			)
+				throw new Error(
+					`Claude Code main picker has unsafe model id: ${String(row.id)}`,
+				);
 			const options = object(row.thinking).effort_options;
-			if (options === undefined || (Array.isArray(options) && !options.length))
+			const levels = object(row.runtime).effort_levels;
+			const empty = (v: unknown) =>
+				v === undefined || (Array.isArray(v) && !v.length);
+			if (empty(options) && empty(levels))
 				return { id: String(row.id), efforts: ["none"] as Effort[] };
 			if (!Array.isArray(options))
 				throw new Error(`Claude Code ${row.id} has invalid effort options`);
-			const runtime = efforts(object(row.runtime).effort_levels);
+			const runtime = efforts(levels);
 			const supported = efforts(
 				options.map((option) => object(option).id),
 			).filter((e) => runtime.includes(e));
@@ -109,7 +117,7 @@ export function parseCodexModelCatalog(value: unknown): HarnessModel[] {
 				Array.isArray(model.supported_reasoning_levels)
 					? model.supported_reasoning_levels.map((item) => object(item).effort)
 					: [],
-			);
+			).filter((effort) => effort !== "none");
 			if (!supported.length)
 				throw new Error(`Codex ${model.slug} has no supported efforts`);
 			return { id: String(model.slug), efforts: supported };

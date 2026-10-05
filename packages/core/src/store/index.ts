@@ -14,9 +14,9 @@ import type {
 	CellStat,
 	Outcome,
 	SuggestionRecord,
-	TaskType,
 	UsageRecord,
 } from "../contracts/types.ts";
+import { EFFORTS } from "../contracts/types.ts";
 
 // No column holds task text (spec "Storage", "Privacy").
 const SCHEMA_V1 = `
@@ -186,8 +186,12 @@ type SuggestionRow = Omit<
 };
 
 /** Creates the parent dir, opens the db, sets journal_mode=WAL and busy_timeout=5000, migrates, returns the Store. ":memory:" allowed. */
-export function openStore(dbPath: string): Store {
+export function openStore(
+	dbPath: string,
+	noneOnlyModels: string[] = [],
+): Store {
 	const db = openDatabase(dbPath);
+	const noneOnly = new Set(noneOnlyModels);
 	// Legacy agents share the main sequence until they have an explicit link.
 	const windowAgent = (session: string, agent: string | null) =>
 		agent !== null &&
@@ -240,14 +244,18 @@ export function openStore(dbPath: string): Store {
 			};
 		},
 		cellStats(taskType) {
+			// Old rows retain null in storage; only catalog-confirmed none-only models can learn from them.
 			return db
-				.query<CellStat, [TaskType]>(
-					`SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
-					FROM suggestions s JOIN outcomes o ON o.suggestion_id = s.id
-					WHERE s.task_type = ? AND s.is_test = 0 AND o.model IS NOT NULL AND o.effort IS NOT NULL
-					GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.effort`,
+				.query<CellStat, string[]>(
+					`WITH normalized AS (
+						SELECT *, COALESCE(effort, CASE WHEN model IN (${noneOnlyModels.map(() => "?").join()}) THEN 'none' END) AS known_effort FROM outcomes
+					)
+					SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
+					FROM suggestions s JOIN normalized o ON o.suggestion_id = s.id
+					WHERE s.task_type = ? AND s.is_test = 0 AND o.model IS NOT NULL AND o.known_effort IS NOT NULL
+					GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.known_effort`,
 				)
-				.all(taskType);
+				.all(...noneOnlyModels, taskType);
 		},
 		linkSession(id, sessionId, promptId, at, agentId) {
 			// Hooks run async, so links may arrive late, twice or out of order.
@@ -365,6 +373,7 @@ export function openStore(dbPath: string): Store {
 				$rounds, $note, $reported_at, $turn_id, $agent_id)`,
 			).run({
 				...r,
+				effort: r.effort ?? (noneOnly.has(r.model) ? "none" : null),
 				turn_id: r.turn_id ?? null,
 				agent_id: r.agent_id ?? null,
 				is_sidechain: Number(r.is_sidechain),
@@ -373,9 +382,12 @@ export function openStore(dbPath: string): Store {
 		usageScopes(ids) {
 			return db
 				.query<Pick<UsageRecord, "source" | "scope_key" | "effort">, string[]>(
-					`SELECT source, scope_key, MAX(effort) AS effort FROM usages
+					`SELECT source, scope_key, effort FROM (
+					SELECT source, scope_key, effort, ROW_NUMBER() OVER (
+						PARTITION BY source, scope_key ORDER BY CASE effort ${EFFORTS.map((e, i) => `WHEN '${e}' THEN ${i}`).join(" ")} ELSE -1 END DESC
+					) AS rank FROM usages
 					WHERE source IN ('transcript', 'subagent') AND suggestion_id IN (${ids.map(() => "?").join()})
-					GROUP BY source, scope_key`,
+					) WHERE rank = 1`,
 				)
 				.all(...ids);
 		},

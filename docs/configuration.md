@@ -116,6 +116,10 @@ A higher-priority source overrides an invalid lower-priority value.
 Valid efforts, in ascending cost order, are `none`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`.
 Prices take precedence over effort. `none` means the harness offers no effort setting; it differs from missing usage data (`null`).
 Codex supports `ultra` only on models that list it. Claude Code has no `ultra`.
+The extractor excludes the Codex reasoning-off `none` from presets. In spatz, `none` means to leave effort unset.
+For catalog models with real efforts, `--models` and reports reject `none`. Unknown models keep accepting it.
+Usage with missing effort becomes `none` only for catalog models whose sole effort is `none`.
+Learning also counts older null-effort outcomes for those models.
 
 ### Harness detection
 
@@ -136,15 +140,27 @@ The implementation environment confirmed `CLAUDECODE=1` and `CLAUDE_CODE_ENTRYPO
 
 The presets come from the [harness catalog](#harness-catalog) and keep `models_source` as `preset:<harness>`.
 Defaults include `none`, `xhigh`, `max` and `ultra` where listed.
-Critical tasks and cold start select the most expensive candidate pair, with effort as a price tie-break.
-To narrow candidates, set `models` in config or `SPATZ_MODELS`, for example `claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high`.
-They describe harness defaults, not account entitlements. If a preset does not match your dispatch tools, use `--models` or a configured default.
+Fable stays in the Claude Code preset.
+Cold start without a usable Jev choice selects the most expensive pair, except during exploration.
+The control group also selects this pair.
+Unless a cheaper pair meets the stricter learned limits, critical tasks select it too.
+With the current catalog and prices, these pairs are `claude-fable-5-1:max` in Claude Code and `gpt-6-astra:ultra` in Codex.
+Effort breaks price ties. See [recommendation.md](recommendation.md#decision-order) for the decision order.
+To exclude Fable or another model, set an explicit list of allowed models.
+Use `models` in `.spatz.json` or `~/.spatz/config.json`, or set `SPATZ_MODELS`:
+
+```bash
+export SPATZ_MODELS='claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high'
+```
+
+This list replaces the preset. spatz cannot select omitted models.
+Presets describe harness defaults, not account entitlements. If a preset does not match your dispatch tools, use `--models` or a configured default.
 Without a detected harness or model default, spatz exits 2 with configuration instructions.
 
 ### Harness catalog
 
 When resolution reaches the preset step, spatz reads the detected harness entry from the catalog.
-Explicit flags and configured model lists skip this lookup.
+Explicit flags and configured model lists skip the network lookup. Effort validation and usage recording still read the cached or bundled catalog.
 The catalog URL is [`https://raw.githubusercontent.com/lorenzh/spatz/main/catalog/harness-models.json`](https://raw.githubusercontent.com/lorenzh/spatz/main/catalog/harness-models.json).
 
 spatz stores the validated document under `catalog` in `~/.spatz/harness-models.json`, with `fetched_at` in epoch milliseconds.
@@ -154,13 +170,16 @@ The harness catalog and OpenRouter requests run in parallel.
 If the request fails, spatz uses the last valid cache.
 If no valid cache exists, spatz uses the JSON bundled into the executable at build time.
 Unknown schema versions and malformed known harnesses count as failures. A failed request never replaces a valid cache.
-The parser ignores unknown harnesses and extra fields. Only breaking changes need a schema bump.
+The parser ignores unknown harnesses and extra fields. It removes unknown efforts and models with no remaining efforts.
+It rejects structurally broken files and known harnesses with no remaining models. Only breaking changes need a schema bump.
 Known harnesses allow up to 50 models, IDs up to 64 characters, and valid spatz efforts.
 Downloads stop above 256 KiB.
 
 **v0.1.5 compatibility:** its strict effort validator rejects this entire catalog because it contains `none` and `ultra`.
 Those clients keep using their last valid cache or bundled catalog; failed validation does not overwrite the cache.
-This is the chosen compatibility path: keep the catalog accurate and accept frozen presets on v0.1.5 until users upgrade.
+After each cache TTL expiry, v0.1.5 re-fetches the catalog. Rejected downloads do not reset the TTL.
+Each later run that uses a preset retries the request. This adds a small network cost per run.
+Upgrade to get the tolerant parser and stop these repeated rejected downloads.
 Adding fields cannot teach released clients new efforts. Upgrade the CLI to use these models and efforts.
 
 `SPATZ_NO_NETWORK=1` skips both catalog requests and Jev classification for suggestions.

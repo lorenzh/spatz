@@ -60,6 +60,15 @@ spatz applies the first rule that matches. The values are the start values in `D
 6. **Jev choice.** If the pooled levels also have too little data, spatz takes the best candidate of Jev (strategy `jev-choice`).
 7. **Rules.** If Jev was not involved, or its answer is not in the catalog, spatz recommends the most expensive candidate (strategy `rules`).
 
+Fable stays in the Claude Code preset.
+With the current catalog and prices, the most expensive pairs are `claude-fable-5-1:max` in Claude Code and `gpt-6-astra:ultra` in Codex.
+Cold start without a usable Jev choice selects this pair, except during exploration.
+The control group selects it too.
+Unless a cheaper pair meets the stricter learned limits, critical tasks select it.
+To exclude models, set an explicit allowed list with `models` in config or `SPATZ_MODELS`.
+For example, `SPATZ_MODELS='claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high'` excludes Fable.
+The list replaces the preset. See [configuration.md](configuration.md#default-models).
+
 The fallback without Jev also goes through steps 3 to 5. It always uses the cell (`other`, `medium`). So `rules` applies only while that cell and its pooled level have too little data.
 
 The ranking shows the recommended candidate and up to two next candidates in cost order. Each entry shows the estimate and `n` of the level that made the decision.
@@ -127,7 +136,9 @@ The rules:
 2. Without a report, spatz takes the latest value per signal kind. The quality is the weighted mean over the kinds.
 3. Without a signal, there is no outcome.
 
-The used pair comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest recorded effort for that model. Without a known effort, the outcome does not count for learning.
+The used pair comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest recorded effort for that model. If the catalog lists only `none` for a model, spatz records missing effort as `none`.
+Learning also treats older null-effort outcomes as `none` for those models.
+For other models, outcomes without a known effort do not count for learning.
 
 An outcome is a success when quality `≥ 0.8`. `partial` is not a success.
 

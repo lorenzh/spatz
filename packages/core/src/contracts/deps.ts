@@ -180,7 +180,7 @@ export interface CoreDeps {
 	/** New suggestion id; default crypto.randomUUID. */
 	newId: () => string;
 	/** Opens the store; tests may return an in-memory or fake store. */
-	openStore: (dbPath: string) => Store;
+	openStore: (dbPath: string, noneOnlyModels?: string[]) => Store;
 	/** Optional preloaded config; when absent the api loads it from files and env. */
 	config?: Config;
 }

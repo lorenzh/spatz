@@ -49,11 +49,9 @@ export function toCanonicalId(
 	const alias = Object.hasOwn(aliases, id) ? aliases[id] : undefined;
 	if (alias) return alias;
 	if (id.includes("/")) return id;
-	// The main-picker Haiku snapshot uses the undated OpenRouter price entry.
-	if (id === "claude-haiku-4-5-20251001") return "anthropic/claude-haiku-4.5";
 	// Greedy prefix makes this hit the last digit-dash-digit.
 	if (id.startsWith("claude-"))
-		return `anthropic/${id.replace(/^(.*\d)-(\d)/, "$1.$2")}`;
+		return `anthropic/${id.replace(/-\d{8}$/, "").replace(/^(.*\d)-(\d)/, "$1.$2")}`;
 	if (id.startsWith("gpt-")) return `openai/${id}`;
 	return id;
 }
