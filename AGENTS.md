@@ -19,7 +19,8 @@
 
 ## Safety
 - Never write to the real `~/.spatz` from tests or ad-hoc runs (even `--dry-run` stores a suggestion): set `HOME` to a temp dir.
-- Exception: tests may read the DuckDB extension from `~/.spatz/duckdb-extensions` via `SPATZ_DUCKDB_EXTENSION_DIR`. First-time setup is in `CONTRIBUTING.md`.
+- Exception: tests may read an existing DuckDB extension from `~/.spatz/duckdb-extensions` via `SPATZ_DUCKDB_EXTENSION_DIR`.
+- Without it, bootstrap in a temp home and point at that: `B=$(mktemp -d); HOME=$B bun packages/cli/src/cli.ts setup --models claude-sonnet-5-5 --dry-run; HOME=$B bun packages/cli/src/cli.ts stats; export SPATZ_DUCKDB_EXTENSION_DIR=$B/.spatz/duckdb-extensions`.
 - Set `SPATZ_NO_JEV=1` and `SPATZ_NO_NETWORK=1` for offline runs.
 - Never touch `~/.claude` or `~/.codex`; use a temp `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
 
