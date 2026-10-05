@@ -142,21 +142,34 @@ It validates the complete schema before writing `catalog/harness-models.json`.
 The file sorts models by ID and efforts by spatz's effort order.
 When model IDs or efforts change, `updated` records the UTC date.
 Version-only changes do not rewrite the file. Stored harness versions describe the last model update.
+The script refuses a catalog that drops a model from the current file, and the workflow refuses it again before publishing.
+When a model is really retired, run `bun scripts/harness-catalog.ts --allow-drop` locally and merge the result through a normal PR.
 Account entitlements can differ from these package defaults.
 
-When the file changes, the workflow commits it on `catalog/update-<YYYYMMDD>` using `github-actions[bot]`.
+When the file changes and the tests pass, the workflow commits it on `catalog/update-<YYYYMMDD>` using `github-actions[bot]`.
 It creates a PR to `main`, then runs `gh pr merge --merge --delete-branch`.
+PRs opened with the workflow token do not start `ci.yml`, so the `test` job runs the tests before the merge instead.
 A repeated run updates today's open branch with a force-with-lease push and reuses its PR.
 If the file has no changes, the workflow exits without a commit.
-The workflow uses two jobs, each with a timeout:
+The workflow uses four jobs, each with a timeout:
 
-- `extract` has `contents: read` and a 15-minute timeout. Its checkout stores no credentials.
+- `extract` has `contents: read` and a 15-minute timeout. It checks out the run's commit (`github.sha`) and stores no credentials.
   It runs the extractor and uploads only `catalog/harness-models.json` with the pinned artifact action.
-- `publish` needs `extract` and has a 10-minute timeout. It checks out `main` again without stored credentials.
-  The pinned download action puts the artifact in a temporary directory.
-  The repository parser checks the JSON and its size before the job copies that one file.
-  This job never installs or executes downloaded harness packages or artifact code.
+- `test` needs `extract`, has `contents: read` and a 15-minute timeout. It checks out the run's commit without stored credentials.
+  It copies the artifact with `scripts/accept-harness-catalog.ts` and installs the dev dependencies.
+  It installs the DuckDB extension in a temporary home, then runs `bun test` with another temporary `HOME` and `SPATZ_DUCKDB_EXTENSION_DIR` set to that extension.
+  The dev dependencies are third-party code, so this job has no write access.
+- `publish` needs `test` and has a 10-minute timeout. It checks out the run's commit again without stored credentials.
+  The pinned download action puts the `extract` artifact in a temporary directory.
+  `scripts/accept-harness-catalog.ts` checks the JSON, its size and dropped models, then writes only the known fields of that one file.
+  The output is the same file that `test` checked.
+  This job never installs dependencies or executes downloaded harness packages or artifact code.
   Only this job has `contents: write` and `pull-requests: write`.
+  Before the push and again before the merge, it checks that `main` is still the commit that `test` checked.
+  If `main` moved, the job fails without merging. Run the workflow again so that `test` checks the new `main`.
+- `report` runs only when a job before it fails. It has `actions: read`, `issues: write` and a 5-minute timeout, and runs only `gh`.
+  When the two previous completed runs on `main` also failed, it opens the issue `Harness catalog workflow failed three runs in a row`.
+  It opens no second issue while that one is open. Close the issue after the fix.
 
 Before checking for changes, `publish` closes older open `catalog/update-<YYYYMMDD>` PRs from `github-actions[bot]`.
 It uses the bot token and only closes branches in this repository. It keeps today's PR for retries.

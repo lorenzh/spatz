@@ -22,7 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          # Every job uses the commit this run started on, so publish ships what test checked.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -35,17 +36,20 @@ jobs:
           path: catalog/harness-models.json
           if-no-files-found: error
 
-  publish:
+  test:
+    # Dev dependencies are third-party code, so the tests run without write access.
     needs: extract
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+    env:
+      SPATZ_NO_JEV: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          # Every job uses the commit this run started on, so publish ships what test checked.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -56,27 +60,52 @@ jobs:
           path: ${{ runner.temp }}/harness-catalog
       - name: Validate and copy the catalog
         id: validate
+        run: bun scripts/accept-harness-catalog.ts "$RUNNER_TEMP/harness-catalog/harness-models.json" catalog/harness-models.json
+      - run: bun install --frozen-lockfile
+      - name: Install DuckDB SQLite extension in a temporary home
         run: |
-          # Writes only the known fields, so the artifact cannot add anything else to main.
-          bun -e '
-            import { parseHarnessCatalog } from "./packages/core/src/catalog/harness.ts";
-            const file = Bun.file(process.env.RUNNER_TEMP + "/harness-catalog/harness-models.json");
-            const catalog = file.size <= 256 * 1024 ? parseHarnessCatalog(await file.json()) : null;
-            if (!catalog) throw new Error("Invalid harness catalog artifact");
-            const harnesses = Object.fromEntries(
-              ["claude-code", "codex"].map((h) => [h, {
-                version: catalog.harnesses[h].version,
-                models: catalog.harnesses[h].models.map(({ id, efforts }) => ({ id, efforts })),
-              }]),
-            );
-            const out = { schema: 1, updated: catalog.updated, harnesses };
-            await Bun.write("catalog/harness-models.json", JSON.stringify(out, null, "\t") + "\n");
-          '
+          mkdir "$RUNNER_TEMP/bootstrap-home"
+          HOME="$RUNNER_TEMP/bootstrap-home" bun packages/cli/src/cli.ts 'catalog setup' --models gpt-6-luna --dry-run
+          HOME="$RUNNER_TEMP/bootstrap-home" bun packages/cli/src/cli.ts stats
+      - name: Run the tests in a temporary home
+        run: SPATZ_DUCKDB_EXTENSION_DIR="$RUNNER_TEMP/bootstrap-home/.spatz/duckdb-extensions" HOME="$(mktemp -d)" bun test
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Every job uses the commit this run started on, so publish ships what test checked.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.0'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: harness-catalog
+          path: ${{ runner.temp }}/harness-catalog
+      - name: Validate and copy the catalog
+        id: validate
+        run: bun scripts/accept-harness-catalog.ts "$RUNNER_TEMP/harness-catalog/harness-models.json" catalog/harness-models.json
       - name: Commit through a pull request
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # The tests ran on GITHUB_SHA, so merge only onto that base. A moved main needs a new run.
+          # ponytail: main can still move between this check and the merge; a merge queue closes that window.
+          require_tested_base() {
+            if [[ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]]; then
+              echo "::error::main moved after the tests ran on $GITHUB_SHA. Run the workflow again to test the new main."
+              exit 1
+            fi
+          }
           today="$(date -u +%Y%m%d)"
           branch="catalog/update-$today"
           stale="$(gh pr list --base main --state open --author 'github-actions[bot]' --limit 1000 \
@@ -88,6 +117,7 @@ jobs:
             fi
           done <<< "$stale"
           if git diff --quiet -- catalog/harness-models.json; then exit 0; fi
+          require_tested_base
           gh auth setup-git
           # Fetch the remote tip before using a lease when today's branch exists.
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
@@ -105,4 +135,30 @@ jobs:
               --title 'chore(catalog): update harness models' \
               --body 'Refresh the model catalog from the latest published Claude Code and Codex versions. The extractor validates both harnesses before writing this file.')"
           fi
+          require_tested_base
           gh pr merge "$pr" --merge --delete-branch
+
+  report:
+    needs: [extract, test, publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Open an issue after three failed runs in a row
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # This run is still in progress, so it is not in the completed list.
+          failed="$(gh run list --workflow harness-catalog.yml --branch main --status completed --limit 2 \
+            --json conclusion --jq '[.[] | select(.conclusion == "failure")] | length')"
+          if [[ "$failed" -lt 2 ]]; then exit 0; fi
+          title='Harness catalog workflow failed three runs in a row'
+          if gh issue list --state open --limit 1000 --json title --jq '.[].title' | grep -Fxq "$title"; then
+            exit 0
+          fi
+          gh issue create --title "$title" --body "The daily harness catalog workflow failed three runs in a row, so installed CLIs keep the old catalog. Latest run: $RUN_URL. See RELEASING.md#daily-harness-catalog."

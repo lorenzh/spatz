@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [models, family, presets, catalog, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
+keywords: [models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -189,6 +189,9 @@ For offline `spatz stats`, also preinstall the [DuckDB extension](#duckdb-sqlite
 
 The [daily catalog workflow](../RELEASING.md#daily-harness-catalog) updates models without a CLI release.
 The bundled catalog changes with the next build. If your account or dispatch tool exposes different choices, configure models explicitly.
+The workflow publishes only after the tests pass. It only adds models and changes efforts; it never removes a model from the catalog.
+A model that a harness no longer offers stays in the catalog until a maintainer runs `bun scripts/harness-catalog.ts --allow-drop` and merges the result through a reviewed PR.
+Until then, presets can still suggest that model. Configure models explicitly to exclude it.
 
 ### Per-project configuration: .spatz.json
 
