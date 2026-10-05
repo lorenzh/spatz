@@ -44,6 +44,34 @@ describe("parseCodexRollout", () => {
 			],
 		});
 	});
+	test("ignores CommandExecution exits that have no matching call output", () => {
+		const rollout = [
+			JSON.stringify({
+				type: "turn_context",
+				payload: { turn_id: "turn", model: "gpt-6-luna" },
+			}),
+			JSON.stringify({
+				type: "response_item",
+				payload: {
+					type: "custom_tool_call",
+					call_id: "call-real",
+					input: 'exec_command({cmd:"false"})',
+				},
+			}),
+			JSON.stringify({
+				type: "event_msg",
+				payload: {
+					type: "item_completed",
+					item: {
+						type: "CommandExecution",
+						id: "call-real",
+						exit_code: 1,
+					},
+				},
+			}),
+		].join("\n");
+		expect(parseCodexRollout(rollout, "turn")?.calls).toEqual([]);
+	});
 	test("skips partial and unknown records without throwing", () => {
 		expect(parseCodexRollout('{"type":"future_record"}\n{bad', "x")).toBeNull();
 	});
