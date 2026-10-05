@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [models, family, presets, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics]
+keywords: [models, family, presets, catalog, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics]
 ---
 
 # spatz configuration
@@ -16,6 +16,7 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `TYPESAFE_AI_API_KEY` | not set | API key for Jev (TypeSafe AI). When it is not set, spatz classifies with keyword rules (`fallback_used: true`). |
+| `SPATZ_NO_NETWORK` | not set | When exactly `1`, suggestions skip harness catalog, OpenRouter and Jev requests. Cached and bundled data still work. |
 | `SPATZ_NO_JEV` | not set | When the value is exactly `1`, spatz never sends the task text to Jev. Other values have no effect. |
 | `SPATZ_DEBUG` | not set | When the value is exactly `1`, hooks write fixed diagnostics to stderr. Hook commands still exit with code 0. |
 | `OPENROUTER_API_KEY` | not set | When set, spatz sends it as `Authorization: Bearer <key>` with the OpenRouter model-list request. The request works without it. |
@@ -29,6 +30,7 @@ The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it
 | Path | Format | Written by | Purpose |
 | --- | --- | --- | --- |
 | `~/.spatz/spatz.db` | SQLite, WAL mode | spatz | All suggestions, signals and usage. |
+| `~/.spatz/harness-models.json` | JSON | spatz | Cache of the harness model catalog. |
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
 | `~/.spatz/duckdb-extensions/` | DuckDB extension directory | `spatz stats` | The DuckDB sqlite extension. |
 | `~/.spatz/aliases.json` | JSON object | you | Model id mapping. Optional. |
@@ -115,12 +117,12 @@ A higher-priority source overrides an invalid lower-priority value.
 
 spatz reads the environment of its own process:
 
-| Marker | Preset |
+| Marker | Catalog entry |
 | --- | --- |
-| Nonempty `CODEX_THREAD_ID` | `gpt-6-astra`, `gpt-6-luna` |
-| `CLAUDECODE=1` or nonempty `CLAUDE_CODE_ENTRYPOINT` | `claude-opus-5-5`, `claude-sonnet-5-5` |
+| Nonempty `CODEX_THREAD_ID` | `codex` |
+| `CLAUDECODE=1` or nonempty `CLAUDE_CODE_ENTRYPOINT` | `claude-code` |
 
-Both presets use `low+medium+high`. `CODEX_COMPANION_*` variables do not detect Codex.
+`CODEX_COMPANION_*` variables do not detect Codex.
 Codex wins when both markers exist. This selects the inner harness when Codex runs inside a Claude Code shell command.
 Environment markers cannot establish arbitrary nesting order. For Claude launched inside Codex, set a model default or pass `--models`.
 
@@ -128,9 +130,30 @@ Codex [injects `CODEX_THREAD_ID` into command environments](https://github.com/o
 Its [effort definitions](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs) include `low`, `medium` and `high`.
 The implementation environment confirmed `CLAUDECODE=1` and `CLAUDE_CODE_ENTRYPOINT=cli` in Claude Code.
 
-The presets live in `packages/core/src/catalog/presets.ts` and are reviewed and updated per release.
+The presets come from the [harness catalog](#harness-catalog) and keep `models_source` as `preset:<harness>`.
 They describe harness defaults, not account entitlements. If a preset does not match your dispatch tools, use `--models` or a configured default.
 Without a detected harness or model default, spatz exits 2 with configuration instructions.
+
+### Harness catalog
+
+When resolution reaches the preset step, spatz reads the detected harness entry from the catalog.
+Explicit flags and configured model lists skip this lookup.
+The catalog URL is [`https://raw.githubusercontent.com/lorenzh/spatz/main/catalog/harness-models.json`](https://raw.githubusercontent.com/lorenzh/spatz/main/catalog/harness-models.json).
+
+spatz stores the validated document under `catalog` in `~/.spatz/harness-models.json`, with `fetched_at` in epoch milliseconds.
+It uses the same 24-hour lifetime and 3-second timeout as the OpenRouter cache.
+A fresh cache skips the request. An expired cache triggers a request.
+If the request fails, spatz uses the last valid cache.
+If no valid cache exists, spatz uses the JSON bundled into the executable at build time.
+Unknown schema versions and malformed documents count as failures. A failed request never replaces a valid cache.
+
+`SPATZ_NO_NETWORK=1` skips both catalog requests and Jev classification for suggestions.
+It uses stale caches and keyword classification.
+`SPATZ_NO_JEV=1` and `"jev": false` remain task-text opt-outs. They allow catalog requests because those requests contain no task text.
+For offline `spatz stats`, also preinstall the [DuckDB extension](#duckdb-sqlite-extension).
+
+The [daily catalog workflow](../RELEASING.md#daily-harness-catalog) updates models without a CLI release.
+The bundled catalog changes with the next build. If your account or dispatch tool exposes different choices, configure models explicitly.
 
 ### Per-project configuration: .spatz.json
 

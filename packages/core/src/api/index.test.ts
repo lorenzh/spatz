@@ -1816,3 +1816,60 @@ describe("resolved candidates", () => {
 		expect(writes()).toEqual([]);
 	});
 });
+
+test("harness catalog is used only at preset precedence", async () => {
+	const remote = {
+		schema: 1,
+		updated: "2026-10-05",
+		harnesses: {
+			"claude-code": {
+				version: "2.1.0",
+				models: [{ id: "claude-new", efforts: ["high"] }],
+			},
+			codex: {
+				version: "0.100.0",
+				models: [{ id: "gpt-new", efforts: ["low"] }],
+			},
+		},
+	};
+	const urls: string[] = [];
+	const { api } = setup({
+		env: { CODEX_THREAD_ID: "t" },
+		fetch: async (url) => {
+			urls.push(url);
+			return Response.json(
+				url.includes("raw.githubusercontent.com") ? remote : { data: [] },
+			);
+		},
+	});
+	const result = await api.suggest({ task: "test", dryRun: true });
+	expect(result.models_source).toBe("preset:codex");
+	expect(result.ranking.map((m) => [m.model, m.effort])).toEqual([
+		["openai/gpt-new", "low"],
+	]);
+	expect(urls.some((url) => url.includes("raw.githubusercontent.com"))).toBe(
+		true,
+	);
+	urls.length = 0;
+	await api.suggest({
+		task: "test",
+		models: "gpt-explicit:high",
+		dryRun: true,
+	});
+	expect(urls.some((url) => url.includes("raw.githubusercontent.com"))).toBe(
+		false,
+	);
+});
+
+test("SPATZ_NO_NETWORK skips both catalogs and Jev, including injected config", async () => {
+	const jev = fakeJev();
+	const { api, fetched } = setup({
+		env: { SPATZ_NO_NETWORK: "1", CODEX_THREAD_ID: "t" },
+		jev,
+	});
+	const result = await api.suggest({ task: "test", dryRun: true });
+	expect(result.models_source).toBe("preset:codex");
+	expect(result.ranking.length).toBeGreaterThan(0);
+	expect(fetched).toEqual([]);
+	expect(jev.requests).toEqual([]);
+});

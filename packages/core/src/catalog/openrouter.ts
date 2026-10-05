@@ -99,6 +99,7 @@ export async function loadOpenRouterModels(
 ): Promise<OpenRouterModel[]> {
 	const { fetch, env, cachePath, clock, ttlMs } = options;
 	const cache = await readCache(cachePath);
+	if (env.SPATZ_NO_NETWORK === "1") return cache?.models ?? [];
 	const now = clock.now();
 	if (cache && now - cache.fetched_at < ttlMs) return cache.models;
 

@@ -1,0 +1,238 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+import {
+	type HarnessCatalog,
+	type HarnessModel,
+	parseHarnessCatalog,
+} from "../packages/core/src/catalog/harness.ts";
+import { EFFORTS, type Effort } from "../packages/core/src/contracts/types.ts";
+
+const efforts = (values: unknown): Effort[] =>
+	Array.isArray(values)
+		? EFFORTS.filter((effort) => values.includes(effort))
+		: [];
+const object = (value: unknown): Record<string, unknown> =>
+	value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+
+/** Read the embedded picker data, never execute JavaScript from the package. */
+export function parseClaudeModelCatalog(source: string): HarnessModel[] {
+	const marker =
+		'{$schema:"https://downloads.claude.ai/model-catalog/v1/schema.json"';
+	const start = source.indexOf(marker);
+	if (start < 0)
+		throw new Error("Claude Code embedded picker catalog is missing");
+	let depth = 0;
+	let literal = "";
+	for (const token of source.slice(start).matchAll(/"(?:\\.|[^"\\])*"|[{}]/g)) {
+		if (token[0] === "{") depth++;
+		if (token[0] === "}") depth--;
+		if (depth === 0) {
+			literal = source.slice(start, start + token.index + 1);
+			break;
+		}
+	}
+	// The generated data uses unquoted keys and !0/!1 booleans. Strings stay untouched.
+	const json = literal.replace(
+		/"(?:\\.|[^"\\])*"|([A-Za-z_$][\w$]*)(?=\s*:)|!([01])/g,
+		(token, key, bool) =>
+			key
+				? JSON.stringify(key)
+				: bool
+					? bool === "0"
+						? "true"
+						: "false"
+					: token,
+	);
+	const data = object(JSON.parse(json));
+	if (data.schema_version !== 1)
+		throw new Error("Unknown Claude Code picker schema");
+	const configs = object(object(data.surfaces).cc).model_selector_config;
+	if (!Array.isArray(configs))
+		throw new Error("Claude Code picker configurations are missing");
+	const rows = object(configs.find((row) => object(row).id === "cc")).models;
+	if (!Array.isArray(rows))
+		throw new Error("Claude Code picker models are missing");
+	// Deliberate scope: newest main-picker Opus and Sonnet, excluding overflow/legacy.
+	return ["opus", "sonnet"]
+		.map((family) => {
+			const candidates = rows
+				.map(object)
+				.filter(
+					(row) =>
+						row.section === "main" &&
+						object(row.runtime).family === family &&
+						row.disabled !== true &&
+						Array.isArray(row.offered_on) &&
+						row.offered_on.includes("first_party") &&
+						typeof row.id === "string" &&
+						new RegExp(`^claude-${family}-\\d+(?:-\\d+)?$`).test(row.id),
+				);
+			candidates.sort((a, b) =>
+				String(b.id).localeCompare(String(a.id), "en", { numeric: true }),
+			);
+			const row = candidates[0];
+			if (!row) throw new Error(`Claude Code picker lost ${family}`);
+			const thinking = object(row.thinking);
+			if (!Array.isArray(thinking.effort_options))
+				throw new Error(`Claude Code ${family} effort options are missing`);
+			const runtime = efforts(object(row.runtime).effort_levels);
+			const supported = efforts(
+				thinking.effort_options.map((option) => object(option).id),
+			).filter((e) => runtime.includes(e));
+			if (!supported.length)
+				throw new Error(`Claude Code ${family} has no supported efforts`);
+			return { id: String(row.id), efforts: supported };
+		})
+		.sort((a, b) => a.id.localeCompare(b.id, "en"));
+}
+
+/** Keep visible Codex picker entries from its newest GPT major generation. */
+export function parseCodexModelCatalog(value: unknown): HarnessModel[] {
+	const rows = object(value).models;
+	if (!Array.isArray(rows)) throw new Error("Codex picker models are missing");
+	const visible = rows
+		.map(object)
+		.filter((model) => model.visibility === "list");
+	const major = Math.max(
+		...visible.map((model) =>
+			Number(/^gpt-(\d+)/.exec(String(model.slug))?.[1] ?? 0),
+		),
+	);
+	const models = visible
+		.filter((model) =>
+			new RegExp(`^gpt-${major}(?:\\.|-|$)`).test(String(model.slug)),
+		)
+		.map((model) => {
+			const supported = efforts(
+				Array.isArray(model.supported_reasoning_levels)
+					? model.supported_reasoning_levels.map((item) => object(item).effort)
+					: [],
+			);
+			if (!supported.length)
+				throw new Error(`Codex ${model.slug} has no supported efforts`);
+			return { id: String(model.slug), efforts: supported };
+		})
+		.sort((a, b) => a.id.localeCompare(b.id, "en"));
+	if (!models.length)
+		throw new Error("Codex picker extraction returned no current models");
+	return models;
+}
+
+function run(command: string, args: string[], cwd: string): string {
+	const result = Bun.spawnSync([command, ...args], {
+		cwd,
+		env: {
+			PATH: process.env.PATH,
+			HOME: cwd,
+			CODEX_HOME: join(cwd, ".codex"),
+			CLAUDE_CONFIG_DIR: join(cwd, ".claude"),
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (result.exitCode !== 0)
+		throw new Error(
+			`${command} ${args.join(" ")} failed: ${new TextDecoder().decode(result.stderr)}`,
+		);
+	return new TextDecoder().decode(result.stdout);
+}
+
+async function install(pkg: string, dir: string): Promise<string> {
+	run(
+		"npm",
+		[
+			"install",
+			"--no-save",
+			"--ignore-scripts",
+			"--no-audit",
+			"--no-fund",
+			pkg,
+		],
+		dir,
+	);
+	const nodeModules = join(dir, "node_modules");
+	const packageName = pkg.slice(0, pkg.lastIndexOf("@"));
+	const metadata = JSON.parse(
+		await readFile(join(nodeModules, packageName, "package.json"), "utf8"),
+	);
+	return metadata.version as string;
+}
+
+async function extractClaude(dir: string) {
+	const version = await install("@anthropic-ai/claude-code@latest", dir);
+	const platform = process.platform === "darwin" ? "darwin" : process.platform;
+	const arch = process.arch === "arm64" ? "arm64" : "x64";
+	const binary = join(
+		dir,
+		`node_modules/@anthropic-ai/claude-code-${platform}-${arch}/claude`,
+	);
+	const bytes = await Bun.file(binary).arrayBuffer();
+	const strings = new TextDecoder("latin1").decode(bytes);
+	return { version, models: parseClaudeModelCatalog(strings) };
+}
+
+async function extractCodex(dir: string) {
+	const version = await install("@openai/codex@latest", dir);
+	await mkdir(join(dir, ".codex"));
+	const binary = join(dir, "node_modules/@openai/codex/bin/codex.js");
+	const output = run(process.execPath, [binary, "debug", "models"], dir);
+	const models = parseCodexModelCatalog(JSON.parse(output));
+	if (!models.length)
+		throw new Error("Codex picker extraction returned no current models");
+	return { version, models };
+}
+
+function sameData(
+	a: HarnessCatalog["harnesses"],
+	b: HarnessCatalog["harnesses"],
+): boolean {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export async function extractHarnessCatalog(
+	outputPath = resolve(import.meta.dir, "../catalog/harness-models.json"),
+) {
+	const temp = await mkdtemp(join(tmpdir(), "spatz-harness-catalog-"));
+	try {
+		await Promise.all([
+			mkdir(join(temp, "claude")),
+			mkdir(join(temp, "codex")),
+		]);
+		const [claude, codex] = await Promise.all([
+			extractClaude(join(temp, "claude")),
+			extractCodex(join(temp, "codex")),
+		]);
+		const harnesses = { "claude-code": claude, codex };
+		const old = parseHarnessCatalog(
+			await Bun.file(outputPath)
+				.json()
+				.catch(() => null),
+		);
+		const updated =
+			old && sameData(old.harnesses, harnesses)
+				? old.updated
+				: new Date().toISOString().slice(0, 10);
+		const catalog: HarnessCatalog = { schema: 1, updated, harnesses };
+		if (!parseHarnessCatalog(catalog))
+			throw new Error("Extracted harness catalog failed schema validation");
+		await mkdir(resolve(outputPath, ".."), { recursive: true });
+		await writeFile(outputPath, `${JSON.stringify(catalog, null, "\t")}\n`);
+		return catalog;
+	} finally {
+		await rm(temp, { recursive: true, force: true });
+	}
+}
+
+if (import.meta.main) {
+	try {
+		const catalog = await extractHarnessCatalog(process.argv[2]);
+		console.log(JSON.stringify(catalog, null, 2));
+	} catch (error) {
+		console.error(error);
+		process.exitCode = 1;
+	}
+}

@@ -4,13 +4,15 @@ import type {
 	ModelsSource,
 	RequestedModel,
 } from "../contracts/types.ts";
+import { BUNDLED_HARNESS_CATALOG, formatHarnessModels } from "./harness.ts";
 import { toCanonicalId } from "./index.ts";
 
-// Review these presets each release. Keep efforts aligned with the mod defaults.
+// The imported JSON is also embedded in compiled binaries.
 export const HARNESS_PRESETS = {
-	"claude-code":
-		"claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high",
-	codex: "gpt-6-astra:low+medium+high,gpt-6-luna:low+medium+high",
+	"claude-code": formatHarnessModels(
+		BUNDLED_HARNESS_CATALOG.harnesses["claude-code"].models,
+	),
+	codex: formatHarnessModels(BUNDLED_HARNESS_CATALOG.harnesses.codex.models),
 } as const;
 
 export class ModelsUsageError extends Error {}

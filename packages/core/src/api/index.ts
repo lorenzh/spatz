@@ -1,5 +1,11 @@
 // api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
+import { join } from "node:path";
+import {
+	formatHarnessModels,
+	type Harness,
+	loadHarnessCatalog,
+} from "../catalog/harness.ts";
 import {
 	buildCatalog,
 	parseModelsArg,
@@ -427,6 +433,18 @@ export function createApi(
 				);
 			const cfg = await getConfig();
 			const resolved = resolveModels(models, deps.env, cfg);
+			if (resolved.source.startsWith("preset:")) {
+				const harness = resolved.source.slice("preset:".length) as Harness;
+				const catalog = await loadHarnessCatalog({
+					fetch: deps.fetch,
+					env: deps.env,
+					cachePath: join(deps.homeDir, ".spatz", "harness-models.json"),
+					clock: deps.clock,
+					ttlMs: cfg.tuning.openRouterCacheMs,
+					timeoutMs: cfg.tuning.openRouterTimeoutMs,
+				});
+				resolved.value = formatHarnessModels(catalog.harnesses[harness].models);
+			}
 			let parsed: ReturnType<typeof parseModelsArg>;
 			try {
 				parsed = parseModelsArg(resolved.value);
@@ -446,7 +464,12 @@ export function createApi(
 			if (catalog.length === 0)
 				throw new Error("--models: no usable candidate");
 			// The task text goes to classify (and maybe Jev) only; it is never stored.
-			const c = await classify(task, catalog, deps.jev, cfg);
+			const c = await classify(
+				task,
+				catalog,
+				deps.env.SPATZ_NO_NETWORK === "1" ? null : deps.jev,
+				cfg,
+			);
 			return withStore((store) => {
 				const d = recommend(
 					{ classification: c, random: deps.random(), tuning: cfg.tuning },
