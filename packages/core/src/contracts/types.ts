@@ -235,6 +235,7 @@ export type SignalSource =
 	| "report"
 	| "PostToolUse"
 	| "PostToolUseFailure"
+	| "Stop"
 	| "claude-code-mod";
 
 export interface SignalRecord {

@@ -266,13 +266,16 @@ Text output is `linked: <suggestion_id>  agent: <agent_id>`.
 
 ## spatz hook
 
-This command is the entry point for Claude Code and Codex hooks. It reads the hook JSON from stdin and records signals and token usage. With `--agent codex`, spatz reads shell exit codes from the Codex rollout at turn end and matches calls to outputs by call id. See [hooks.md](hooks.md).
+This command is the entry point for Claude Code and Codex hooks. It reads the hook JSON from stdin and records signals and token usage.
+With `--agent codex`, spatz reads completed command events from the rollout at turn end.
+For older rollouts, it matches calls to outputs by call id. See [hooks.md](hooks.md).
 
 | Argument | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `<event>` | string, positional | none | The hook event name. spatz takes the event from `hook_event_name` in the stdin JSON. The argument only makes the settings file easier to read. |
 
-The command prints nothing and always exits with code 0. It ignores invalid JSON and all errors. A hook can never block a Claude Code session.
+The command prints nothing by default and always exits with code 0. It ignores invalid JSON and all errors.
+With `SPATZ_DEBUG=1`, hooks write fixed diagnostics to stderr. They contain no prompt text or tool output.
 
 ### Example
 
