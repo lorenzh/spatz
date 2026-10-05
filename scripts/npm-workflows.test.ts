@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,38 @@ async function workflowScript(file: string, job: string, id: string) {
 	const script = workflow.jobs[job]?.steps.find((step) => step.id === id)?.run;
 	if (!script) throw new Error("Workflow step is missing");
 	return script;
+}
+
+// Git in a temp repo. Inherited git variables (hooks export GIT_DIR) would
+// redirect every call to the real repository, so they are dropped.
+function tempGit(
+	dir: string,
+	base: Record<string, string | undefined> = process.env,
+) {
+	const env = {
+		...Object.fromEntries(
+			Object.entries(base).filter(([key]) => !key.startsWith("GIT_")),
+		),
+		HOME: dir,
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_CONFIG_NOSYSTEM: "1",
+	};
+	const git = (...args: string[]) => {
+		const result = Bun.spawnSync(
+			[
+				"git",
+				"-c",
+				"user.name=Test",
+				"-c",
+				"user.email=test@example.com",
+				...args,
+			],
+			{ cwd: dir, env },
+		);
+		if (result.exitCode) throw new Error(result.stderr.toString());
+		return result.stdout.toString().trim();
+	};
+	return { env, git };
 }
 
 test("npm workflow accepts only trusted release runs or direct manual dispatch", async () => {
@@ -307,27 +339,7 @@ test.skipIf(process.platform === "win32")(
 	async () => {
 		const temp = await mkdtemp(join(tmpdir(), "spatz-nightly-"));
 		try {
-			const env = {
-				...process.env,
-				HOME: temp,
-				GIT_CONFIG_GLOBAL: "/dev/null",
-				GIT_CONFIG_NOSYSTEM: "1",
-			};
-			const git = (...args: string[]) => {
-				const result = Bun.spawnSync(
-					[
-						"git",
-						"-c",
-						"user.name=Test",
-						"-c",
-						"user.email=test@example.com",
-						...args,
-					],
-					{ cwd: temp, env },
-				);
-				if (result.exitCode) throw new Error(result.stderr.toString());
-				return result.stdout.toString().trim();
-			};
+			const { env, git } = tempGit(temp);
 			git("init", "-q");
 			git("commit", "--allow-empty", "-qm", "initial");
 			const previous = git("rev-parse", "HEAD");
@@ -389,6 +401,40 @@ test.skipIf(process.platform === "win32")(
 				git("commit", "-qm", "code");
 				expect(await check("false", before)).toBe("changed=true");
 			}
+		} finally {
+			await rm(temp, { recursive: true, force: true });
+		}
+	},
+);
+
+test.skipIf(process.platform === "win32")(
+	"temp git ignores inherited git variables",
+	async () => {
+		const temp = await mkdtemp(join(tmpdir(), "spatz-git-env-"));
+		try {
+			const outer = join(temp, "outer");
+			const inner = join(temp, "inner");
+			await mkdir(outer);
+			await mkdir(inner);
+			const real = tempGit(outer).git;
+			real("init", "-q");
+			real("commit", "--allow-empty", "-qm", "real");
+			const head = real("rev-parse", "HEAD");
+			const config = await Bun.file(join(outer, ".git/config")).text();
+			const { git } = tempGit(inner, {
+				...process.env,
+				GIT_DIR: join(outer, ".git"),
+				GIT_WORK_TREE: outer,
+				GIT_INDEX_FILE: join(outer, ".git/index"),
+			});
+			git("init", "-q");
+			git("commit", "--allow-empty", "-qm", "test");
+			expect(git("rev-parse", "--absolute-git-dir")).toBe(
+				join(await realpath(inner), ".git"),
+			);
+			expect(real("rev-parse", "HEAD")).toBe(head);
+			expect(real("rev-list", "--count", "HEAD")).toBe("1");
+			expect(await Bun.file(join(outer, ".git/config")).text()).toBe(config);
 		} finally {
 			await rm(temp, { recursive: true, force: true });
 		}
