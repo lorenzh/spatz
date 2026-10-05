@@ -9,6 +9,7 @@ import {
 	parseHarnessCatalog,
 } from "../packages/core/src/catalog/harness.ts";
 import { EFFORTS, type Effort } from "../packages/core/src/contracts/types.ts";
+import { assertNoDroppedModels } from "./accept-harness-catalog.ts";
 
 const efforts = (values: unknown): Effort[] =>
 	Array.isArray(values)
@@ -193,10 +194,14 @@ async function extractCodex(dir: string) {
 	return { version, models: parseCodexModelCatalog(JSON.parse(output)) };
 }
 
-/** Keep the file and source versions unchanged until the model data changes. */
+/**
+ * Keep the file and source versions unchanged until the model data changes.
+ * Refuse to drop a current model unless `allowDrop` is set.
+ */
 export async function writeHarnessCatalog(
 	outputPath: string,
 	harnesses: HarnessCatalog["harnesses"],
+	allowDrop = false,
 ): Promise<HarnessCatalog> {
 	const catalog: HarnessCatalog = {
 		schema: 1,
@@ -210,6 +215,7 @@ export async function writeHarnessCatalog(
 			.json()
 			.catch(() => null),
 	);
+	if (!allowDrop) assertNoDroppedModels(old, catalog);
 	if (
 		old &&
 		HARNESSES.every(
@@ -226,6 +232,7 @@ export async function writeHarnessCatalog(
 
 export async function extractHarnessCatalog(
 	outputPath = resolve(import.meta.dir, "../catalog/harness-models.json"),
+	allowDrop = false,
 ) {
 	const temp = await mkdtemp(join(tmpdir(), "spatz-harness-catalog-"));
 	try {
@@ -237,10 +244,11 @@ export async function extractHarnessCatalog(
 			extractClaude(join(temp, "claude")),
 			extractCodex(join(temp, "codex")),
 		]);
-		return await writeHarnessCatalog(outputPath, {
-			"claude-code": claude,
-			codex,
-		});
+		return await writeHarnessCatalog(
+			outputPath,
+			{ "claude-code": claude, codex },
+			allowDrop,
+		);
 	} finally {
 		await rm(temp, { recursive: true, force: true });
 	}
@@ -248,7 +256,11 @@ export async function extractHarnessCatalog(
 
 if (import.meta.main) {
 	try {
-		const catalog = await extractHarnessCatalog(process.argv[2]);
+		const args = process.argv.slice(2);
+		const catalog = await extractHarnessCatalog(
+			args.find((arg) => arg !== "--allow-drop"),
+			args.includes("--allow-drop"),
+		);
 		console.log(JSON.stringify(catalog, null, 2));
 	} catch (error) {
 		console.error(error);
