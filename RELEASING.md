@@ -24,11 +24,11 @@ main ──●──●──●──●──●──●──●──►   
 - Release candidates use the tag `v<version>-rc.<n>`. They are GitHub prereleases and go to npm under the dist-tag `next`, never `latest`.
 - Fix first on `main`, then cherry-pick the fix onto the release branch. A fix that only applies to the release branch is the exception; say so in its pull request.
 - Only fixes go onto a release branch. New features wait for the next minor version.
-- If no new features land on `main` during the candidate phase, you can tag the candidates on `main` and skip the release branch.
+- If no new features land on `main` during the candidate phase, you can skip the release branch: tag the candidates directly on a `main` commit (`v0.2.0-rc.1`) without committing an RC version bump. The release workflow stamps the version from the tag into the build, so `main` keeps the last stable version.
 
 ### Version on `main`
 
-`main` keeps the version of the last stable release.
+`main` keeps the version of the last stable release: its current files never carry a release candidate or an older maintenance version. Commits in its history may contain RC bumps after a merge; only the current tree matters.
 The Git plugin marketplace reads `main`, and each plugin launcher pins `@spatz/cli` to its plugin version. A version on `main` that is not on npm would break the launcher for plugin users.
 Nightly builds therefore carry the last released version plus the date, for example `0.2.0-nightly.20261020+abc1234`. The npm dist-tag `nightly` keeps them apart from releases, so their SemVer order does not matter.
 
@@ -66,16 +66,18 @@ Nightly builds therefore carry the last released version plus the date, for exam
    git push origin v0.2.0
    ```
 
-6. Merge the release branch back into `main` through a pull request. This brings the version bump to `main`, so the Git marketplace and the plugin launchers use `0.2.0`. Do not merge release candidate bumps into `main`: the launchers would pin a version that is only on `next`.
-7. Keep the release branch. Patch releases (`v0.2.1`) follow steps 4 to 6 on the same branch, without a candidate when the fix is small.
+6. Wait until the npm publish workflow has published exactly `0.2.0` (`npm view @spatz/cli@0.2.0 version`). The npm publish runs after the GitHub release and can fail on its own.
+7. Then merge the release branch back into `main` through a pull request. This brings the version bump to `main`, so the Git marketplace and the plugin launchers use `0.2.0`. Never merge while the branch carries a candidate version: plugin launchers on `main` would pin a prerelease.
+8. Keep the release branch. Patch releases (`v0.2.1`) follow steps 4 to 7 on the same branch, without a candidate when the fix is small.
+9. Maintenance of an older minor version: once a newer minor version is released (for example `0.3.0`), a patch on `release/0.2` publishes to the npm dist-tag `v0.2-latest`, not `latest`. Do not merge that branch back into `main`, because `main` must keep the newest stable version. The fix is already on `main` (step 4).
 
 ### Release checklist
 
 - [ ] CI is green on the release branch, and the release workflow passed for the last candidate.
 - [ ] `npm i -g @spatz/cli@next` installs and `spatz --version` prints the candidate.
-- [ ] The plugins from `release/<minor>` load in Claude Code and Codex, and `/spatz status` works.
+- [ ] The plugins from `release/<minor>` load. Claude Code: `/spatz status` answers (mod). Codex: the hooks appear in `/hooks` and a shell command creates no error.
 - [ ] Docs describe every user-visible change of the release.
-- [ ] The final tag published to npm `latest`, and the release branch is merged back into `main`.
+- [ ] npm shows the final version (`latest` for the newest minor), and only then is the release branch merged back into `main`.
 
 ## Release and nightly workflows
 
