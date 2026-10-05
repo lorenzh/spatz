@@ -23,6 +23,8 @@ function session(
 	over: {
 		suggestion?: (n: number) => Out | Promise<Out>;
 		plugins?: Out;
+		link?: Out;
+		sessionIdThrows?: boolean;
 	} = {},
 ) {
 	const registered = new Map<string, unknown>();
@@ -35,11 +37,17 @@ function session(
 	const argvs: string[][] = [];
 	const timeouts: number[] = [];
 	const toasts: string[] = [];
+	const logs: string[] = [];
 	const statuses: (string | undefined)[] = [];
 	const commands: string[] = [];
 	let n = 0;
 	const $ = {
-		session: { id: async () => "sess1" },
+		session: {
+			id: () => {
+				if (over.sessionIdThrows) throw new Error("no session");
+				return Promise.resolve("sess1");
+			},
+		},
 		process: {
 			run: async (argv: string[], init: { timeoutMs: number }) => {
 				argvs.push(argv);
@@ -48,6 +56,8 @@ function session(
 					return over.plugins ?? { exitCode: 0, stdout: "[]", stderr: "" };
 				if (argv[1] === "usage")
 					return { exitCode: 0, stdout: "{}", stderr: "" };
+				if (argv[1] === "link")
+					return over.link ?? { exitCode: 0, stdout: "{}", stderr: "" };
 				n++;
 				if (over.suggestion) return over.suggestion(n);
 				return {
@@ -65,6 +75,7 @@ function session(
 		ui: {
 			toast: (text: string) => toasts.push(text),
 			status: (text: string | undefined) => statuses.push(text),
+			log: (text: string) => logs.push(text),
 		},
 		command: {
 			register: async (c: { name: string }) => {
@@ -75,7 +86,10 @@ function session(
 	} as unknown as EngineInterface;
 	const hook = <T>(name: string) => registered.get(name) as T;
 	const suggests = () =>
-		argvs.filter((a) => a[0] === "spatz" && a[1] !== "usage");
+		argvs.filter(
+			(a) => a[0] === "spatz" && a[1] !== "usage" && a[1] !== "link",
+		);
+	const links = () => argvs.filter((a) => a[1] === "link");
 	const usages = () => argvs.filter((a) => a[1] === "usage");
 	const flag = (argv: string[], name: string) => argv[argv.indexOf(name) + 1];
 
@@ -234,6 +248,8 @@ function session(
 		argvs,
 		timeouts,
 		toasts,
+		logs,
+		links,
 		statuses,
 		commands,
 		suggests,
@@ -253,9 +269,13 @@ describe("subagent scope (default)", () => {
 		expect(passed.model).toBe("sonnet");
 		const [argv] = s.suggests() as [string[]];
 		expect(s.flag(argv, "--scope")).toBe("subagent");
-		expect(s.flag(argv, "--session")).toBe("sess1");
 		expect(s.flag(argv, "--source")).toBe("claude-code-mod");
-		expect(s.flag(argv, "--agent-id")).toBe("tu1");
+		// The agent id and session come with the link after the spawn resolves.
+		expect(argv).not.toContain("--agent-id");
+		expect(argv).not.toContain("--session");
+		expect(s.links()).toEqual([
+			["spatz", "link", "s1", "--agent-id", "a1", "--session", "sess1"],
+		]);
 		const { seen } = await s.step({ turnId: "t1", agentId: "a1" });
 		expect(seen).toMatchObject(SONNET_MEDIUM);
 	});
@@ -300,6 +320,34 @@ describe("subagent scope (default)", () => {
 		await s.start("t2", LONG);
 		expect(passed.model).toBe("inherited");
 		expect(s.argvs).toEqual([]);
+	});
+
+	test("a failing link still associates the agent; a bad spawn result links nothing", async () => {
+		const s = session(
+			{ ...apply },
+			{ link: { exitCode: 1, stdout: "", stderr: "x" } },
+		);
+		await s.spawn({});
+		expect((await s.step({ turnId: "t1", agentId: "a1" })).seen).toMatchObject(
+			SONNET_MEDIUM,
+		);
+		const none = session({ ...apply });
+		await none.spawn({}, { deny: "no" });
+		await none.spawn({}, {});
+		expect(none.links()).toEqual([]);
+	});
+
+	test("a throwing decision leaves the step unchanged and logs once", async () => {
+		const s = session(
+			{ ...apply, scope: "step", main: true },
+			{ sessionIdThrows: true },
+		);
+		await s.start("t1", LONG);
+		for (const index of [0, 1]) {
+			const { seen } = await s.step({ turnId: "t1", index, effort: "low" });
+			expect(seen).toMatchObject({ model: "inherited", effort: "low" });
+		}
+		expect(s.logs).toHaveLength(1);
 	});
 
 	test("a denied spawn creates no association", async () => {
@@ -493,7 +541,7 @@ describe("session scope", () => {
 		expect(s.suggests()).toHaveLength(1);
 		const [argv] = s.suggests() as [string[]];
 		expect(s.flag(argv, "--scope")).toBe("session");
-		expect(argv).not.toContain("--turn");
+		expect(s.flag(argv, "--turn")).toBe("t1");
 		for (const turnId of ["t1", "t2", "t3"])
 			expect((await s.step({ turnId })).seen).toMatchObject(SONNET_MEDIUM);
 	});

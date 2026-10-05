@@ -39,7 +39,7 @@ How the pieces work:
 - `session` decides at the first turn that has text. Later turns reuse that decision.
 - `escalate` counts failing Bash results of test or build commands in the same turn or agent run. A failure is a Bash result that reports an error. After `escalateAfter` failures (2), the pair moves one step up. The mod keeps the new pair for the rest of that turn or run. The counter starts again after each switch.
 - The ladder comes from `models`. The list names the strongest model first. Inside a model the efforts go from low to high. If the current pair is already the top, or is not on the list, nothing changes.
-- For a subagent, the agent id exists only after the spawn. The mod links the suggestion to the `tool_use_id` of the spawn instead. Step and escalation use the real agent id.
+- For a subagent, the agent id exists only after the spawn. The mod asks spatz without session or agent id. After the spawn it calls `spatz link` with the real agent id and the session ([cli.md](cli.md)). Until then the suggestion is in no session window. If the link fails, the mod still routes, but the suggestion has no agent id. Step and escalation use the real agent id from the start.
 
 ## What the mod rewrites
 
@@ -94,7 +94,8 @@ The mod never blocks a request.
 
 - A missing `spatz`, a non-zero exit, invalid JSON or an unsupported model leaves the request unchanged.
 - The recommendation call stops after 6 seconds. A `spatz usage` call stops after 2 seconds. The check for `spatz-hooks` stops after 3 seconds.
-- A denied spawn, or a spawn result without an agent id, creates no link to an agent.
+- A denied spawn, or a spawn result without an agent id, creates no link to an agent. A failed `spatz link` call (2 seconds) changes nothing else.
+- If the decision for a request fails with an error, the mod logs one debug line and sends the request unchanged.
 - Each hook passes the event on exactly once.
 
 ## Privacy

@@ -114,6 +114,34 @@ export async function suggest(
 	}
 }
 
+/** `spatz link`: gives a spawn-time suggestion the real agent id and the session. Fails open: false on any error. */
+export async function linkAgent(
+	run: Run,
+	suggestionId: string,
+	agentId: string,
+	session: string | undefined,
+	spatz = "spatz",
+): Promise<boolean> {
+	if (!session) return false;
+	try {
+		const { exitCode } = await run(
+			[
+				spatz,
+				"link",
+				suggestionId,
+				"--agent-id",
+				agentId,
+				"--session",
+				session,
+			],
+			{ timeoutMs: USAGE_TIMEOUT_MS },
+		);
+		return exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
 /** `spatz usage`: tokens and the answering model of one turn (or step). Fails open: false on any error. */
 export async function recordUsage(
 	run: Run,

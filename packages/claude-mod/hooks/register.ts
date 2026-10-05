@@ -3,6 +3,7 @@ import {
 	aliasFor,
 	type Decision,
 	type Link,
+	linkAgent,
 	type Run,
 	recordUsage,
 	type Scope,
@@ -37,6 +38,7 @@ interface Io {
 	run: Run;
 	sessionId(): Promise<string | undefined>;
 	status(text: string | undefined): void;
+	log(text: string): void;
 	toast(text: string): void;
 }
 
@@ -46,6 +48,7 @@ function bind($: EngineInterface): Io {
 		sessionId: () => $.session.id().catch(() => undefined),
 		status: (text) => $.ui.status(text),
 		toast: (text) => $.ui.toast(text),
+		log: (text) => $.ui.log(text, { to: "debug" }),
 	};
 }
 
@@ -70,6 +73,7 @@ export function register(on: On, options: PluginOptions = {}) {
 	let last: Decision | undefined;
 	let hooksPlugin: Promise<boolean> | undefined;
 	let noticed = false;
+	let logged = false;
 
 	const show = (io: Io) => {
 		try {
@@ -81,8 +85,9 @@ export function register(on: On, options: PluginOptions = {}) {
 		io: Io,
 		task: string,
 		link: Omit<Link, "session">,
+		withSession = true,
 	): Promise<Decision | undefined> {
-		const session = await io.sessionId();
+		const session = withSession ? await io.sessionId() : undefined;
 		const d = await suggest(
 			io.run,
 			task,
@@ -198,15 +203,23 @@ export function register(on: On, options: PluginOptions = {}) {
 			return result;
 		}
 		if (s.scope !== "subagent" && s.scope !== "escalate") return next(e);
-		// The agent id exists only after the spawn: the spawn's tool_use_id keeps this suggestion in its own window.
-		const d = await decide(io, e.prompt, {
-			scope: s.scope,
-			agentId: e.tool_use_id,
-		});
+		// The agent id exists only after the spawn: ask without session or agent, then link.
+		const d = await decide(io, e.prompt, { scope: s.scope }, false);
 		if (!d) return next(e);
 		const alias = s.mode === "apply" ? aliasFor(d.model) : undefined;
 		const result = await next(alias ? { ...e, model: alias } : e);
-		if (result.agentId && !result.deny) agents.set(result.agentId, d);
+		if (result.agentId && !result.deny) {
+			agents.set(result.agentId, d);
+			try {
+				await linkAgent(
+					io.run,
+					d.suggestionId,
+					result.agentId,
+					await io.sessionId().catch(() => undefined),
+					s.spatz,
+				);
+			} catch {}
+		}
 		return result;
 	});
 
@@ -219,7 +232,10 @@ export function register(on: On, options: PluginOptions = {}) {
 				else if (s.scope === "session") {
 					if (!sessionTried && e.text) {
 						sessionTried = true;
-						sessionDecision = await decide(io, e.text, { scope: "session" });
+						sessionDecision = await decide(io, e.text, {
+							scope: "session",
+							turn: e.turnId,
+						});
 					}
 				} else if (s.scope !== "subagent") {
 					const long = e.text.length >= s.minPromptChars;
@@ -236,7 +252,17 @@ export function register(on: On, options: PluginOptions = {}) {
 
 	on("turn.step", async function* ($, e, next) {
 		const io = bind($);
-		const d = s.mode === "off" ? undefined : await pick(io, e);
+		let d: Decision | undefined;
+		try {
+			d = s.mode === "off" ? undefined : await pick(io, e);
+		} catch (error) {
+			if (!logged) {
+				logged = true;
+				try {
+					io.log(`spatz: decision failed, step unchanged: ${error}`);
+				} catch {}
+			}
+		}
 		if (d) used.set(e.turnId, d);
 		const result = yield* next(
 			d && applies(e.agentId) ? { ...e, model: d.model, effort: d.effort } : e,

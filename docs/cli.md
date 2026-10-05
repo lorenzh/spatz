@@ -40,7 +40,7 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 | `--dry-run` | boolean | `false` | Mark the suggestion as a test (`is_test: true`). A test suggestion never counts for learning or for `spatz stats`. |
 | `--scope <scope>` | string | `null` | Store `step`, `turn`, `subagent`, `session` or `escalate`. This labels the routing decision. |
-| `--session <id>` | string | `null` | Link the suggestion at creation. This does not need a Bash hook. |
+| `--session <id>` | string | `null` | Link the suggestion at creation. This does not need a Bash hook. With `--source claude-code-mod`, you must also give `--turn` or `--agent-id`. Otherwise the call fails. |
 | `--turn <id>` | string | `null` | Store the initial turn id. |
 | `--agent-id <id>` | string | `null` | Store the subagent id. Without it, the suggestion uses the main window. |
 | `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code`, `claude-code-mod` or `codex`. |
@@ -216,6 +216,28 @@ If the suggestion has an agent id, `is_sidechain` is true.
 If completion has no usage, do not submit invented zero counts.
 If one turn used several models, its completion usage names only the last response model.
 The command does not infer a per-model breakdown.
+
+## spatz link
+
+A subagent has no id when its suggestion is made. `spatz link` adds the agent id and the session afterwards.
+Until then, the suggestion has no session and sits in no session window, so it cannot close the window of the main session.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `<suggestion_id>` | required | The existing suggestion id. |
+| `--agent-id <id>` | required | The real agent id. |
+| `--session <id>` | required | The session of the agent. |
+| `--json` | `false` | Print `suggestion_id` and `agent_id`. |
+
+The command is idempotent. A second call with the same agent id changes nothing.
+A call with another agent id fails with exit code 1, because the suggestion already belongs to one agent.
+After the link, the suggestion joins the window sequence of that agent.
+
+```sh
+spatz link <suggestion_id> --agent-id agent-1 --session session-1
+```
+
+Text output is `linked: <suggestion_id>  agent: <agent_id>`.
 
 ## spatz hook
 
