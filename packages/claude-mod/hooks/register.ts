@@ -24,13 +24,16 @@ import {
 // ponytail: keyword regexes, not a shell parser.
 const PREFIX = String.raw`^(?:\w+=\S*\s+)*(?:(?:rtk(?:\s+proxy)?|time|npx|bunx|pnpx|uv\s+run|poetry\s+run|python3?\s+-m)\s+)*`;
 const TEST_OR_BUILD = new RegExp(
-	String.raw`${PREFIX}(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:test|build)|pytest|(?:go|cargo)\s+(?:test|build)|vitest|jest|tsc|make)(?:\s|$)`,
+	String.raw`${PREFIX}(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:test|build)|pytest|(?:go|cargo)\s+(?:test|build)|vitest|jest|tsc|make(?:\s+-\S+)*(?:\s+(?:build|all|test|check))?(?:\s+-\S+)*\s*$)(?:\s|$)`,
 );
 function isTestOrBuild(command: string): boolean {
 	const plain = command.trim().replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, "''");
 	if (/[|;&\n`]|\$\(/.test(plain.replaceAll("&&", " "))) return false;
 	const last = plain.split("&&").pop()?.trim() ?? "";
-	return TEST_OR_BUILD.test(last);
+	return (
+		TEST_OR_BUILD.test(last) &&
+		!/\s(?:--collect-only|--co|--help|-h|--version)(?:\s|$)/.test(last)
+	);
 }
 
 /** What the hooks use of `$`; a hooks module may pass `$` only to a top-level function, so helpers take this. */

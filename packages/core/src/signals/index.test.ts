@@ -107,6 +107,23 @@ describe("isIgnoredHookInput", () => {
 
 describe("detectCommandKind", () => {
 	test.each([
+		"make clean",
+		"make install",
+		"make -j4 clean",
+		"pytest --collect-only",
+		"pytest --co -q",
+		"pytest --help",
+		"cargo test --help",
+	])("%p -> null (no false pass)", (cmd) => {
+		expect(detectCommandKind(cmd)).toBeNull();
+	});
+	test.each(["make -j4", "make build", "make all"])("%p -> build", (cmd) => {
+		expect(detectCommandKind(cmd)).toBe("build");
+	});
+	test.each(["make test", "make check"])("%p -> test", (cmd) => {
+		expect(detectCommandKind(cmd)).toBe("test");
+	});
+	test.each([
 		"bun test",
 		"npm test",
 		"npm run test",
@@ -288,6 +305,23 @@ const fail = (command: string): PostToolUseFailureInput => ({
 });
 
 describe("signalFromBashEvent", () => {
+	test("failures that never reached the runner give no signal", () => {
+		const f = (error: string, is_interrupt = false) => ({
+			...fail("cd /missing && bun test"),
+			error,
+			is_interrupt,
+		});
+		for (const e of [
+			f("Exit code 1\ncd: /missing: No such file or directory"),
+			f("Exit code 126\nbash: permission denied"),
+			f("Exit code 127\nbun: command not found"),
+			f("Exit code 130", true),
+		])
+			expect(signalFromBashEvent(e, "sid", 1)).toBeNull();
+		expect(
+			signalFromBashEvent(fail("cd pkg && bun test"), "sid", 1)?.value,
+		).toBe(0);
+	});
 	test("PostToolUse bun test -> test 1", () => {
 		expect(signalFromBashEvent(ok("bun test"), "sid", 123)).toEqual({
 			suggestion_id: "sid",
