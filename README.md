@@ -103,13 +103,41 @@ See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recomme
 
 | Integration | What it does | Setup |
 | --- | --- | --- |
-| Claude Code hooks | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
-| Codex CLI hooks | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
-| Claude Code mod | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
+| Claude Code `spatz-hooks` plugin | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
+| Codex `spatz-hooks` plugin | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
+| Claude Code `spatz` plugin (mod) | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
 | Other agents | Request recommendations and report outcomes through the CLI. | [CLI reference](docs/cli.md) |
 
 The Claude Code mod supports `step`, `turn`, `subagent`, `session`, and `escalate` routing scopes.
 Hooks and the mod can run together. The mod's `record: auto` avoids duplicate usage recording with the `spatz-hooks` plugin.
+
+### Install the plugins
+
+In Claude Code:
+
+```text
+/plugin marketplace add lorenzh/spatz
+/plugin install spatz-hooks@spatz
+/plugin install spatz@spatz
+```
+
+`spatz-hooks` records outcomes. `spatz` is the mod that recommends or applies model and effort. Install one or both.
+
+In Codex:
+
+```bash
+codex plugin marketplace add lorenzh/spatz
+codex plugin add spatz-hooks@spatz
+```
+
+Codex runs new hooks only after you trust them with `/hooks`.
+
+Every plugin ships the `spatz` skill, which tells the agent when to ask spatz and how to report results, so you do not need to edit your agent instructions.
+The plugins also ship a launcher. It uses `spatz` from your `PATH` if present. Otherwise it runs the matching `@spatz/cli` version through Bun or npx, which downloads about 60 MB on first use.
+Codex hooks time out after 10 seconds, so run the launcher once before the first session: `"<plugin root>/bin/spatz" --version`.
+The plugins need a POSIX shell. Native Windows is not supported yet.
+If you added spatz hooks to `~/.claude/settings.json` or `~/.codex/hooks.json` by hand, remove them to avoid duplicate records.
+See [Installation](docs/installation.md) for details.
 
 ## Privacy
 
@@ -143,7 +171,7 @@ Archives include the runtime. You do not need Node.js or Bun installed.
 
 Choose `linux` or `darwin` (macOS), then `x64` or `arm64`.
 Apple Silicon uses `darwin-arm64`. Linux builds need glibc.
-Windows x64 ZIP archives are experimental. Windows hooks are untested.
+Windows x64 ZIP archives are experimental. The agent plugins do not support native Windows.
 
 Check the checksum before extraction. This Linux x64 example uses version `0.1.0`:
 

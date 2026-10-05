@@ -1,0 +1,50 @@
+{
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "Bash|Agent",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook PostToolUse",
+						"async": true
+					}
+				]
+			}
+		],
+		"PostToolUseFailure": [
+			{
+				"matcher": "Bash",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook PostToolUseFailure",
+						"async": true
+					}
+				]
+			}
+		],
+		"Stop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook Stop",
+						"async": true
+					}
+				]
+			}
+		],
+		"SubagentStop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook SubagentStop",
+						"async": true
+					}
+				]
+			}
+		]
+	}
+}

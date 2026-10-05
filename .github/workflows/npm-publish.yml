@@ -125,7 +125,7 @@ jobs:
       - name: Download and verify release assets
         run: |
           test "$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId)" = "$RELEASE_ID"
-          gh release download "$RELEASE_TAG" --dir archives --pattern '*.tar.gz' --pattern '*.zip' --pattern '*.sha256' --pattern SHA256SUMS
+          gh release download "$RELEASE_TAG" --dir archives --pattern '*.tar.gz' --pattern '*.zip' --pattern '*.sha256' --pattern SHA256SUMS --pattern marketplace.json
           test "$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId)" = "$RELEASE_ID"
           cd archives
           sha256sum --check SHA256SUMS

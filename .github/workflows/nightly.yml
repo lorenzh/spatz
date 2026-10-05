@@ -47,7 +47,7 @@ jobs:
           previous="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == "nightly") | .target_commitish')"
           if [[ "$FORCE" != true ]] && [[ "$previous" =~ ^[0-9a-f]{40}$ ]] &&
              git cat-file -e "$previous^{commit}" 2>/dev/null &&
-             git diff --quiet "$previous" "$sha" -- packages/ scripts/ package.json bun.lock .github/workflows/; then
+             git diff --quiet "$previous" "$sha" -- packages/ scripts/ package.json bun.lock .github/workflows/ .claude-plugin/; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -67,6 +67,7 @@ jobs:
     with:
       version: ${{ needs.version.outputs.version }}
       ref: ${{ needs.version.outputs.sha }}
+      tag: nightly
 
   release:
     needs: [version, build]
@@ -99,7 +100,7 @@ jobs:
           if [[ -n "$tag" ]]; then gh api --method DELETE "repos/$GH_REPO/git/refs/tags/nightly"; fi
           printf 'Unstable nightly build: %s (UTC).\n\nCommit: %s\nVersion: %s\n' \
             "$RELEASE_DATE" "$RELEASE_SHA" "$RELEASE_VERSION" > notes.md
-          mapfile -t assets < <(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -print | sort)
+          mapfile -t assets < <(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name 'marketplace.json' \) -print | sort)
           gh release create nightly "${assets[@]}" SHA256SUMS \
             --target "$RELEASE_SHA" --prerelease --latest=false \
             --title "Nightly $RELEASE_DATE" --notes-file notes.md

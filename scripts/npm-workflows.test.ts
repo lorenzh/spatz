@@ -378,6 +378,7 @@ test.skipIf(process.platform === "win32")(
 				"package.json",
 				"bun.lock",
 				".github/workflows/test.yml",
+				".claude-plugin/marketplace.json",
 			]) {
 				const before = git("rev-parse", "HEAD");
 				await mkdir(join(temp, file, ".."), { recursive: true });

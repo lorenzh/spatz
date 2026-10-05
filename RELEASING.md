@@ -1,13 +1,13 @@
 ---
 title: Releasing spatz
-description: How to publish release archives and npm packages, and control nightly builds.
+description: How to publish CLI and Claude Code plugin archives and npm packages, and control nightly builds.
 tags: [spatz, cli, releases]
-keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing]
+keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
 ---
 
 # Releasing spatz
 
-1. Bump `version` in `packages/cli/package.json` to the next SemVer version, for example `0.2.0`.
+1. Run `bun scripts/release-version.ts v0.2.0` with the next SemVer version. Include all five manifests in the version bump.
 2. Run the gates in [CONTRIBUTING.md](CONTRIBUTING.md). Commit the bump and merge it into `main` through a pull request.
 3. Tag the merged commit and push the tag:
 
@@ -19,7 +19,7 @@ keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, do
    ```
 
 The release workflow rejects tags that do not contain a valid SemVer version.
-It sets the CLI package version from the tag before the frozen dependency install.
+It sets the CLI version, all three plugin manifest versions and both Claude Code marketplace entry versions from the tag.
 Each native runner runs the tests, typecheck, lint, build, and archive smoke test.
 GitHub publishes the archives, SHA256 checksums, and generated release notes after all builds pass.
 Versions such as `v0.2.0-rc.1` produce prereleases.
@@ -27,7 +27,7 @@ Build metadata alone does not make a prerelease: `v0.2.0+build.1` remains a stab
 
 The nightly workflow runs daily at 03:00 UTC and accepts manual runs from GitHub Actions.
 The workflow builds its triggering commit (`github.sha`) and compares it with the previous nightly commit.
-Changes under `packages/`, `scripts/`, `package.json`, `bun.lock`, or `.github/workflows/` trigger a build.
+Changes under `packages/`, `scripts/`, `package.json`, `bun.lock`, `.github/workflows/`, or `.claude-plugin/` trigger a build.
 Documentation-only changes do not trigger a build.
 If Git cannot resolve the previous commit, the workflow builds.
 For a manual rebuild, enable the boolean `force` input. Its default is `false`.
@@ -51,6 +51,37 @@ Use your host's OS and architecture in the archive name. The build script suppor
 The smoke test checks the checksum, version, dry-run suggestion, and DuckDB statistics outside the checkout.
 It uses the preinstalled DuckDB SQLite extension and sets dead HTTP proxies.
 See [README.md](README.md#releases) for download and installation instructions.
+
+## Claude Code plugins
+
+The shared build workflow packs all three plugin directories once on Linux for releases and nightlies:
+
+- `spatz-claude-plugin-<version>.zip`: the `spatz` mod.
+- `spatz-claude-hooks-<version>.zip`: the `spatz-hooks` command hooks.
+- `spatz-codex-hooks-<version>.zip`: the Codex `spatz-hooks` plugin.
+- `marketplace.json`: the release marketplace with HTTPS archive URLs and SHA-256 pins.
+
+Each file has a `.sha256` companion and an entry in `SHA256SUMS`.
+Asset filenames replace `+` with `-`. Versions inside manifests keep the original SemVer string.
+The build excludes generated mod types, local `tsconfig.json` and `node_modules` from ZIPs.
+Plugin launchers download the pinned CLI when needed.
+
+The repository marketplace keeps relative sources for installation from Git.
+The build generates the archive-source marketplace in `dist`. The repository marketplace keeps its sources.
+Stable URLs use the release tag. Nightly URLs use the fixed `nightly` tag.
+Claude Code 2.1.289 passed validation for both source formats.
+See [installation](docs/installation.md#install-a-specific-release) for release and manual ZIP installation.
+
+To pack plugins locally, install `zip`. Then run:
+
+```bash
+bun scripts/release-version.ts v0.2.0
+bun scripts/build-plugins.ts 0.2.0
+```
+
+The plugin archive test also needs `unzip`.
+The release build does not commit its version changes back to Git.
+Before tagging, commit the version bump so Git marketplace users receive the new plugin version.
 
 ## npm packages
 
@@ -132,3 +163,12 @@ bun scripts/npm-packages.ts dist 0.2.0 /tmp/spatz-npm-packages
 The script requires all four Linux/macOS archives. Windows is optional.
 For a local smoke test with only a host archive, append its target, such as `linux-x64`.
 The publish workflow always requires the complete Linux/macOS set.
+
+## Plugin assets
+
+Edit `skills/spatz/SKILL.md` as the single source for all plugin skills.
+Run `bun scripts/plugin-assets.ts` after changes and commit the generated copies and launchers.
+The release version script and plugin archive build also run this step.
+Each `bin/spatz` pins the version from its plugin manifest.
+Tests check skill equality, launcher behavior, version stamping, and executable permissions after ZIP extraction.
+Git marketplace installs use the committed copies and need no build step.

@@ -123,6 +123,47 @@ describe("detectCommandKind", () => {
 	});
 
 	test.each([
+		'spatz "fix bug" --json',
+		'rtk spatz "fix bug"',
+		'rtk proxy spatz "fix bug"',
+		'npx @spatz/cli "fix bug"',
+		'npx --yes @spatz/cli "fix bug"',
+		'npx -y @spatz/cli@0.1.0 "fix bug"',
+		'npx @spatz/cli@nightly "fix bug"',
+		'bunx @spatz/cli "fix bug"',
+		'bunx --bun @spatz/cli "fix bug"',
+		'npm exec @spatz/cli -- "fix bug"',
+		'bunx @spatz/cli@1.2.3-rc.1 "fix bug"',
+		'rtk proxy npx -y @spatz/cli@0.1.0 "fix bug"',
+		'/plugins/spatz/bin/spatz "fix bug"',
+		'"/plugins/with spaces/bin/spatz" "fix bug"',
+		`"\${CLAUDE_PLUGIN_ROOT}/bin/spatz" "fix bug"`,
+		`"\${PLUGIN_ROOT}/bin/spatz" "fix bug"`,
+		"'/plugins/with spaces/bin/spatz' 'fix bug'",
+	])("launcher suggestion: %p", (cmd) => {
+		expect(detectCommandKind(cmd)).toBe("spatz-suggest");
+	});
+
+	test.each([
+		'npx -y @spatz/cli-extra "fix bug"',
+		'npx -y @other/cli "fix bug"',
+		'bunx spatz "fix bug"',
+		'bunx @spatz/cli@ "fix bug"',
+		'echo npx @spatz/cli "fix bug"',
+		'echo "x; npx @spatz/cli fix"',
+		'echo "/plugins/bin/spatz" "fix bug"',
+		'/plugins/bin/spatz-extra "fix bug"',
+		"npx -y @spatz/cli report id",
+		"bunx @spatz/cli hook Stop",
+		'"/plugins/bin/spatz" stats --json',
+		"spatz link id --session s",
+		"spatz --version",
+		'spatz "report" id',
+	])("launcher lookalike or subcommand: %p", (cmd) => {
+		expect(detectCommandKind(cmd)).toBeNull();
+	});
+
+	test.each([
 		"spatz report abc --model m --effort low --result pass",
 		"spatz stats",
 		"spatz hook Stop",
