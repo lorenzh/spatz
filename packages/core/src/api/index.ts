@@ -595,6 +595,8 @@ export function createApi(
 
 		async stats({ type, by }) {
 			const cfg = await getConfig();
+			// Opening the store runs migrations; the read-only DuckDB scan cannot.
+			await withStore(() => {});
 			const runStats =
 				internals.runStats ?? (await import("../report/index.ts")).runStats;
 			return runStats({

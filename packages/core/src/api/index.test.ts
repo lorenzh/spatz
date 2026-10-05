@@ -1254,6 +1254,68 @@ describe("stats", () => {
 });
 
 describe("direct mod attribution", () => {
+	test("stats opens the store first so migrations run on an old database", async () => {
+		const s = setup();
+		const order: string[] = [];
+		const api = createApi(
+			{
+				...s.deps,
+				openStore: (path) => {
+					order.push("open");
+					return s.deps.openStore(path);
+				},
+			},
+			{
+				runStats: async () => {
+					order.push("runStats");
+					return {
+						by_type: [],
+						coverage: 0,
+						learned_success: null,
+						control_success: null,
+					};
+				},
+			},
+		);
+		await api.stats({ by: "scope" });
+		expect(order).toEqual(["open", "runStats"]);
+	});
+
+	test("suggest with --session closes the earlier suggestion of the same scope only", async () => {
+		const s = setup();
+		const mod = { session: SESSION, source: "claude-code-mod" as const };
+		const main1 = await s.api.suggest({
+			...suggestInput(),
+			...mod,
+			turn: "t1",
+		});
+		s.setNow(T0 + 1);
+		const sub1 = await s.api.suggest({
+			...suggestInput(),
+			...mod,
+			agentId: "a1",
+		});
+		s.setNow(T0 + 2);
+		const main2 = await s.api.suggest({
+			...suggestInput(),
+			...mod,
+			turn: "t2",
+		});
+		expect(s.store.getSuggestion(main1.suggestion_id)?.closed_at).toBe(T0 + 2);
+		expect(s.store.getSuggestion(sub1.suggestion_id)?.closed_at).toBeNull();
+		expect(s.store.getSuggestion(main2.suggestion_id)?.closed_at).toBeNull();
+	});
+
+	test("suggest rejects an invalid scope or source before storing", async () => {
+		const s = setup();
+		await expect(
+			s.api.suggest({ ...suggestInput(), scope: "bogus" as never }),
+		).rejects.toThrow("invalid scope");
+		await expect(
+			s.api.suggest({ ...suggestInput(), source: "bogus" as never }),
+		).rejects.toThrow("invalid source");
+	});
+
 	test("suggest links session, turn, agent and scope at creation", async () => {
 		const s = setup();
 		const first = await s.api.suggest({
@@ -1406,6 +1468,16 @@ describe("direct mod attribution", () => {
 			).toEqual([
 				{ turn_id: "t1", agent_id: "a1", source: "claude-code-mod" },
 				{ turn_id: "t2", agent_id: "a1", source: "claude-code-mod" },
+			]);
+			expect(
+				db
+					.query(
+						"SELECT scope_key, turn_id, agent_id FROM usages WHERE source = 'report' ORDER BY turn_id",
+					)
+					.all(),
+			).toEqual([
+				{ scope_key: "t1", turn_id: "t1", agent_id: "a1" },
+				{ scope_key: "t2", turn_id: "t2", agent_id: "a1" },
 			]);
 			expect(db.query("SELECT quality FROM outcomes").get()).toEqual({
 				quality: 0,
