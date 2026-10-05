@@ -35,7 +35,7 @@ test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 				expect(marketplace.plugins).toHaveLength(2);
 				for (const plugin of marketplace.plugins) {
 					const name =
-						plugin.name === "spatz"
+						plugin.name === "spatz-mod"
 							? "spatz-claude-plugin"
 							: "spatz-claude-hooks";
 					const archive = join(out, `${name}-9.8.7-rc.1-build-test.zip`);
@@ -92,7 +92,7 @@ test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 							join(codexExtract, ".codex-plugin/plugin.json"),
 						).json()
 					).name,
-				).toBe("spatz-hooks");
+				).toBe("spatz");
 				expect(
 					await Bun.file(join(codexExtract, "hooks/hooks.json")).exists(),
 				).toBe(true);

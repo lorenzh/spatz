@@ -139,6 +139,9 @@ describe("detectCommandKind", () => {
 		'"/plugins/with spaces/bin/spatz" "fix bug"',
 		`"\${CLAUDE_PLUGIN_ROOT}/bin/spatz" "fix bug"`,
 		`"\${PLUGIN_ROOT}/bin/spatz" "fix bug"`,
+		'~/.codex/plugins/cache/spatz/spatz/0.1.1/bin/spatz "fix bug"',
+		'~/.claude/plugins/cache/spatz-mod/spatz/0.1.1/bin/spatz "fix bug"',
+		'~/.claude/plugins/cache/spatz/spatz/0.1.1/bin/spatz "fix bug"',
 		"'/plugins/with spaces/bin/spatz' 'fix bug'",
 	])("launcher suggestion: %p", (cmd) => {
 		expect(detectCommandKind(cmd)).toBe("spatz-suggest");

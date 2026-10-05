@@ -60,21 +60,30 @@ Add the marketplace inside Claude Code:
 
 | Setup | Install command | What it does and records |
 | --- | --- | --- |
-| Hooks only | `/plugin install spatz-hooks@spatz` | Records test/build signals and transcript usage for linked suggestions. It does not request recommendations or switch models. Run `spatz` yourself or through your agent. |
-| Mod only | `/plugin install spatz@spatz` | Requests recommendations and can apply model and effort. Records usage directly, without automatic outcome signals. Use `spatz report` for outcomes. |
+| Hooks only | `/plugin install spatz@spatz` | Records test/build signals and transcript usage for linked suggestions. It does not request recommendations or switch models. Run `spatz` yourself or through your agent. |
+| Mod only | `/plugin install spatz-mod@spatz` | Requests recommendations and can apply model and effort. Records usage directly, without automatic outcome signals. Use `spatz report` for outcomes. |
 | Both | Run both install commands | The mod routes. With `record: auto`, the hooks record outcome signals and transcript usage. |
+
+If you installed the 0.1.1 hooks plugin as `spatz-hooks@spatz`, migrate it:
+
+```text
+/plugin uninstall spatz-hooks@spatz
+/plugin install spatz@spatz
+```
+
+If you installed the 0.1.1 mod as `spatz@spatz`, that ID now installs the hooks plugin. Install the mod as `spatz-mod@spatz` instead.
 
 The mod needs Claude Code 2.1.287 or newer. Its defaults are `mode: show`, `scope: subagent` and `record: auto`.
 In `show` mode it displays recommendations. To apply them, run `/spatz mode apply`.
 See the [mod guide](claude-mod.md) for routing scopes and persistent options.
 
 With both plugins enabled, keep `record: auto`.
-The mod checks for an enabled `spatz-hooks@…` plugin once per session.
+The mod checks for an enabled `spatz@…` hooks plugin once per session. It also recognizes the legacy `spatz-hooks@…` id.
 It then turns off its own usage recording. If that check fails, the mod records usage.
 Use `/spatz status` to check the recorder. To force hooks-only recording, use `/spatz record off`.
 The shared skill skips CLI recommendations for Claude Code subagents because the mod routes them. It still uses spatz for Codex runs and other harnesses.
 
-When you install `spatz-hooks`, remove hand-written `spatz hook` entries from `~/.claude/settings.json`.
+When you install the `spatz` hooks plugin, remove hand-written `spatz hook` entries from `~/.claude/settings.json`.
 Check project settings for the same entries. Keep unrelated hooks.
 Otherwise, Claude Code runs both copies.
 The mod cannot detect hand-written hooks through the plugin list.
@@ -94,7 +103,7 @@ Replace `v0.2.0` with the release tag:
 ```text
 /plugin marketplace add https://github.com/lorenzh/spatz/releases/download/v0.2.0/marketplace.json
 /plugin install spatz@spatz
-/plugin install spatz-hooks@spatz
+/plugin install spatz-mod@spatz
 ```
 
 Both marketplaces are named `spatz`. Use only one source at a time.
@@ -112,7 +121,7 @@ claude --plugin-dir ./spatz-plugin
 ```
 
 On macOS, use `shasum -a 256 --check` for the checksum.
-Use `spatz-claude-hooks-<version>.zip` for the hooks plugin.
+Use `spatz-claude-hooks-<version>.zip` for the `spatz` hooks plugin. ZIP names stay stable across the plugin ID rename.
 `--plugin-dir` loads an extracted plugin for that session.
 If you load both plugins manually, set `/spatz record off`.
 Automatic detection checks installed plugins.
@@ -124,8 +133,10 @@ Install the Codex marketplace plugin:
 
 ```text
 codex plugin marketplace add lorenzh/spatz
-codex plugin add spatz-hooks@spatz
+codex plugin add spatz@spatz
 ```
+
+If you installed `spatz-hooks@spatz` with Codex 0.1.1, run `codex plugin remove spatz-hooks@spatz`, then `codex plugin add spatz@spatz`, and review and trust the hooks again in `/hooks`. If you installed the 0.1.1 Claude mod as `spatz@spatz`, use `spatz-mod@spatz` for the mod.
 
 Review and trust the new hooks with `/hooks` before they run. Codex stores plugin hooks separately from manually configured hooks. Remove hand-written `spatz hook … --agent codex` entries from `~/.codex/hooks.json` when installing the plugin, or events are recorded twice.
 Codex supplies `PLUGIN_ROOT` to plugin hooks. The plugin's `packages/codex-hooks/hooks/hooks.json` invokes `sh "${PLUGIN_ROOT}/bin/spatz"`.
@@ -135,7 +146,7 @@ Before the first hook, warm the pinned CLI through the plugin launcher:
 "<plugin root>/bin/spatz" --version
 ```
 
-For Codex marketplace installs, the root is `~/.codex/plugins/cache/spatz/spatz-hooks/<version>`; confirm it from Codex's plugin listing. Claude Code's installed plugin path is shown by `/plugin` and is usually `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`. Direct npx warms `@latest`, and Bun has a separate cache. Codex hooks have a 10-second timeout, so warm-up avoids a cold download during a hook.
+For Codex marketplace installs, the root is `~/.codex/plugins/cache/spatz/spatz/<version>`; confirm it from Codex's plugin listing. Claude Code's installed plugin path is shown by `/plugin` and is usually `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`. Direct npx warms `@latest`, and Bun has a separate cache. Codex hooks have a 10-second timeout, so warm-up avoids a cold download during a hook.
 
 Without the plugin, add manual hooks to `~/.codex/hooks.json` using plain `spatz` on `PATH`:
 

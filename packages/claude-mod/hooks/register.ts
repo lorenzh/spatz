@@ -136,7 +136,10 @@ export function register(on: On, options: PluginOptions = {}) {
 			.then(({ exitCode, stdout }) =>
 				exitCode === 0
 					? (JSON.parse(stdout) as { id?: string; enabled?: boolean }[]).some(
-							(p) => p.enabled && p.id?.startsWith("spatz-hooks@"),
+							(p) =>
+								p.enabled &&
+								(p.id?.startsWith("spatz@") ||
+									p.id?.startsWith("spatz-hooks@")),
 						)
 					: false,
 			)
@@ -145,9 +148,7 @@ export function register(on: On, options: PluginOptions = {}) {
 		if (!noticed) {
 			noticed = true;
 			try {
-				io.toast(
-					"spatz: usage recording is off, the spatz-hooks plugin records",
-				);
+				io.toast("spatz: usage recording is off, the spatz plugin records");
 			} catch {}
 		}
 		return false;
@@ -183,7 +184,7 @@ export function register(on: On, options: PluginOptions = {}) {
 		if (args === "" || args === "status") {
 			const record =
 				s.record === "auto"
-					? `auto (${(await recording(io)) ? "on" : "off, spatz-hooks is enabled"})`
+					? `auto (${(await recording(io)) ? "on" : "off, spatz is enabled"})`
 					: s.record;
 			return {
 				text: `spatz\nmode: ${s.mode}\nscope: ${s.scope}\nmain: ${s.main ? "on" : "off"}\nrecord: ${record}\nlast: ${describeDecision(last)}`,
