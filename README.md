@@ -19,7 +19,6 @@ What does not work yet:
 
 - Signal collection works only with Claude Code and Codex CLI hooks. Other coding agents can only use `spatz report`.
 - There is no MCP server.
-- There is no npm package. Use a release archive or a repository clone.
 
 ## How it works
 
@@ -46,6 +45,7 @@ flowchart LR
 
 ## Requirements
 
+- Node.js 18 or newer for npm installation. The platform package includes the Bun runtime.
 - Bun 1.4 for development or installation from source. Release archives include the runtime.
 - Optional: a TypeSafe AI API key for Jev classification. Jev is in early access.
 
@@ -87,11 +87,31 @@ On first use, it downloads DuckDB's SQLite extension into `~/.spatz/duckdb-exten
 Later runs can use that extension offline.
 
 The fixed [`nightly` release](https://github.com/lorenzh/spatz/releases/tag/nightly) is unstable.
-When `main` has a new commit, it updates daily at 03:00 UTC.
-You can also start a manual workflow run.
+When code or release inputs change on `main`, it updates at the next daily run at 03:00 UTC.
+You can also start a manual workflow run with `force` enabled.
 See [RELEASING.md](RELEASING.md) for the release procedure.
 
 ## Install and quickstart
+
+Install the stable version with npm:
+
+```bash
+npm i -g @spatz/cli
+spatz --version
+```
+
+For the unstable nightly version:
+
+```bash
+npm i -g @spatz/cli@nightly
+```
+
+Keep optional dependencies enabled. npm selects the package for your OS and architecture.
+Linux needs glibc and does not support Alpine Linux.
+Windows x64 is experimental. Some releases omit it.
+You can also [download a GitHub release archive](#releases). Archives need neither Node.js nor Bun installed.
+
+To install from source instead:
 
 1. Clone the repository and install the dependencies.
 
