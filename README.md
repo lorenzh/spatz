@@ -106,38 +106,84 @@ See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recomme
 | Claude Code `spatz-hooks` plugin | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
 | Codex `spatz-hooks` plugin | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
 | Claude Code `spatz` plugin (mod) | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
-| Other agents | Request recommendations and report outcomes through the CLI. | [CLI reference](docs/cli.md) |
+| Other agents | Request recommendations and report outcomes through the CLI. | [Installation](docs/installation.md) | CLI and plugin setup, runtime requirements, and release-specific installs. |
+| [CLI reference](docs/cli.md) |
 
 The Claude Code mod supports `step`, `turn`, `subagent`, `session`, and `escalate` routing scopes.
 Hooks and the mod can run together. The mod's `record: auto` avoids duplicate usage recording with the `spatz-hooks` plugin.
 
-### Install the plugins
+### Install for Claude Code
 
-In Claude Code:
+Use macOS or Linux with a POSIX shell. The plugins do not support native Windows.
+Install the [spatz CLI](#quickstart) first so the hooks and mod can find it on `PATH`.
+The mod needs Claude Code 2.1.287 or newer.
 
-```text
-/plugin marketplace add lorenzh/spatz
-/plugin install spatz-hooks@spatz
-/plugin install spatz@spatz
-```
+1. Start Claude Code. Add the marketplace and install the hooks:
 
-`spatz-hooks` records outcomes. `spatz` is the mod that recommends or applies model and effort. Install one or both.
+   ```text
+   /plugin marketplace add lorenzh/spatz
+   /plugin install spatz-hooks@spatz
+   ```
 
-In Codex:
+   The hooks record test/build results and model usage. They do not switch models.
 
-```bash
-codex plugin marketplace add lorenzh/spatz
-codex plugin add spatz-hooks@spatz
-```
+2. Optional: install the mod for automatic recommendations:
 
-Codex runs new hooks only after you trust them with `/hooks`.
+   ```text
+   /plugin install spatz@spatz
+   ```
 
-Every plugin ships the `spatz` skill, which tells the agent when to ask spatz and how to report results, so you do not need to edit your agent instructions.
-The plugins also ship a launcher. It uses `spatz` from your `PATH` if present. Otherwise it runs the matching `@spatz/cli` version through Bun or npx, which downloads about 60 MB on first use.
-Codex hooks time out after 10 seconds, so run the launcher once before the first session: `"<plugin root>/bin/spatz" --version`.
-The plugins need a POSIX shell. Native Windows is not supported yet.
-If you added spatz hooks to `~/.claude/settings.json` or `~/.codex/hooks.json` by hand, remove them to avoid duplicate records.
-See [Installation](docs/installation.md) for details.
+   The mod defaults to `show` mode. To apply recommendations to subagents, run:
+
+   ```text
+   /spatz mode apply
+   /spatz status
+   ```
+
+   When you install both plugins, keep `record: auto`. The hooks then handle recording.
+   To apply recommendations to the main session too, enable `/spatz main on`.
+
+3. Remove any manual `spatz hook` entries from `~/.claude/settings.json` and project settings.
+   Keep unrelated hooks. This avoids duplicate records.
+
+See the [Claude Code mod guide](docs/claude-mod.md) for routing scopes and persistent configuration.
+
+### Install for Codex CLI
+
+Use macOS or Linux with a POSIX shell and a Codex CLI version with plugin support.
+Install the [spatz CLI](#quickstart) first and check `spatz --version` in your terminal.
+
+1. Add the marketplace and install the hooks from your terminal:
+
+   ```bash
+   codex plugin marketplace add lorenzh/spatz
+   codex plugin add spatz-hooks@spatz
+   codex plugin list
+   ```
+
+2. Start Codex. Run `/hooks` to review and trust the spatz hooks.
+   Codex skips plugin hooks until you trust them. See [OpenAI's hook documentation](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
+
+3. Remove any manual `spatz hook … --agent codex` entries from `~/.codex/hooks.json`.
+   Keep unrelated hooks. This avoids duplicate records.
+
+The plugin records shell results and model usage. Its routing skill guides the agent through recommendations and outcome reports.
+It does not automatically switch the Codex model.
+See the [Codex hooks guide](docs/hooks.md#codex-cli) for recorded events and limits.
+
+### Check your setup
+
+If you use Jev, set `TYPESAFE_AI_API_KEY` in the terminal before starting your coding agent.
+Ask your agent to request a recommendation for a real task using its available model and effort pairs.
+Keep the suggestion output unfiltered so the hooks can read its ID.
+After the task, ask the agent to report the actual pair and result with `spatz report`.
+Run `spatz stats` to see recorded outcomes.
+
+Every plugin ships the `spatz` routing skill. You do not need to edit your agent instructions.
+The hooks plugins can also run without a global CLI through their bundled launcher using Bun or npx.
+The first run downloads about 60 MB. Codex hooks time out after 10 seconds.
+For this setup, warm the launcher before the first session with `"<plugin root>/bin/spatz" --version`.
+See [Installation](docs/installation.md) for launcher paths and setup without a global CLI.
 
 ## Privacy
 
