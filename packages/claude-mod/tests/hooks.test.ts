@@ -514,7 +514,13 @@ describe("pinned choices and exploration", () => {
 		}),
 	});
 
-	for (const scope of ["subagent", "step", "escalate"] as const) {
+	for (const scope of [
+		"subagent",
+		"step",
+		"escalate",
+		"turn",
+		"session",
+	] as const) {
 		test(`${scope}: an explicit model or a pinned agent type is not routed, nor are its steps`, async () => {
 			for (const e of [{ model: "opus" }, { subagentType: "Explore" }]) {
 				const s = session({ ...apply, scope });
