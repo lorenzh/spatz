@@ -244,11 +244,11 @@ export function openStore(
 			};
 		},
 		cellStats(taskType) {
-			// Old rows retain null in storage; only catalog-confirmed none-only models can learn from them.
+			// Old rows keep their stored effort; for catalog-confirmed none-only models any effort counts as none.
 			return db
 				.query<CellStat, string[]>(
 					`WITH normalized AS (
-						SELECT *, COALESCE(effort, CASE WHEN model IN (${noneOnlyModels.map(() => "?").join()}) THEN 'none' END) AS known_effort FROM outcomes
+						SELECT *, CASE WHEN model IN (${noneOnlyModels.map(() => "?").join()}) THEN 'none' ELSE effort END AS known_effort FROM outcomes
 					)
 					SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
 					FROM suggestions s JOIN normalized o ON o.suggestion_id = s.id
@@ -380,13 +380,16 @@ export function openStore(
 			});
 		},
 		getUsage(suggestionId, source, scopeKey, model) {
-			return (
-				db
-					.query<UsageRecord, [string, string, string, string]>(
-						"SELECT * FROM usages WHERE suggestion_id = ? AND source = ? AND scope_key = ? AND model = ?",
-					)
-					.get(suggestionId, source, scopeKey, model) ?? null
-			);
+			const row = db
+				.query<
+					Omit<UsageRecord, "is_sidechain"> & { is_sidechain: number },
+					[string, string, string, string]
+				>(
+					"SELECT * FROM usages WHERE suggestion_id = ? AND source = ? AND scope_key = ? AND model = ?",
+				)
+				.get(suggestionId, source, scopeKey, model);
+			// SQLite stores the flag as 0/1; the record type and CLI JSON use a boolean.
+			return row ? { ...row, is_sidechain: row.is_sidechain === 1 } : null;
 		},
 		usageScopes(ids) {
 			return db

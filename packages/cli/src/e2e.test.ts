@@ -472,6 +472,7 @@ test("mod CLI stores explicit attribution, usage replays, direct reports and sco
 			scope_key: "turn-1",
 			agent_id: "agent-1",
 			source: "claude-code-mod",
+			is_sidechain: true,
 		});
 	}
 	const reportArgs = [

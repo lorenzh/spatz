@@ -29,7 +29,7 @@ export interface StatsOptions {
 // success test runs inside SQLite at double precision.
 const base = (q: number, noneOnlyModels: string[]) => `
 WITH s AS (SELECT * FROM db.suggestions WHERE is_test = 0),
-oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, CASE WHEN model IN (${noneOnlyModels.map((id) => `''${id.replaceAll("'", "''")}''`).join(",") || "NULL"}) THEN COALESCE(effort, ''none'') ELSE effort END AS effort, quality >= ${q} AS success FROM outcomes')),
+oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, CASE WHEN model IN (${noneOnlyModels.map((id) => `''${id.replaceAll("'", "''''")}''`).join(",") || "NULL"}) THEN ''none'' ELSE effort END AS effort, quality >= ${q} AS success FROM outcomes')),
 o AS (
 	SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success::INTEGER AS success,
