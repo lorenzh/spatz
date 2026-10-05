@@ -97,8 +97,8 @@ spatz reads the Bash command with regular expressions. It is not a shell parser.
 
 | Kind | Commands |
 | --- | --- |
-| `test` | `bun test`, `npm test`, `pnpm test`, `yarn test`, the same with `run test`, `pytest`, `go test`, `cargo test`, `vitest`, `jest` |
-| `build` | `bun build`, `npm build`, `pnpm build`, `yarn build`, the same with `run build`, `tsc`, `go build`, `cargo build`, `make` |
+| `test` | `bun test`, `npm test`, `pnpm test`, `yarn test`, the same with `run test`, `pytest`, `go test`, `cargo test`, `vitest`, `jest`, `make test`, `make check` |
+| `build` | `bun build`, `npm build`, `pnpm build`, `yarn build`, the same with `run build`, `tsc`, `go build`, `cargo build`, `make`, `make build`, `make all` |
 
 Rules:
 
@@ -106,6 +106,8 @@ Rules:
 - In an `&&` chain, only the last segment counts. All segments before it must be `cd`, `pushd` or `export`.
 - A pipe, `||`, `;`, `&`, a newline, backticks or `$(...)` make the status unclear. spatz then records no signal.
 - spatz skips these prefixes before the command: `VAR=value` assignments, `rtk`, `rtk proxy`, `time`, `npx`, `bunx`, `pnpx`, `uv run`, `poetry run`, `python -m`, `python3 -m`.
+- `make` counts only without a target or with `build`, `all` (build), `test`, `check` (test). `make clean` and other targets give no signal. Runs with `--collect-only`, `--co`, `--help`, `-h` or `--version` give no signal.
+- A failed run gives no signal when it was interrupted or never reached the runner: the error text has `No such file or directory`, `permission denied` or `command not found` (for example `cd /missing && bun test`).
 - Text in quotes is an argument, never a command. spatz ignores redirections like `2>&1`.
 
 | Command | Result |

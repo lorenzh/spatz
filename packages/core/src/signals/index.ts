@@ -43,10 +43,10 @@ const SPATZ_SUGGEST = new RegExp(
 // Each matches only at the command position of a segment: after env assignments and runner prefixes.
 const PREFIX = String.raw`^(?:\w+=\S*\s+)*(?:(?:rtk(?:\s+proxy)?|time|npx|bunx|pnpx|uv\s+run|poetry\s+run|python3?\s+-m)\s+)*`;
 const TEST = new RegExp(
-	String.raw`${PREFIX}(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?test|pytest|(?:go|cargo)\s+test|vitest|jest)(?:\s|$)`,
+	String.raw`${PREFIX}(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?test|pytest|(?:go|cargo)\s+test|vitest|jest|make(?:\s+-\S+)*\s+(?:test|check))(?:\s|$)`,
 );
 const BUILD = new RegExp(
-	String.raw`${PREFIX}(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?build|tsc|(?:go|cargo)\s+build|make)(?:\s|$)`,
+	String.raw`${PREFIX}(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?build|tsc|(?:go|cargo)\s+build|make(?:\s+-\S+)*(?:\s+(?:build|all))?(?:\s+-\S+)*\s*$)(?:\s|$)`,
 );
 
 /** Quoted strings become '' (their text is an argument, never a command); fd redirections like 2>&1 are dropped. */
@@ -54,6 +54,12 @@ const unquote = (command: string) =>
 	command
 		.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, "''")
 		.replace(/\d*>&\d*|&>/g, " ");
+
+// Runs that only list or print help never execute the tests.
+const NO_RUN = /\s(?:--collect-only|--co|--help|-h|--version)(?:\s|$)/;
+// Failure text of a run that never reached the runner (bad cd, missing or non-executable binary).
+const NOT_RUN =
+	/No such file or directory|[Pp]ermission denied|command not found/;
 
 // Setup that may precede the test/build in an && chain without producing the exit status of interest.
 const SETUP = /^(?:cd|pushd|export)(?:\s|$)/;
@@ -78,6 +84,7 @@ export function detectCommandKind(command: string): CommandKind {
 	const segs = plain.split("&&").map((s) => s.trim());
 	const last = segs.pop() ?? "";
 	if (!segs.every((s) => SETUP.test(s))) return null;
+	if (NO_RUN.test(last)) return null;
 	return TEST.test(last) ? "test" : BUILD.test(last) ? "build" : null;
 }
 
@@ -101,6 +108,12 @@ export function signalFromBashEvent(
 	const kind = detectCommandKind(command);
 	if (kind !== "test" && kind !== "build") return null;
 	const failed = input.hook_event_name === "PostToolUseFailure";
+	if (
+		failed &&
+		((input as PostToolUseFailureInput).is_interrupt ||
+			NOT_RUN.test((input as PostToolUseFailureInput).error))
+	)
+		return null;
 	return {
 		suggestion_id: suggestionId,
 		kind,
