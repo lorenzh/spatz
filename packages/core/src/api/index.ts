@@ -1,4 +1,4 @@
-// api: use cases suggest, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
+// api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
 // Spec: "CLI-Schnittstelle", "Ablauf", "Zuordnung", "Genutztes Paar", "Privacy".
 import {
 	buildCatalog,
@@ -16,10 +16,12 @@ import type {
 	HookInput,
 } from "../contracts/hooks.ts";
 import {
+	AGENTS,
 	type Config,
 	EFFORTS,
 	type Effort,
 	REPORT_VALUES,
+	SCOPES,
 	SIGNAL_WEIGHTS,
 	type StatsReport,
 	type UsageRecord,
@@ -132,6 +134,7 @@ export function createApi(
 					session_id: input.session_id,
 					source: fields.source,
 					scope_key: fields.scope_key,
+					agent_id: fields.source === "subagent" ? fields.scope_key : null,
 					message_count: timed.length,
 					from: Math.min(...times),
 					last_at: Math.max(...times),
@@ -149,11 +152,12 @@ export function createApi(
 		};
 
 		return withStore(async (store) => {
-			// Every session event (handbacks are ignored above) is activity: it keeps the open suggestion open.
+			// Each event refreshes its agent window; handbacks are ignored above.
 			const open = store.findOpenSuggestion(
 				input.session_id,
 				now,
 				cfg.tuning.openWindowMs,
+				...(input.agent_id ? [input.agent_id] : []),
 			);
 			if (open) store.touch(open, now);
 
@@ -165,10 +169,17 @@ export function createApi(
 						input.tool_name === "Agent"
 					) {
 						const r = input.tool_response as AgentToolResponse | null;
-						if (!open || !r?.resolvedModel || !r.agentId) return;
+						if (!r?.resolvedModel || !r.agentId) return;
+						const target = store.findOpenSuggestion(
+							input.session_id,
+							now,
+							cfg.tuning.openWindowMs,
+							r.agentId,
+						);
+						if (!target) return;
 						// effort.level here is the main session's, not the subagent's: leave it empty.
 						store.upsertUsage(
-							usage(open, {
+							usage(target, {
 								model: canonical(r.resolvedModel),
 								source: "agent_tool",
 								scope_key: r.agentId,
@@ -193,6 +204,7 @@ export function createApi(
 							input.session_id,
 							input.prompt_id ?? null,
 							now,
+							...(input.agent_id ? [input.agent_id] : []),
 						);
 						// A delayed link can shrink windows that Stop or SubagentStop already filled: rewrite those scopes.
 						for (const scope of store.usageScopes(shrunk)) {
@@ -372,7 +384,27 @@ export function createApi(
 	}
 
 	return {
-		async suggest({ task, models, dryRun }) {
+		async suggest({
+			task,
+			models,
+			dryRun,
+			scope,
+			source,
+			session,
+			turn,
+			agentId,
+		}) {
+			if (scope !== undefined && !(SCOPES as readonly string[]).includes(scope))
+				throw new Error("invalid scope");
+			if (
+				source !== undefined &&
+				!(AGENTS as readonly string[]).includes(source)
+			)
+				throw new Error("invalid source");
+			for (const [name, value] of Object.entries({ session, turn, agentId })) {
+				if (value !== undefined && !value.trim())
+					throw new Error(`invalid ${name}`);
+			}
 			const requested = parseModelsArg(models);
 			const cfg = await getConfig();
 			const openRouter = await loadOpenRouterModels({
@@ -399,8 +431,12 @@ export function createApi(
 				store.insertSuggestion({
 					id,
 					created_at: now,
-					session_id: null,
+					session_id: session ?? null,
 					prompt_id: null,
+					scope: scope ?? null,
+					agent: source ?? null,
+					turn_id: turn ?? null,
+					agent_id: agentId ?? null,
 					task_type: c.task_type,
 					difficulty: c.difficulty,
 					criticality: c.criticality,
@@ -416,6 +452,7 @@ export function createApi(
 					last_event_at: now,
 					closed_at: null,
 				});
+				if (session) store.linkSession(id, session, null, now);
 				return {
 					suggestion_id: id,
 					ranking: d.ranking,
@@ -434,7 +471,69 @@ export function createApi(
 			});
 		},
 
-		async report({ suggestionId, model, effort, result, rounds, note }) {
+		async usage(input) {
+			const { suggestionId, model, effort, source, turn } = input;
+			if (source !== "claude-code-mod") throw new Error("invalid usage source");
+			if (!turn?.trim()) throw new Error("missing turn");
+			if (!model.trim()) throw new Error("missing model");
+			if (
+				effort !== undefined &&
+				!(EFFORTS as readonly string[]).includes(effort)
+			)
+				throw new Error("invalid effort");
+			for (const n of [
+				input.input,
+				input.output,
+				input.cacheRead,
+				input.cacheCreation,
+			]) {
+				if (!Number.isSafeInteger(n) || n < 0)
+					throw new Error("tokens must be non-negative safe integers");
+			}
+			const cfg = await getConfig();
+			return withStore((store) => {
+				const suggestion = store.getSuggestion(suggestionId);
+				if (!suggestion)
+					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				const record: UsageRecord = {
+					suggestion_id: suggestionId,
+					model: toCanonicalId(model, cfg.aliases),
+					effort: (effort as Effort) ?? null,
+					source,
+					scope_key: turn,
+					turn_id: turn,
+					agent_id: suggestion.agent_id,
+					input_tokens: input.input,
+					output_tokens: input.output,
+					cache_read_tokens: input.cacheRead,
+					cache_creation_tokens: input.cacheCreation,
+					is_sidechain: suggestion.agent_id !== null,
+					rounds: null,
+					note: null,
+					reported_at: deps.clock.now(),
+				};
+				store.upsertUsage(record);
+				return record;
+			});
+		},
+
+		async report({
+			suggestionId,
+			model,
+			effort,
+			result,
+			rounds,
+			note,
+			source,
+			turn,
+		}) {
+			if (source !== undefined && source !== "claude-code-mod")
+				throw new Error("invalid report source");
+			if (
+				(source !== undefined || turn !== undefined) &&
+				(source !== "claude-code-mod" || !turn?.trim())
+			)
+				throw new Error("direct report needs source and turn");
 			if (!(EFFORTS as readonly string[]).includes(effort))
 				throw new Error(
 					`invalid effort "${effort}" (allowed: ${EFFORTS.join(", ")})`,
@@ -443,7 +542,8 @@ export function createApi(
 				throw new Error(`invalid result "${result}"`);
 			const cfg = await getConfig();
 			return withStore((store) => {
-				if (!store.getSuggestion(suggestionId))
+				const suggestion = store.getSuggestion(suggestionId);
+				if (!suggestion)
 					throw new Error(`unknown suggestion_id ${suggestionId}`);
 				const now = deps.clock.now();
 				store.upsertUsage({
@@ -451,7 +551,11 @@ export function createApi(
 					model: toCanonicalId(model, cfg.aliases),
 					effort: effort as Effort,
 					source: "report",
-					scope_key: "",
+					scope_key: turn ?? "",
+					...(turn && {
+						turn_id: turn,
+						agent_id: suggestion.agent_id,
+					}),
 					...NO_TOKENS,
 					is_sidechain: false,
 					rounds: rounds ?? null,
@@ -463,7 +567,11 @@ export function createApi(
 					kind: "report",
 					value: REPORT_VALUES[result],
 					weight: SIGNAL_WEIGHTS.report,
-					source: "report",
+					source: source ?? "report",
+					...(turn && {
+						turn_id: turn,
+						agent_id: suggestion.agent_id,
+					}),
 					observed_at: now,
 				});
 				store.closeSuggestion(suggestionId, now);
@@ -485,7 +593,7 @@ export function createApi(
 			} catch {}
 		},
 
-		async stats({ type }) {
+		async stats({ type, by }) {
 			const cfg = await getConfig();
 			const runStats =
 				internals.runStats ?? (await import("../report/index.ts")).runStats;
@@ -493,6 +601,7 @@ export function createApi(
 				dbPath: deps.dbPath,
 				extensionDir: deps.duckdbExtensionDir,
 				...(type && { type }),
+				...(by && { by }),
 				successQuality: cfg.tuning.successQuality,
 			});
 		},

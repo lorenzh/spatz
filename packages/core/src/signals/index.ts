@@ -37,7 +37,7 @@ export function isIgnoredHookInput(input: HookInput): boolean {
 // A command segment starts at the beginning or after ;, &, |.
 const START = String.raw`(?:^|[;&|]\s*)`;
 const SPATZ_SUGGEST = new RegExp(
-	String.raw`${START}(?:\S*/)?spatz\s+(?!(?:report|hook|stats)\b)\S`,
+	String.raw`${START}(?:\S*/)?spatz\s+(?!(?:report|hook|stats|usage)\b)\S`,
 );
 // ponytail: keyword regexes, not a shell parser; extend the lists when a tool is missed.
 // Each matches only at the command position of a segment: after env assignments and runner prefixes.
@@ -59,7 +59,7 @@ const unquote = (command: string) =>
 const SETUP = /^(?:cd|pushd|export)(?:\s|$)/;
 
 /**
- * Regex classification of a Bash command. A spatz suggest call ("spatz <task>", not report/hook/stats) wins.
+ * Regex classification of a Bash command. A spatz suggest call ("spatz <task>", not report/hook/stats/usage) wins.
  * Test or build count only when the exit status is theirs: the last segment of a plain && chain, after setup segments only.
  * Pipes, ||, ;, &, newlines and command substitution make the status ambiguous -> null.
  */

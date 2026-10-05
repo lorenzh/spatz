@@ -2,19 +2,21 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, version]
+keywords: [link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
 
-spatz has four commands. Each command calls the `@spatz/core` API and formats the result. The CLI has no other logic.
+spatz has six command forms. Each command calls the `@spatz/core` API and formats the result. The CLI has no other logic.
 
 ```text
 spatz --version
-spatz "<task>" --models <list> [--json] [--dry-run]
-spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--json]
+spatz "<task>" --models <list> [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
+spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
+spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
+spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
 spatz hook <event> [--agent codex]
-spatz stats [--type <t>] [--json]
+spatz stats [--type <t>] [--by scope] [--json]
 ```
 
 Related docs: [hooks.md](hooks.md) for Claude Code and Codex integrations, [configuration.md](configuration.md) for environment variables and files.
@@ -37,6 +39,20 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--models <list>` | string | required | The candidates you can use. See [The --models grammar](#the---models-grammar). |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 | `--dry-run` | boolean | `false` | Mark the suggestion as a test (`is_test: true`). A test suggestion never counts for learning or for `spatz stats`. |
+| `--scope <scope>` | string | `null` | Store `step`, `turn`, `subagent`, `session` or `escalate`. This labels the routing decision. |
+| `--session <id>` | string | `null` | Link the suggestion at creation. This does not need a Bash hook. |
+| `--turn <id>` | string | `null` | Store the initial turn id. |
+| `--agent-id <id>` | string | `null` | Store the subagent id. Without it, the suggestion uses the main window. |
+| `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code`, `claude-code-mod` or `codex`. |
+
+These fields stay in SQLite. The suggestion JSON keeps its existing fields.
+The CLI stores the scope label. The caller chooses the decision points.
+
+```sh
+spatz "Review the parser" --models claude-sonnet-5-5:high \
+  --scope subagent --session session-1 --turn turn-1 \
+  --agent-id agent-1 --source claude-code-mod --json
+```
 
 ### The --models grammar
 
@@ -127,8 +143,13 @@ This command records the pair you used and the result of the task. A report wins
 | `--rounds <n>` | non-negative integer | none | Count of rounds the agent needed. |
 | `--note <t>` | string | none | A short note. spatz stores it in the database. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
+| `--turn <id>` | string | none | Identify a direct report's turn. Needs `--source claude-code-mod`. |
+| `--source claude-code-mod` | string | none | Identify a direct mod report. Needs `--turn`. |
 
 If you send a second report for the same suggestion, the newest report counts.
+Direct reports replace the signal for the same suggestion, source, turn and kind.
+Each new turn keeps its own signal. The outcome view still returns one outcome per suggestion.
+The report stores the turn id and the suggestion's agent id on its usage and signal rows.
 
 ### Text output
 
@@ -156,6 +177,45 @@ reported: 3b257996-110b-48c4-b61d-79761ad7400b  quality: 1  pair: anthropic/clau
 $ spatz report 3b257996-110b-48c4-b61d-79761ad7400b --model claude-sonnet-5-5 --effort medium --result pass --json
 {"suggestion_id":"3b257996-110b-48c4-b61d-79761ad7400b","quality":1,"model":"anthropic/claude-sonnet-5.5","effort":"medium"}
 ```
+
+## spatz usage
+
+This command stores direct token usage without reading a transcript.
+It does not create a success signal or close the suggestion.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `<suggestion_id>` | required | The existing suggestion id. |
+| `--model <m>` | required | The model used. spatz applies its model-id rules. |
+| `--effort <e>` | `null` | `low`, `medium`, `high`, `xhigh` or `max`. |
+| `--input <n>` | required | Uncached input tokens. |
+| `--output <n>` | required | Output tokens. |
+| `--cache-read <n>` | required | Input tokens read from cache. |
+| `--cache-creation <n>` | required | Input tokens written to cache. |
+| `--turn <id>` | required | The run's turn id. Also stored as `scope_key`. |
+| `--source claude-code-mod` | required | The direct usage source. |
+| `--json` | `false` | Print the stored usage record. |
+
+All token counts must be non-negative safe integers.
+A replay replaces the row for the same suggestion, source, turn and canonical model.
+A follow-up turn adds a row. The suggestion's `agent_id` also goes on each row.
+
+```sh
+spatz usage <suggestion_id> --model claude-sonnet-5-5 --effort high \
+  --input 10 --output 20 --cache-read 60 --cache-creation 30 \
+  --turn turn-1 --source claude-code-mod --json
+```
+
+Text output is `usage recorded: <suggestion_id>  turn: <turn_id>`.
+JSON contains `suggestion_id`, `model`, `effort`, `source`, `scope_key`, `turn_id` and `agent_id`.
+It also contains the four token counts with snake_case names.
+The remaining fields are `is_sidechain`, `rounds`, `note` and `reported_at`.
+`rounds` and `note` are `null`. `reported_at` is epoch milliseconds.
+If the suggestion has an agent id, `is_sidechain` is true.
+
+If completion has no usage, do not submit invented zero counts.
+If one turn used several models, its completion usage names only the last response model.
+The command does not infer a per-model breakdown.
 
 ## spatz hook
 
@@ -188,6 +248,27 @@ This command shows how well each pair worked, per task type. It reads the databa
 | `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.explain`, `review`, `spec`, `planning`, `other`. Another value gives exit code 2. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 
+`--by scope` adds `by_scope` to the JSON response. Text output shows one line per recorded scope.
+Suggestions without a scope appear as `unscoped` in text and `scope: null` in JSON.
+`--type` also filters this view. Test suggestions stay excluded.
+
+| `by_scope` field | Meaning |
+| --- | --- |
+| `scope` | The stored routing scope, or `null`. |
+| `n` | Number of suggestions with an outcome. Several usage rows still count as one outcome. |
+| `success_rate` | Share of outcomes with quality at least 0.8. Without outcomes, JSON gives `null` and text gives `-`. |
+| `input_tokens`, `output_tokens` | Total recorded input and output tokens. |
+| `cache_read_tokens`, `cache_creation_tokens` | Total recorded cache tokens. |
+| `cache_read_share` | `cache_read_tokens / (input_tokens + cache_read_tokens + cache_creation_tokens)`. With no input tokens, the share is zero. |
+
+Token totals include suggestions without outcomes. Output tokens do not enter the cache-read share.
+This view does not estimate cost or routing latency.
+
+```sh
+spatz stats --by scope
+spatz stats --by scope --type review --json
+```
+
 The first run needs network access once. See [configuration.md](configuration.md#duckdb-sqlite-extension). The command fails with exit code 1 when the database does not exist yet. The database exists after the first `spatz "<task>"`.
 
 ### Text output
@@ -213,8 +294,8 @@ There is one block per task type, with one indented line per used pair. `-` mean
 | `by_type[].pairs[].n` | number | Count of outcomes with this pair. |
 | `by_type[].pairs[].success_rate` | number, 0 to 1 | Share of outcomes with quality of 0.8 or more. |
 | `by_type[].adoption_rate` | number, 0 to 1 | Share of outcomes whose used pair is `ranking[0]`. |
-| `by_type[].input_tokens` | number | Sum of input tokens from the hooks. |
-| `by_type[].output_tokens` | number | Sum of output tokens from the hooks. |
+| `by_type[].input_tokens` | number | Sum of recorded input tokens. |
+| `by_type[].output_tokens` | number | Sum of recorded output tokens. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | Success rate of learned picks. spatz compares only cells that have both learned and control outcomes, and weights each cell by its count. |
 | `control_success` | number or null | Success rate of the control group in the same cells. |

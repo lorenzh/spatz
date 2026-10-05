@@ -2,7 +2,7 @@
 title: How spatz works
 description: The terms, core modules, suggestion flow, Jev classification and SQLite data model of spatz.
 tags: [spatz, architecture, classification, data-model]
-keywords: [concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow]
+keywords: [concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
 ---
 
 # How spatz works
@@ -18,7 +18,7 @@ For the decision rule, read [recommendation.md](recommendation.md). For data tha
 | Candidate | One pair of model and effort, for example `anthropic/claude-opus-5.5:high`. |
 | Catalog | All candidates from the `--models` argument of one call, sorted by cost. spatz recommends only candidates from this list. |
 | Suggestion | The result of one `spatz "<task>"` call: an id, a ranking of 1 to 3 candidates, a reason and the classification. |
-| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz report` or from Claude Code and Codex CLI transcripts. |
+| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz report` or from Claude Code and Codex CLI transcripts. | | Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz usage`, `spatz report` or Claude Code transcripts. |
 | Signal | One observed result for a suggestion: a report value, a test run or a build run. |
 | Outcome | The quality of one suggestion (0 to 1), computed from its signals, plus the pair that was actually used. |
 | Cell | The pair (task type, difficulty). spatz learns success rates per cell. |
@@ -27,11 +27,11 @@ Effort is one of `low`, `medium`, `high`, `xhigh`, `max`, in this cost order.
 
 ## Architecture
 
-spatz has two packages. `packages/core` (`@spatz/core`) holds all logic. `packages/cli` (`@spatz/cli`) parses arguments, calls the core and formats the output. The CLI has no domain logic.
+The CLI and core are separate packages. `packages/core` (`@spatz/core`) holds all logic. `packages/cli` (`@spatz/cli`) parses arguments, calls the core and formats the output. The CLI has no domain logic.
 
 | Core module | Task |
 |---|---|
-| `api` | Use cases `suggest`, `report`, `handleHook` and `stats`. It connects the other modules. The CLI calls only this module. |
+| `api` | Use cases `suggest`, `usage`, `report`, `handleHook` and `stats`. It connects the other modules. The CLI calls only this module. |
 | `catalog` | Parses `--models`, maps ids to OpenRouter ids, loads prices from OpenRouter with a 24 h cache and sorts the candidates by cost. |
 | `classify` | Asks Jev the four questions. If Jev is not available, it uses keyword rules. It also holds the secret filter. |
 | `recommend` | Computes the estimates per cell and picks the candidate. It is pure: no network, no files. |
@@ -71,9 +71,9 @@ flowchart LR
 
 A suggestion stays open until the first of these events:
 
-- The next `spatz` suggestion in the same session.
+- The next linked suggestion in the same session and agent window.
 - A `spatz report` for this suggestion.
-- 2 h without a session event.
+- 2 h without an event in that window.
 
 ```mermaid
 sequenceDiagram
@@ -182,31 +182,76 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 
 | Table or view | Content |
 |---|---|
-| `suggestions` | One row per suggestion: id, time, session id, prompt id, classification, Jev probabilities (JSON), Jev model, strategy, ranking (JSON), reason, flags `explored`, `control`, `fallback_used`, `is_test`, time of the last event, time of closure. No task text. |
-| `usages` | Model, effort and token counts per suggestion. `source` is `report`, `transcript`, `subagent` or `agent_tool`. A report usage also holds `rounds` and `note`. |
+| `suggestions` | One row per recommendation with its classification, ranking and strategy. Also stores timestamps, flags and attribution fields. No task text. |
+| `usages` | Model, effort and token counts per suggestion. `source` is `report`, `transcript`, `subagent`, `agent_tool` or `claude-code-mod`. A report usage also holds `rounds` and `note`. |
 | `signals` | One row per signal: kind (`report`, `test`, `build`), value, weight, source and time. |
 | `outcomes` | A view, not a table. It computes quality and the used pair per suggestion. See [recommendation.md](recommendation.md#quality-and-success). |
 | `usage_scopes` | One watermark per transcript scope. See below. |
 
 ### Migrations
 
-`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz report` and `spatz hook` open the store. `spatz stats` reads the file through DuckDB and does not migrate. Each migration runs in its own `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
+`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz report` and `spatz hook` open the store. `spatz stats` reads the file through DuckDB and does not migrate. Each migration runs in its own `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
 
 | Version | Change |
 |---|---|
 | 1 | Tables `suggestions`, `usages`, `signals` and the view `outcomes` |
 | 2 | Table `usage_scopes` |
+| 3 | Nullable routing and attribution fields. A unique index prevents duplicate direct signals per turn. |
+
+`SCHEMA_V3` is the third entry in `MIGRATIONS`.
+`SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.
+The migration adds columns without replacing existing rows or the outcome view.
+Existing suggestions keep their outcomes. Their new fields are `null`.
+
+### Direct attribution
+
+| Suggestion field | Values and meaning |
+| --- | --- |
+| `scope` | `step`, `turn`, `subagent`, `session`, `escalate` or `null`. The caller's routing decision scope. |
+| `agent` | `claude-code`, `claude-code-mod`, `codex` or `null`. The caller's provenance. |
+| `turn_id` | The initial turn id, or `null`. A suggestion can cover later turns too. |
+| `agent_id` | The subagent id, or `null` for the main window. |
+
+`--session` links a suggestion at creation. `--turn` and `--agent-id` store direct attribution.
+The Bash hook remains available for calls without explicit linking.
+No task text enters these fields.
+
+Direct usage stores each run's `turn_id` and the suggestion's `agent_id` in `usages`.
+Its source is `claude-code-mod`. Its `scope_key` is the turn id.
+The existing uniqueness rule covers `(suggestion_id, source, scope_key, model)`.
+Repeated submissions replace one row. Follow-up turns keep separate rows.
+The API reads no transcript for direct usage.
+
+Direct reports store `turn_id` and `agent_id` in `signals` and report usage rows.
+The signal index covers `(suggestion_id, source, turn_id, kind)` for non-null turns.
+The outcome view still aggregates one outcome per suggestion.
+Usage alone never creates an outcome.
+
+### Session and agent windows
+
+Each `(session_id, agent_id)` has its own sequence of suggestion windows.
+A null `agent_id` selects the main sequence.
+A new subagent suggestion cannot close a main suggestion or another agent's suggestion.
+Late links close only earlier suggestions in their own sequence.
+The routing label `scope` does not select the sequence.
+
+Hooks select the sequence from the event's agent id.
+If that agent has no linked suggestions, hooks use the main sequence for legacy attribution.
+If that agent has any linked suggestion, hooks use only its sequence, even after closure.
+`Stop` reads the main sequence. `SubagentStop` reads the subagent sequence.
+See [hooks.md](hooks.md) for the planned split between routing and recording.
+
 
 ### Usage scopes and the atomic rewrite
 
-A scope is one transcript part: one prompt of the main session (`transcript`, key `prompt_id`) or one subagent (`subagent`, key `agent_id`). The `Stop` and `SubagentStop` hooks read the whole scope each time.
+A usage scope is one transcript part: one prompt of the main session (`transcript`, key `prompt_id`) or one subagent (`subagent`, key `agent_id`). The `Stop` and `SubagentStop` hooks read the whole scope each time.
 
 Hooks run in the background. Their events can arrive late, twice or in the wrong order. A late link can also shorten the time window of an earlier suggestion. So spatz does not add usage rows. It rewrites the whole scope:
 
 1. spatz reads the watermark of the scope: the time of the last message and the message count.
 2. If the new snapshot is older, spatz skips it. Older means an earlier last message, or the same last message with fewer messages.
 3. spatz deletes all usage rows of the scope for the suggestions of this session.
-4. spatz splits the messages by the time window of each suggestion. It writes one usage row per suggestion and model.
+4. spatz splits the messages by the suggestion windows of the selected agent sequence. It writes one usage row per suggestion and model.
 5. spatz saves the new watermark.
 
 All five steps run in one `IMMEDIATE` transaction. A compacted transcript has fewer messages, so the time of the last message decides first.

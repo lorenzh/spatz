@@ -87,6 +87,9 @@ function fakeIO(stdin: () => Promise<string> = async () => "{}") {
 function fakeApi(overrides: Partial<SpatzApi> = {}) {
 	const calls: { method: string; args: unknown[] }[] = [];
 	const api: SpatzApi = {
+		usage: async () => {
+			throw new Error("unexpected usage");
+		},
 		suggest: async (input: SuggestInput) => {
 			calls.push({ method: "suggest", args: [input] });
 			return suggestion;
@@ -687,5 +690,209 @@ describe("stats", () => {
 		});
 		expect(await main(["stats"], io, api)).toBe(1);
 		expect(err.join("\n")).toContain("duckdb missing");
+	});
+});
+
+describe("mod CLI", () => {
+	test("suggest passes explicit linking flags and scope", async () => {
+		const { io } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(
+			await main(
+				[
+					"task",
+					"--models",
+					"m",
+					"--scope",
+					"subagent",
+					"--session",
+					"s",
+					"--turn",
+					"t",
+					"--agent-id",
+					"a",
+					"--source",
+					"claude-code-mod",
+				],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(calls).toEqual([
+			{
+				method: "suggest",
+				args: [
+					{
+						task: "task",
+						models: "m",
+						dryRun: false,
+						scope: "subagent",
+						session: "s",
+						turn: "t",
+						agentId: "a",
+						source: "claude-code-mod",
+					},
+				],
+			},
+		]);
+	});
+	test("usage passes token counts and turn and prints JSON", async () => {
+		const { io, stdout } = fakeIO();
+		const seen: unknown[] = [];
+		const { api } = fakeApi({
+			usage: async (input) => {
+				seen.push(input);
+				return { suggestion_id: input.suggestionId } as never;
+			},
+		});
+		expect(
+			await main(
+				[
+					"usage",
+					"id",
+					"--model",
+					"m",
+					"--input",
+					"1",
+					"--output",
+					"2",
+					"--cache-read",
+					"3",
+					"--cache-creation",
+					"4",
+					"--turn",
+					"t",
+					"--source",
+					"claude-code-mod",
+					"--json",
+				],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(seen).toEqual([
+			{
+				suggestionId: "id",
+				model: "m",
+				input: 1,
+				output: 2,
+				cacheRead: 3,
+				cacheCreation: 4,
+				turn: "t",
+				source: "claude-code-mod",
+			},
+		]);
+		expect(JSON.parse(stdout())).toEqual({ suggestion_id: "id" });
+	});
+	test("report passes the direct turn and source", async () => {
+		const { io } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(
+			await main(
+				[
+					"report",
+					"id",
+					"--model",
+					"m",
+					"--effort",
+					"low",
+					"--result",
+					"pass",
+					"--turn",
+					"t",
+					"--source",
+					"claude-code-mod",
+				],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(calls[0]?.args).toEqual([
+			{
+				suggestionId: "id",
+				model: "m",
+				effort: "low",
+				result: "pass",
+				turn: "t",
+				source: "claude-code-mod",
+			},
+		]);
+	});
+	test("scope stats print cache share and the unscoped line", async () => {
+		const { io, stdout } = fakeIO();
+		const seen: unknown[] = [];
+		const { api } = fakeApi({
+			stats: async (input) => {
+				seen.push(input);
+				return {
+					...statsReport,
+					by_scope: [
+						{
+							scope: null,
+							n: 2,
+							success_rate: 0.5,
+							input_tokens: 10,
+							output_tokens: 20,
+							cache_read_tokens: 60,
+							cache_creation_tokens: 30,
+							cache_read_share: 0.6,
+						},
+					],
+				};
+			},
+		});
+		expect(await main(["stats", "--by", "scope"], io, api)).toBe(0);
+		expect(seen).toEqual([{ by: "scope" }]);
+		expect(stdout()).toContain(
+			"unscoped  n=2  success=50%  input_tokens=10  output_tokens=20  cache_read_tokens=60  cache_creation_tokens=30  cache_read_share=60%",
+		);
+	});
+	test.each(["-1", "1.5", "NaN", "9007199254740992", ""])(
+		"usage rejects invalid token count %p before core",
+		async (value) => {
+			const { io, err } = fakeIO();
+			const { api, calls } = fakeApi();
+			expect(
+				await main(
+					[
+						"usage",
+						"id",
+						"--model",
+						"m",
+						"--input",
+						value,
+						"--output",
+						"0",
+						"--cache-read",
+						"0",
+						"--cache-creation",
+						"0",
+						"--turn",
+						"t",
+						"--source",
+						"claude-code-mod",
+					],
+					io,
+					api,
+				),
+			).toBe(2);
+			expect(err.join()).toContain("--input");
+			expect(calls).toEqual([]);
+		},
+	);
+	test.each([
+		["--scope", "bogus"],
+		["--source", "bogus"],
+	])("suggest rejects %p %p", async (flag, value) => {
+		const { io } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(
+			await main(
+				["task", "--models", "m", flag as string, value as string],
+				io,
+				api,
+			),
+		).toBe(2);
+		expect(calls).toEqual([]);
 	});
 });

@@ -7,6 +7,7 @@ import type {
 	Difficulty,
 	Effort,
 	ReportResult,
+	RoutingScope,
 	StrategyName,
 	TaskType,
 	TypeStats,
@@ -35,6 +36,7 @@ afterEach(() => {
 });
 
 interface SugOpts {
+	scope?: RoutingScope;
 	task_type?: TaskType;
 	difficulty?: Difficulty;
 	control?: boolean;
@@ -50,6 +52,10 @@ function sug(id: string, o: SugOpts = {}) {
 	store.insertSuggestion({
 		id,
 		created_at: 1,
+		scope: o.scope ?? null,
+		agent: null,
+		turn_id: null,
+		agent_id: null,
 		session_id: null,
 		prompt_id: null,
 		task_type: o.task_type ?? "code.bugfix",
@@ -376,4 +382,82 @@ test("outcome without usage counts in n but not in pairs or adoption", async () 
 			output_tokens: 0,
 		},
 	]);
+});
+
+test("scope stats count outcomes once and include cache tokens, unscoped and usage-only suggestions", async () => {
+	sug("t1", { scope: "turn" });
+	report("t1", "m/a", "low", "pass", [10, 20]);
+	usage("t1", "m/b", "high", [10, 30], "transcript");
+	sug("t2", { scope: "turn" });
+	report("t2", "m/a", "low", "fail");
+	sug("t3", { scope: "turn" });
+	store.upsertUsage({
+		suggestion_id: "t3",
+		model: "m/a",
+		effort: null,
+		source: "claude-code-mod",
+		scope_key: "run",
+		turn_id: "run",
+		input_tokens: 20,
+		output_tokens: 10,
+		cache_read_tokens: 60,
+		cache_creation_tokens: 20,
+		is_sidechain: false,
+		rounds: null,
+		note: null,
+		reported_at: 1,
+	});
+	sug("legacy");
+	report("legacy", "m/a", "low", "partial", [5, 6]);
+	sug("dry", { scope: "turn", is_test: true });
+	report("dry", "m/a", "low", "pass", [999, 999]);
+	sug("zero", { scope: "step", task_type: "review" });
+	const r = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		onSql: noInstall,
+	});
+	expect(r.by_scope).toEqual([
+		{
+			scope: "step",
+			n: 0,
+			success_rate: null,
+			input_tokens: 0,
+			output_tokens: 0,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
+			cache_read_share: 0,
+		},
+		{
+			scope: "turn",
+			n: 2,
+			success_rate: 0.5,
+			input_tokens: 40,
+			output_tokens: 60,
+			cache_read_tokens: 60,
+			cache_creation_tokens: 20,
+			cache_read_share: 0.5,
+		},
+		{
+			scope: null,
+			n: 1,
+			success_rate: 0,
+			input_tokens: 5,
+			output_tokens: 6,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
+			cache_read_share: 0,
+		},
+	]);
+	const filtered = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		type: "review",
+		onSql: noInstall,
+	});
+	expect(filtered.by_scope).toEqual(r.by_scope?.slice(0, 1));
 });

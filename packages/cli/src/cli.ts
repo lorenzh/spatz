@@ -16,6 +16,7 @@ const code = await main(
 	},
 	{
 		suggest: async (input) => api().suggest(input),
+		usage: async (input) => api().usage(input),
 		report: async (input) => api().report(input),
 		handleHook: async (event, stdin) => api().handleHook(event, stdin),
 		stats: async (input) => api().stats(input),

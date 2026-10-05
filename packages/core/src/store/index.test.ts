@@ -36,6 +36,10 @@ function suggestion(over: Partial<SuggestionRecord> = {}): SuggestionRecord {
 	return {
 		id: "s1",
 		created_at: 1000,
+		scope: null,
+		agent: null,
+		turn_id: null,
+		agent_id: null,
 		session_id: null,
 		prompt_id: null,
 		task_type: "code.bugfix",
@@ -64,7 +68,51 @@ function suggestion(over: Partial<SuggestionRecord> = {}): SuggestionRecord {
 }
 
 describe("schema", () => {
-	test("creates tables, the outcomes view and user_version 2", () => {
+	test("populated v2 migrates to v3 without losing rows or outcomes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "spatz-v2-"));
+		dirs.push(dir);
+		const path = join(dir, "v2.db");
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v2.sql")).text());
+		db.run(`INSERT INTO suggestions VALUES ('old', 1, 'session', 'prompt', 'review', 'leicht', 'none', NULL, NULL, 'rules', '[]', 'legacy', 0, 0, 1, 0, 2, NULL);
+			INSERT INTO usages VALUES ('old', 'm/a', 'low', 'report', '', 3, 4, 5, 6, 0, 1, 'note', 2);
+			INSERT INTO signals VALUES ('old', 'report', 1, 1, 'report', 2);
+			INSERT INTO usage_scopes VALUES ('session', 'transcript', 'prompt', 1, 2);`);
+		const tables = [
+			"suggestions",
+			"usages",
+			"signals",
+			"usage_scopes",
+			"outcomes",
+		];
+		const before = tables.map((t) => db.query(`SELECT * FROM ${t}`).all());
+		db.close();
+		const migrated = openDatabase(path);
+		try {
+			expect(migrated.query("PRAGMA user_version").get()).toEqual({
+				user_version: 3,
+			});
+			for (const [i, table] of tables.entries()) {
+				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
+					before[i] as object[],
+				);
+			}
+			expect(
+				migrated
+					.query("SELECT scope, agent, turn_id, agent_id FROM suggestions")
+					.get(),
+			).toEqual({ scope: null, agent: null, turn_id: null, agent_id: null });
+			expect(
+				migrated.query("SELECT turn_id, agent_id FROM usages").get(),
+			).toEqual({ turn_id: null, agent_id: null });
+			expect(
+				migrated.query("SELECT turn_id, agent_id FROM signals").get(),
+			).toEqual({ turn_id: null, agent_id: null });
+		} finally {
+			migrated.close();
+		}
+	});
+	test("creates tables, the outcomes view and user_version 3", () => {
 		const path = tempDb();
 		open(path).dispose();
 		stores.length = 0;
@@ -87,16 +135,18 @@ describe("schema", () => {
 				{ name: "usage_scopes", type: "table" },
 			]),
 		);
-		expect(SCHEMA_VERSION).toBe(2);
-		expect(version?.user_version).toBe(2);
+		expect(SCHEMA_VERSION).toBe(3);
+		expect(version?.user_version).toBe(3);
 	});
 
-	test("a version 1 db migrates to version 2 and keeps its data", () => {
-		const path = tempDb();
-		const first = openStore(path);
-		first.insertSuggestion(suggestion());
-		first.dispose();
-		const db = new Database(path);
+	test("a version 1 db migrates to version 3 and keeps its data", async () => {
+		const path = join(mkdtempSync(join(tmpdir(), "spatz-v1-")), "v1.db");
+		dirs.push(join(path, ".."));
+		const db = new Database(path, { create: true });
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v2.sql")).text());
+		db.run(
+			"INSERT INTO suggestions VALUES ('s1', 1, NULL, NULL, 'review', 'leicht', 'none', NULL, NULL, 'rules', '[]', 'r', 0, 0, 0, 0, 1, NULL)",
+		);
 		db.run("DROP TABLE usage_scopes");
 		db.run("PRAGMA user_version = 1");
 		db.close();
@@ -110,7 +160,7 @@ describe("schema", () => {
 			.get();
 		check.close();
 		expect(table).toEqual({ name: "usage_scopes" });
-		expect(version?.user_version).toBe(2);
+		expect(version?.user_version).toBe(3);
 	});
 
 	test("reopening keeps data and does not re-migrate", () => {
@@ -684,4 +734,41 @@ describe("session link and open window", () => {
 		expect(store.getSuggestion("s1")?.closed_at).toBe(6000);
 		expect(store.findOpenSuggestion("sess", 6000, H2)).toBeNull();
 	});
+});
+
+test("agent windows are independent and late links only close their own scope", () => {
+	const store = open();
+	for (const [id, at, agent_id] of [
+		["main", 10, null],
+		["a1", 20, "a"],
+		["b1", 25, "b"],
+		["a2", 30, "a"],
+		["main2", 40, null],
+	] as const) {
+		store.insertSuggestion(
+			suggestion({
+				id,
+				created_at: at,
+				last_event_at: at,
+				agent_id,
+				agent: "claude-code-mod",
+				scope: agent_id ? "subagent" : "turn",
+			}),
+		);
+	}
+	for (const id of ["main2", "a2", "b1", "main", "a1"])
+		store.linkSession(id, "sess", null, 50);
+	expect(store.getSuggestion("main")?.closed_at).toBe(40);
+	expect(store.getSuggestion("a1")?.closed_at).toBe(30);
+	expect(store.getSuggestion("b1")?.closed_at).toBeNull();
+	expect(store.findOpenSuggestion("sess", 50, 100)).toBe("main2");
+	expect(store.findOpenSuggestion("sess", 50, 100, "a")).toBe("a2");
+	expect(store.sessionWindows("sess", 0, 50, 100, "a")).toEqual([
+		{ id: "a1", start: 20, end: 30 },
+		{ id: "a2", start: 30, end: 151 },
+	]);
+	expect(store.sessionWindows("sess", 0, 50, 100)).toEqual([
+		{ id: "main", start: 10, end: 40 },
+		{ id: "main2", start: 40, end: 151 },
+	]);
 });

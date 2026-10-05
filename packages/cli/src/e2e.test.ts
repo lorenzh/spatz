@@ -422,3 +422,116 @@ describe("stats", () => {
 		expect(bad.code).toBe(2);
 	});
 });
+
+test("mod CLI stores explicit attribution, usage replays, direct reports and scope stats", async () => {
+	const suggested = await spatz([
+		TASK,
+		"--models",
+		MODELS,
+		"--session",
+		"mod-session",
+		"--turn",
+		"turn-1",
+		"--agent-id",
+		"agent-1",
+		"--scope",
+		"subagent",
+		"--source",
+		"claude-code-mod",
+		"--json",
+	]);
+	expect(suggested.code).toBe(0);
+	const { suggestion_id: id } = JSON.parse(suggested.stdout) as Suggestion;
+	const usageArgs = [
+		"usage",
+		id,
+		"--model",
+		"claude-sonnet-5-5",
+		"--effort",
+		"low",
+		"--input",
+		"10",
+		"--output",
+		"20",
+		"--cache-read",
+		"60",
+		"--cache-creation",
+		"30",
+		"--turn",
+		"turn-1",
+		"--source",
+		"claude-code-mod",
+		"--json",
+	];
+	for (let n = 0; n < 2; n++) {
+		const used = await spatz(usageArgs);
+		expect(used.code).toBe(0);
+		expect(JSON.parse(used.stdout)).toMatchObject({
+			suggestion_id: id,
+			turn_id: "turn-1",
+			scope_key: "turn-1",
+			agent_id: "agent-1",
+			source: "claude-code-mod",
+		});
+	}
+	const reportArgs = [
+		"report",
+		id,
+		"--model",
+		"claude-sonnet-5-5",
+		"--effort",
+		"low",
+		"--result",
+		"pass",
+		"--turn",
+		"turn-1",
+		"--source",
+		"claude-code-mod",
+		"--json",
+	];
+	for (let n = 0; n < 2; n++) expect((await spatz(reportArgs)).code).toBe(0);
+	const d = db();
+	try {
+		expect(
+			d
+				.query(
+					"SELECT scope, agent, session_id, turn_id, agent_id FROM suggestions WHERE id = ?",
+				)
+				.get(id),
+		).toEqual({
+			scope: "subagent",
+			agent: "claude-code-mod",
+			session_id: "mod-session",
+			turn_id: "turn-1",
+			agent_id: "agent-1",
+		});
+		expect(
+			d
+				.query(
+					"SELECT COUNT(*) AS n FROM usages WHERE suggestion_id = ? AND source = 'claude-code-mod'",
+				)
+				.get(id),
+		).toEqual({ n: 1 });
+		expect(
+			d
+				.query("SELECT COUNT(*) AS n FROM signals WHERE suggestion_id = ?")
+				.get(id),
+		).toEqual({ n: 1 });
+	} finally {
+		d.close();
+	}
+	const stats = await spatz(["stats", "--by", "scope", "--json"]);
+	expect(stats.code).toBe(0);
+	const scopes = (JSON.parse(stats.stdout) as StatsReport).by_scope;
+	expect(scopes?.find((r) => r.scope === "subagent")).toEqual({
+		scope: "subagent",
+		n: 1,
+		success_rate: 1,
+		input_tokens: 10,
+		output_tokens: 20,
+		cache_read_tokens: 60,
+		cache_creation_tokens: 30,
+		cache_read_share: 0.6,
+	});
+	expect(scopes?.some((r) => r.scope === null)).toBe(true);
+});

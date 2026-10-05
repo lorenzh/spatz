@@ -229,6 +229,10 @@ describe("suggest", () => {
 		expect(record).toEqual({
 			id: ID1,
 			created_at: T0,
+			scope: null,
+			agent: null,
+			turn_id: null,
+			agent_id: null,
 			session_id: null,
 			prompt_id: null,
 			task_type: "code.bugfix",
@@ -1247,4 +1251,308 @@ describe("stats", () => {
 			},
 		]);
 	});
+});
+
+describe("direct mod attribution", () => {
+	test("suggest links session, turn, agent and scope at creation", async () => {
+		const s = setup();
+		const first = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			turn: "t1",
+			source: "claude-code-mod",
+			scope: "turn",
+		});
+		s.setNow(T0 + 1);
+		const sub = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			turn: "t2",
+			agentId: "a1",
+			source: "claude-code-mod",
+			scope: "subagent",
+		});
+		expect(s.store.getSuggestion(first.suggestion_id)).toMatchObject({
+			session_id: SESSION,
+			turn_id: "t1",
+			agent_id: null,
+			agent: "claude-code-mod",
+			scope: "turn",
+			closed_at: null,
+		});
+		expect(s.store.getSuggestion(sub.suggestion_id)).toMatchObject({
+			session_id: SESSION,
+			turn_id: "t2",
+			agent_id: "a1",
+			agent: "claude-code-mod",
+			scope: "subagent",
+		});
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		await s.api.handleHook(
+			"PostToolUseFailure",
+			JSON.stringify({
+				...JSON.parse(bash("bun test", "", "PostToolUseFailure")),
+				agent_id: "a1",
+			}),
+		);
+		expect(s.store.outcome(first.suggestion_id)?.quality).toBe(1);
+		expect(s.store.outcome(sub.suggestion_id)?.quality).toBe(0);
+	});
+
+	test("direct usage upserts each turn, preserves follow-ups and creates no outcome", async () => {
+		const dbPath = join(dir, "direct.db");
+		const s = setup({ dbPath, openStore });
+		const { suggestion_id } = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			agentId: "a1",
+			source: "claude-code-mod",
+		});
+		const input = {
+			suggestionId: suggestion_id,
+			model: "claude-sonnet-5-5",
+			source: "claude-code-mod" as const,
+			turn: "t1",
+			input: 10,
+			output: 20,
+			cacheRead: 30,
+			cacheCreation: 40,
+		};
+		await s.api.usage(input);
+		await s.api.usage({ ...input, output: 21 });
+		await s.api.usage({ ...input, turn: "t2", effort: "high" });
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT model, effort, scope_key, turn_id, agent_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens FROM usages ORDER BY turn_id",
+					)
+					.all(),
+			).toEqual([
+				{
+					model: "anthropic/claude-sonnet-5.5",
+					effort: null,
+					scope_key: "t1",
+					turn_id: "t1",
+					agent_id: "a1",
+					input_tokens: 10,
+					output_tokens: 21,
+					cache_read_tokens: 30,
+					cache_creation_tokens: 40,
+				},
+				{
+					model: "anthropic/claude-sonnet-5.5",
+					effort: "high",
+					scope_key: "t2",
+					turn_id: "t2",
+					agent_id: "a1",
+					input_tokens: 10,
+					output_tokens: 20,
+					cache_read_tokens: 30,
+					cache_creation_tokens: 40,
+				},
+			]);
+			expect(db.query("SELECT * FROM outcomes").all()).toEqual([]);
+		} finally {
+			db.close();
+		}
+		await expect(
+			s.api.usage({ ...input, suggestionId: "missing" }),
+		).rejects.toThrow("unknown suggestion_id");
+		for (const bad of [
+			{ input: -1 },
+			{ output: 0.5 },
+			{ cacheRead: Infinity },
+			{ cacheCreation: NaN },
+			{ effort: "turbo" },
+			{ turn: "" },
+			{ model: "" },
+			{ source: "transcript" },
+		]) {
+			await expect(
+				s.api.usage({ ...input, ...bad } as typeof input),
+			).rejects.toThrow();
+		}
+	});
+
+	test("direct reports deduplicate by turn and preserve legacy outcomes", async () => {
+		const dbPath = join(dir, "reports.db");
+		const s = setup({ dbPath, openStore });
+		const { suggestion_id } = await s.api.suggest({
+			...suggestInput(),
+			agentId: "a1",
+		});
+		const input = {
+			suggestionId: suggestion_id,
+			model: "claude-sonnet-5-5",
+			effort: "high",
+			result: "pass" as const,
+			source: "claude-code-mod" as const,
+			turn: "t1",
+		};
+		await s.api.report(input);
+		await s.api.report(input);
+		s.setNow(T0 + 1);
+		await s.api.report({ ...input, turn: "t2", result: "fail" });
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT turn_id, agent_id, source FROM signals ORDER BY turn_id",
+					)
+					.all(),
+			).toEqual([
+				{ turn_id: "t1", agent_id: "a1", source: "claude-code-mod" },
+				{ turn_id: "t2", agent_id: "a1", source: "claude-code-mod" },
+			]);
+			expect(db.query("SELECT quality FROM outcomes").get()).toEqual({
+				quality: 0,
+			});
+		} finally {
+			db.close();
+		}
+	});
+});
+
+test("usage command output never relinks a suggestion through Bash detection", async () => {
+	const s = setup();
+	const { suggestion_id } = await s.api.suggest({
+		...suggestInput(),
+		session: "original",
+		source: "claude-code-mod",
+	});
+	await s.api.handleHook(
+		"PostToolUse",
+		bash(
+			`spatz usage ${suggestion_id} --model m --turn t --source claude-code-mod --json`,
+			JSON.stringify({ suggestion_id }),
+		),
+	);
+	expect(s.store.getSuggestion(suggestion_id)?.session_id).toBe("original");
+});
+
+test("Bash links inside subagents retain agent identity and leave main open", async () => {
+	const s = setup();
+	const main = await linked(s);
+	s.setNow(T0 + 1000);
+	const { suggestion_id } = await s.api.suggest(suggestInput());
+	await s.api.handleHook(
+		"PostToolUse",
+		JSON.stringify({ ...JSON.parse(linkHook(suggestion_id)), agent_id: "a1" }),
+	);
+	expect(s.store.getSuggestion(suggestion_id)?.agent_id).toBe("a1");
+	expect(s.store.getSuggestion(main)?.closed_at).toBeNull();
+});
+
+test("Agent response belongs to its explicitly linked subagent", async () => {
+	const s = setup();
+	const main = await linked(s);
+	const { suggestion_id } = await s.api.suggest({
+		...suggestInput(),
+		session: SESSION,
+		agentId: "a1",
+		source: "claude-code-mod",
+	});
+	await s.api.handleHook(
+		"PostToolUse",
+		JSON.stringify(
+			base({
+				hook_event_name: "PostToolUse",
+				tool_name: "Agent",
+				tool_input: {},
+				tool_response: { agentId: "a1", resolvedModel: "claude-sonnet-5-5" },
+				tool_use_id: "t",
+			}),
+		),
+	);
+	expect(s.argsOf("upsertUsage")).toEqual([
+		[expect.objectContaining({ suggestion_id, source: "agent_tool" })],
+	]);
+	expect(s.store.getSuggestion(main)?.closed_at).toBeNull();
+});
+
+test("transcript rewrites keep main and two agent windows separate", async () => {
+	const dbPath = join(dir, "windows.db");
+	const s = setup({ dbPath, openStore });
+	const suggest = (agentId?: string) =>
+		s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			agentId,
+			source: "claude-code-mod",
+			scope: agentId ? "subagent" : "turn",
+		});
+	const main = (await suggest()).suggestion_id;
+	s.setNow(T0 + 10);
+	const a = (await suggest("a1")).suggestion_id;
+	s.setNow(T0 + 20);
+	const b = (await suggest("b1")).suggestion_id;
+	const mainPath = join(dir, "main.jsonl");
+	await Bun.write(
+		mainPath,
+		[
+			JSON.stringify({ type: "user", promptId: PROMPT }),
+			assistant("main", "m/main", 5, {}, T0 + 30),
+		].join("\n"),
+	);
+	const events: [string, string][] = [
+		[
+			"Stop",
+			JSON.stringify(
+				base({
+					hook_event_name: "Stop",
+					transcript_path: mainPath,
+					stop_hook_active: false,
+				}),
+			),
+		],
+	];
+	for (const [agentId, tokens] of [
+		["a1", 10],
+		["b1", 20],
+	] as const) {
+		const path = join(dir, `${agentId}.jsonl`);
+		await Bun.write(
+			path,
+			assistant(
+				agentId,
+				`m/${agentId}`,
+				tokens,
+				{ isSidechain: true, agentId },
+				T0 + 30,
+			),
+		);
+		events.push([
+			"SubagentStop",
+			JSON.stringify(
+				base({
+					hook_event_name: "SubagentStop",
+					agent_id: agentId,
+					agent_type: "test",
+					agent_transcript_path: path,
+					stop_hook_active: false,
+				}),
+			),
+		]);
+	}
+	s.setNow(T0 + 40);
+	for (const [event, body] of [...events, ...events.toReversed()])
+		await s.api.handleHook(event, body);
+	const db = new Database(dbPath);
+	try {
+		const rows = db
+			.query(
+				"SELECT suggestion_id, model, output_tokens FROM usages ORDER BY model",
+			)
+			.all();
+		expect(rows).toEqual([
+			{ suggestion_id: a, model: "m/a1", output_tokens: 10 },
+			{ suggestion_id: b, model: "m/b1", output_tokens: 20 },
+			{ suggestion_id: main, model: "m/main", output_tokens: 5 },
+		]);
+	} finally {
+		db.close();
+	}
 });

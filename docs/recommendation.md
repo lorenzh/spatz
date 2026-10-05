@@ -2,7 +2,7 @@
 title: How spatz picks a model and effort
 description: The decision rule of spatz: cells, the Beta estimate, thresholds, cost order, critical tasks, exploration, the control group and how quality is computed.
 tags: [spatz, recommendation, learning]
-keywords: [decision rule, strategy, learned, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats]
+keywords: [decision rule, strategy, learned, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
 ---
 
 # How spatz picks a model and effort
@@ -127,9 +127,32 @@ The rules:
 2. Without a report, spatz takes the latest value per signal kind. The quality is the weighted mean over the kinds.
 3. Without a signal, there is no outcome.
 
-The used pair comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest known effort of that model from the hooks. If no hook reported an effort, the outcome does not count for learning.
+The used pair comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest recorded effort for that model. Without a known effort, the outcome does not count for learning.
 
 An outcome is a success when quality `≥ 0.8`. `partial` is not a success.
+
+## Routing scope and measurement
+
+Schema v3 adds `scope`, `agent`, `turn_id` and `agent_id` to suggestions.
+`SCHEMA_V3` preserves earlier suggestions and outcomes. Earlier rows have null attribution fields.
+The core stores five scope labels: `step`, `turn`, `subagent`, `session` and `escalate`.
+These labels describe when the caller makes a routing decision.
+They do not change the learning cell or its thresholds.
+
+Session windows use `(session_id, agent_id)`. Each subagent can keep an independent open suggestion.
+The main sequence uses a null agent id.
+A suggestion can cover several turns. Direct usage records each turn separately.
+Direct usage has no success value. Explicit reports or test/build signals supply that value.
+The outcome view still computes one outcome per suggestion.
+See [how-it-works.md](how-it-works.md#direct-attribution) for the fields and migration.
+
+`spatz stats --by scope` compares outcomes and token totals per scope.
+It includes input, output, cache-read and cache-creation tokens.
+The cache-read share divides cache-read tokens by all input tokens, including cache creation.
+Suggestions without a scope appear on a separate line.
+`n` counts outcomes. Usage without an outcome still contributes tokens.
+The view does not estimate cost or routing latency.
+See [cli.md](cli.md#spatz-stats) for the output fields.
 
 ## Worked example
 
