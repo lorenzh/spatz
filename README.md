@@ -53,14 +53,29 @@ spatz works without a key. Without a key, spatz uses the keyword rules. These ru
 
 ## Install
 
+Install the CLI with Node.js 18 or newer:
+
 ```bash
 npm i -g @spatz/cli
 ```
 
-For nightlies, use `npm i -g @spatz/cli@nightly`.
-In Claude Code, add `/plugin marketplace add lorenzh/spatz`.
-Install `spatz-hooks@spatz` for recording, `spatz@spatz` for routing, or both.
-See [installation](docs/installation.md) for the commands, API key, binary downloads and recorder settings.
+For nightlies, run `npm i -g @spatz/cli@nightly`. Or download release binaries with `gh release download --repo lorenzh/spatz --pattern 'spatz-cli-*'`.
+
+In Claude Code, run `/plugin marketplace add lorenzh/spatz`, then install:
+
+- `/plugin install spatz@spatz` for model recommendations and routing.
+- `/plugin install spatz-hooks@spatz` for automatic outcome recording.
+- Install both to route and record together; keep `record: auto`.
+
+In Codex, run `codex plugin marketplace add lorenzh/spatz`, then `codex plugin add spatz-hooks@spatz`. Review and trust the hooks with `/hooks` before they run.
+
+For TypeSafe AI task classification, set `TYPESAFE_AI_API_KEY` in the CLI environment:
+
+```bash
+export TYPESAFE_AI_API_KEY=<your-key>
+```
+
+See [installation](docs/installation.md) for details.
 
 ## Releases
 

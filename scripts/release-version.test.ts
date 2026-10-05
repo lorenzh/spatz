@@ -28,12 +28,13 @@ test("release tags require strict semver and detect prereleases", () => {
 	}
 });
 
-test("release versions stamp the CLI, both plugins and marketplace entries", async () => {
+test("release versions stamp the CLI, all plugins and marketplace entries", async () => {
 	const root = await mkdtemp(join(tmpdir(), "spatz-version-"));
 	const paths = [
 		"packages/cli/package.json",
 		"packages/claude-mod/.claude-plugin/plugin.json",
 		"packages/claude-hooks/.claude-plugin/plugin.json",
+		"packages/codex-hooks/.codex-plugin/plugin.json",
 		".claude-plugin/marketplace.json",
 	] as const;
 	try {
@@ -54,11 +55,11 @@ test("release versions stamp the CLI, both plugins and marketplace entries", asy
 				expect(before[index]?.split("\n").length).toBe(
 					(await Bun.file(join(root, path)).text()).split("\n").length,
 				);
-			for (const path of paths.slice(0, 3))
+			for (const path of paths.slice(0, 4))
 				expect((await Bun.file(join(root, path)).json()).version).toBe(
 					tag.slice(1),
 				);
-			const marketplace = await Bun.file(join(root, paths[3])).json();
+			const marketplace = await Bun.file(join(root, paths[4])).json();
 			expect(
 				marketplace.plugins.map(
 					(p: { name: string; version: string; source: string }) => [

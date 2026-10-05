@@ -57,6 +57,25 @@ export async function buildPlugins(
 			sha256,
 		};
 	}
+	const codexArchive = join(
+		out,
+		`spatz-codex-hooks-${version.replaceAll("+", "-")}.zip`,
+	);
+	await rm(codexArchive, { force: true });
+	const codexPack = Bun.spawn(["zip", "-qr", codexArchive, "."], {
+		cwd: join(root, "packages/codex-hooks"),
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+	if (await codexPack.exited)
+		throw new Error("Plugin archive failed: spatz-hooks (Codex)");
+	const codexSha256 = createHash("sha256")
+		.update(await Bun.file(codexArchive).bytes())
+		.digest("hex");
+	await Bun.write(
+		`${codexArchive}.sha256`,
+		`${codexSha256}  ${basename(codexArchive)}\n`,
+	);
 	const file = join(out, "marketplace.json");
 	await Bun.write(file, `${JSON.stringify(marketplace, null, "\t")}\n`);
 	const sha256 = createHash("sha256")

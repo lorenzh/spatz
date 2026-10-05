@@ -25,6 +25,7 @@ export async function setReleaseVersion(
 		"packages/cli/package.json",
 		"packages/claude-mod/.claude-plugin/plugin.json",
 		"packages/claude-hooks/.claude-plugin/plugin.json",
+		"packages/codex-hooks/.codex-plugin/plugin.json",
 		".claude-plugin/marketplace.json",
 	]) {
 		const file = Bun.file(join(root, path));

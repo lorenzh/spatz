@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, plugin, marketplace, spatz-hooks]
+keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz-hooks]
 ---
 
 # Claude Code hooks for spatz
@@ -210,17 +210,24 @@ When you install the hooks plugin, remove equivalent hand-written entries from `
 
 ## Codex CLI
 
-Add these hooks to `~/.codex/hooks.json` or the project Codex hooks file. Codex hooks run synchronously.
+Install the `spatz-hooks` Codex plugin after installing the CLI:
+
+```text
+codex plugin marketplace add lorenzh/spatz
+codex plugin add spatz-hooks@spatz
+```
+
+The plugin runs these hooks synchronously with a 10-second timeout. Codex skips plugin hooks until you review and trust them through `/hooks`.
 
 ```json
 {
 	"hooks": {
 		"PostToolUse": [{
 			"matcher": "Bash",
-			"hooks": [{ "type": "command", "command": "spatz hook PostToolUse --agent codex" }]
+			"hooks": [{ "type": "command", "command": "spatz hook PostToolUse --agent codex", "timeout": 10 }]
 		}],
 		"Stop": [{
-			"hooks": [{ "type": "command", "command": "spatz hook Stop --agent codex" }]
+			"hooks": [{ "type": "command", "command": "spatz hook Stop --agent codex", "timeout": 10 }]
 		}]
 	}
 }

@@ -1,0 +1,27 @@
+{
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "Bash",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "spatz hook PostToolUse --agent codex",
+						"timeout": 10
+					}
+				]
+			}
+		],
+		"Stop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "spatz hook Stop --agent codex",
+						"timeout": 10
+					}
+				]
+			}
+		]
+	}
+}

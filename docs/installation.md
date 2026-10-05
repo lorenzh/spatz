@@ -1,13 +1,13 @@
 ---
 title: Installing spatz
-description: Install the spatz CLI and choose Claude Code hooks, the mod, or both.
-tags: [installation, cli, claude-code, spatz]
+description: Install the spatz CLI and choose Claude Code or Codex hooks and plugins.
+tags: [installation, cli, claude-code, codex, spatz]
 keywords: [install, npm, nightly, binary, release, marketplace, plugin, hooks, mod, zip, archive, PATH, TYPESAFE_AI_API_KEY]
 ---
 
 # Installing spatz
 
-The Claude Code plugins call the `spatz` CLI. Install the CLI first.
+The plugins call the `spatz` CLI. Install the CLI first.
 
 ## Install the CLI
 
@@ -33,11 +33,15 @@ The mod also defaults to `spatz`, but accepts an executable path through its `sp
 
 ## Configure classification
 
-To use TypeSafe AI classification, set `TYPESAFE_AI_API_KEY` in the environment that starts Claude Code.
+To use TypeSafe AI classification, set `TYPESAFE_AI_API_KEY` in the environment that starts your CLI or coding agent.
 Do not put the key in a repository or plugin file.
 Without a key, spatz uses local keyword rules.
 When classification is enabled, spatz sends task text and candidate models to TypeSafe AI.
 It does not store task text. See [configuration](configuration.md) and [privacy](privacy.md).
+
+```bash
+export TYPESAFE_AI_API_KEY=<your-key>
+```
 
 ## Choose a Claude Code setup
 
@@ -106,7 +110,15 @@ If you load both plugins manually, set `/spatz record off`.
 Automatic detection checks installed plugins.
 The ZIPs do not include the CLI.
 
-## Codex
+## Use with Codex
 
-Use the [Codex hooks instructions](hooks.md#codex-cli).
-The Claude Code marketplace plugins do not install Codex hooks.
+Install the Codex marketplace plugin:
+
+```text
+codex plugin marketplace add lorenzh/spatz
+codex plugin add spatz-hooks@spatz
+```
+
+Review and trust the new hooks with `/hooks` before they run. Codex stores plugin hooks separately from manually configured hooks.
+The plugin runs `spatz` from `PATH`, so install the CLI first.
+See [Codex hooks](hooks.md#codex-cli) for the events and limits.

@@ -7,7 +7,7 @@ keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, do
 
 # Releasing spatz
 
-1. Run `bun scripts/release-version.ts v0.2.0` with the next SemVer version. Include all four manifests in the version bump.
+1. Run `bun scripts/release-version.ts v0.2.0` with the next SemVer version. Include all five manifests in the version bump.
 2. Run the gates in [CONTRIBUTING.md](CONTRIBUTING.md). Commit the bump and merge it into `main` through a pull request.
 3. Tag the merged commit and push the tag:
 
@@ -19,7 +19,7 @@ keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, do
    ```
 
 The release workflow rejects tags that do not contain a valid SemVer version.
-It sets the CLI version, both plugin manifest versions and both marketplace entry versions from the tag.
+It sets the CLI version, all three plugin manifest versions and both Claude Code marketplace entry versions from the tag.
 Each native runner runs the tests, typecheck, lint, build, and archive smoke test.
 GitHub publishes the archives, SHA256 checksums, and generated release notes after all builds pass.
 Versions such as `v0.2.0-rc.1` produce prereleases.
@@ -58,6 +58,7 @@ The shared build workflow packs both plugin directories once on Linux for releas
 
 - `spatz-claude-plugin-<version>.zip`: the `spatz` mod.
 - `spatz-claude-hooks-<version>.zip`: the `spatz-hooks` command hooks.
+- `spatz-codex-hooks-<version>.zip`: the Codex `spatz-hooks` plugin.
 - `marketplace.json`: the release marketplace with HTTPS archive URLs and SHA-256 pins.
 
 Each file has a `.sha256` companion and an entry in `SHA256SUMS`.

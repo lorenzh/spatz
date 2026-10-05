@@ -15,6 +15,7 @@ test.skipIf(process.platform === "win32")(
 				".claude-plugin",
 				"packages/claude-mod",
 				"packages/claude-hooks",
+				"packages/codex-hooks",
 				"packages/cli/package.json",
 			])
 				await cp(resolve(import.meta.dir, "..", path), join(root, path), {
@@ -60,6 +61,31 @@ test.skipIf(process.platform === "win32")(
 						await Bun.file(join(extract, "hooks/hooks.json")).exists(),
 					).toBe(true);
 				}
+				const codexArchive = join(
+					out,
+					"spatz-codex-hooks-9.8.7-rc.1-build-test.zip",
+				);
+				const codexSha256 = createHash("sha256")
+					.update(await Bun.file(codexArchive).bytes())
+					.digest("hex");
+				expect(await Bun.file(`${codexArchive}.sha256`).text()).toBe(
+					`${codexSha256}  ${basename(codexArchive)}\n`,
+				);
+				const codexExtract = join(root, `extract-${tag}-codex`);
+				expect(
+					await Bun.spawn(["unzip", "-q", codexArchive, "-d", codexExtract])
+						.exited,
+				).toBe(0);
+				expect(
+					(
+						await Bun.file(
+							join(codexExtract, ".codex-plugin/plugin.json"),
+						).json()
+					).name,
+				).toBe("spatz-hooks");
+				expect(
+					await Bun.file(join(codexExtract, "hooks/hooks.json")).exists(),
+				).toBe(true);
 				const sha256 = createHash("sha256")
 					.update(await Bun.file(file).bytes())
 					.digest("hex");
