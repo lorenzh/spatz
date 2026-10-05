@@ -159,7 +159,7 @@ Both examples ran with `SPATZ_NO_JEV=1` and an empty database. That is why `fall
 
 ## spatz report
 
-This command records the pair you used and the result of the task. A report wins over the hook signals of its pair. Signals of other pairs stay separate attempts, so a failed cheaper attempt keeps its failure. The report also closes the suggestion, so later hook events do not go to it.
+This command records the pair you used and the result of the task. A report wins over the earlier hook signals of its pair and ends that attempt. Signals of other pairs stay separate attempts, so a failed cheaper attempt keeps its failure. The report also closes the suggestion, so later hook events do not go to it.
 
 ### Flags
 
@@ -175,9 +175,10 @@ This command records the pair you used and the result of the task. A report wins
 | `--turn <id>` | string | none | Identify a direct report's turn. Needs `--source claude-code-mod`. |
 | `--source claude-code-mod` | string | none | Identify a direct mod report. Needs `--turn`. |
 
-If you send a second report for the same suggestion and pair, the newest report counts.
-Direct reports replace the signal for the same suggestion, source, turn and kind.
-Each new turn keeps its own signal. The outcome view returns one outcome per attempt (pair).
+If you send a second report for the same suggestion, pair and turn directly after the first, the newest report counts.
+After more work by that pair (hook signals or another turn), a report starts a new attempt of the same pair.
+Direct reports replace the signal for the same suggestion, source, turn, kind and pair.
+Two pairs that report in one turn keep both signals. The outcome view returns one outcome per attempt.
 The report stores the turn id and the suggestion's agent id on its usage and signal rows.
 
 ### Text output
@@ -279,7 +280,7 @@ For older rollouts, it matches calls to outputs by call id. See [hooks.md](hooks
 | `<event>` | string, positional | none | The hook event name. spatz takes the event from `hook_event_name` in the stdin JSON. The argument only makes the settings file easier to read. |
 
 The command prints nothing by default and always exits with code 0. It ignores invalid JSON and all errors.
-It counts errors and transcripts that parse to nothing. `spatz stats` shows the counts.
+It counts errors, input that is not hook JSON, and transcripts that parse to nothing or without a time, once per turn. `spatz stats` shows the counts.
 With `SPATZ_DEBUG=1`, hooks write fixed diagnostics to stderr. They contain no prompt text or tool output.
 
 ### Example
@@ -351,7 +352,7 @@ There is one block per task type, with one indented line per used pair. `-` mean
 | `by_type[].pairs[].effort` | string or null | `null` when no hook input gave an effort. |
 | `by_type[].pairs[].n` | number | Count of outcomes with this pair. |
 | `by_type[].pairs[].success_rate` | number, 0 to 1 | Share of outcomes with quality of 0.8 or more. |
-| `by_type[].pairs[].escalations` | number | Outcomes of this pair after which another pair worked on the same suggestion. |
+| `by_type[].pairs[].escalations` | number | Later attempts (retries and escalations, of any pair) on the suggestions that this pair tried first. cheap, then middle, then strong gives 2 for cheap. |
 | `by_type[].pairs[].input_tokens`, `output_tokens` | number | All tokens of the suggestions that this pair tried first. Retries and escalations count as cost of the first pair. |
 | `by_type[].adoption_rate` | number, 0 to 1 | Share of suggestions whose first attempt used `ranking[0]`. |
 | `by_type[].input_tokens` | number | Sum of recorded input tokens. |
@@ -360,8 +361,8 @@ There is one block per task type, with one indented line per used pair. `-` mean
 | `learned_success` | number or null | Success rate of learned picks. spatz compares only cells that have both learned and control outcomes, and weights each cell by its count. |
 | `control_success` | number or null | Success rate of the control group in the same cells. Both rates use the first attempt. |
 | `fallbacks` | object | Non-test suggestions per rule fallback reason, for example `{"no_key": 3}`. `unknown` counts rows from before schema v5. See [how-it-works.md](how-it-works.md#rule-fallback). |
-| `failures.parse` | number | Hook events whose transcript or rollout gave nothing. A rising count can mean that Claude Code or Codex changed its format. |
-| `failures.hook` | number | `spatz hook` calls that failed. |
+| `failures.parse` | number | Turns whose transcript or rollout gave nothing, or no time, for a hook event. A rising count can mean that Claude Code or Codex changed its format. |
+| `failures.hook` | number | Turns with a failed `spatz hook` call or input that is not hook JSON. Calls without a turn id count one each. |
 | `failures.launcher` | number | Hook calls that the plugin launcher could not run. Lines in `~/.spatz/launcher-failures`. |
 
 ### Example

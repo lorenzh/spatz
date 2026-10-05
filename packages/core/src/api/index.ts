@@ -49,6 +49,7 @@ import {
 } from "../signals/index.ts";
 import {
 	type AssistantMessage,
+	type CodexRollout,
 	type ModelUsage,
 	mainTurnMessages,
 	parseCodexRollout,
@@ -61,6 +62,45 @@ import { loadConfig } from "./deps.ts";
 export interface ApiInternals {
 	/** Test seam. Default: report module, imported lazily so DuckDB loads only for stats. */
 	runStats?: (options: StatsOptions) => Promise<StatsReport>;
+}
+
+/**
+ * Where a hook signal belongs: the window at its time among the suggestions linked to its prompt or turn,
+ * else any window at its time. Without a time, only a suggestion of its own prompt or turn that is open now.
+ */
+function signalTarget(
+	store: Store,
+	sessionId: string,
+	bindingId: string | null | undefined,
+	at: number,
+	now: number,
+	openWindowMs: number,
+	agentId: string | null,
+): string | null {
+	const known = Number.isFinite(at);
+	return (
+		(bindingId
+			? store.boundSuggestion(
+					sessionId,
+					bindingId,
+					known ? at : now,
+					openWindowMs,
+					agentId,
+				)
+			: null) ??
+		(known ? store.suggestionAt(sessionId, at, openWindowMs, agentId) : null)
+	);
+}
+
+/** The turn an event belongs to, for counting failures once per turn. */
+function hookTurn(stdin: string): string | null {
+	try {
+		const v = JSON.parse(stdin);
+		const id = v?.agent_id ?? v?.prompt_id ?? v?.turn_id;
+		return typeof id === "string" ? id : null;
+	} catch {
+		return null;
+	}
 }
 
 const NO_TOKENS = {
@@ -202,7 +242,13 @@ export function createApi(
 			return true;
 		};
 		const parsed = (store: Store, ok: boolean) => {
-			if (!ok) store.recordFailure("parse", input.hook_event_name, now);
+			if (!ok)
+				store.recordFailure(
+					"parse",
+					input.hook_event_name,
+					now,
+					input.agent_id ?? input.prompt_id ?? null,
+				);
 		};
 		// ponytail: subagent path derived from the Claude Code layout <session>/subagents/agent-<id>.jsonl
 		const subagentPath = (agentId: string) =>
@@ -298,15 +344,18 @@ export function createApi(
 						input.agent_id ? undefined : input.prompt_id,
 						input.tool_use_id,
 					);
-					parsed(store, call !== null);
-					const target = call
-						? store.suggestionAt(
-								input.session_id,
-								call.at,
-								cfg.tuning.openWindowMs,
-								input.agent_id ?? null,
-							)
-						: open;
+					// A hook runs after its call: a transcript time ahead of our clock is skew, not the future.
+					const at = Math.min(call?.at ?? Number.NaN, now);
+					parsed(store, Number.isFinite(at));
+					const target = signalTarget(
+						store,
+						input.session_id,
+						input.prompt_id,
+						at,
+						now,
+						cfg.tuning.openWindowMs,
+						input.agent_id ?? null,
+					);
 					if (!target) return;
 					// The model that ran the call is the attempt inside a subagent or a mod-routed loop.
 					// A main session that dispatched the work only verifies it: keep the suggestion's used pair.
@@ -317,7 +366,7 @@ export function createApi(
 					store.insertSignal({
 						...signal,
 						suggestion_id: target,
-						...(call && { observed_at: call.at }),
+						observed_at: Number.isFinite(at) ? at : now,
 						...(credit && {
 							model: canonical(call.model),
 							effort: effortFromHook(input),
@@ -370,6 +419,60 @@ export function createApi(
 		cfg: Config,
 	): Promise<void> {
 		const now = deps.clock.now();
+		// Stop runs after the turn: a rollout time ahead of our clock is skew, not the future.
+		const timed = (r: CodexRollout | null) =>
+			r && { ...r, at: Math.min(r.at, now) };
+		// A turn's signals and usage go to the same suggestion: the one linked to the turn, else the window at its time.
+		const codexTarget = (store: Store, turnId: string, rollout: CodexRollout) =>
+			signalTarget(
+				store,
+				input.session_id,
+				turnId,
+				rollout.at,
+				now,
+				cfg.tuning.openWindowMs,
+				null,
+			);
+		const writeCodexUsage = (
+			store: Store,
+			turnId: string,
+			rollout: CodexRollout,
+			target: string | null,
+		) => {
+			const at = Number.isFinite(rollout.at) ? rollout.at : now;
+			store.rewriteScope(
+				{
+					session_id: input.session_id,
+					source: "transcript",
+					scope_key: turnId,
+					message_count: 1,
+					from: at,
+					last_at: at,
+					openWindowMs: cfg.tuning.openWindowMs,
+				},
+				() =>
+					target
+						? [
+								{
+									suggestion_id: target,
+									model: toCanonicalId(rollout.model, cfg.aliases),
+									effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
+									source: "transcript",
+									scope_key: turnId,
+									is_sidechain: false,
+									input_tokens: rollout.usage.input_tokens ?? 0,
+									output_tokens: rollout.usage.output_tokens ?? 0,
+									cache_read_tokens: rollout.usage.cache_read_input_tokens ?? 0,
+									cache_creation_tokens:
+										rollout.usage.cache_creation_input_tokens ?? 0,
+									rounds: null,
+									note: null,
+									reported_at: now,
+								},
+							]
+						: [],
+			);
+		};
 		return withStore(async (store) => {
 			const open = store.findOpenSuggestion(
 				input.session_id,
@@ -398,35 +501,13 @@ export function createApi(
 							.text()
 							.catch(() => null);
 						if (text === null) continue;
-						const rollout = parseCodexRollout(text, scope.scope_key);
+						const rollout = timed(parseCodexRollout(text, scope.scope_key));
 						if (!rollout) continue;
-						store.rewriteScope(
-							{
-								session_id: input.session_id,
-								source: "transcript",
-								scope_key: scope.scope_key,
-								message_count: 1,
-								from: now,
-								last_at: now,
-								openWindowMs: cfg.tuning.openWindowMs,
-							},
-							(windows) =>
-								windows.map((w) => ({
-									suggestion_id: w.id,
-									model: toCanonicalId(rollout.model, cfg.aliases),
-									effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
-									source: "transcript",
-									scope_key: scope.scope_key,
-									is_sidechain: false,
-									input_tokens: rollout.usage.input_tokens ?? 0,
-									output_tokens: rollout.usage.output_tokens ?? 0,
-									cache_read_tokens: rollout.usage.cache_read_input_tokens ?? 0,
-									cache_creation_tokens:
-										rollout.usage.cache_creation_input_tokens ?? 0,
-									rounds: null,
-									note: null,
-									reported_at: now,
-								})),
+						writeCodexUsage(
+							store,
+							scope.scope_key,
+							rollout,
+							codexTarget(store, scope.scope_key, rollout),
 						);
 					}
 				}
@@ -435,19 +516,21 @@ export function createApi(
 			if (input.hook_event_name !== "Stop" || !input.turn_id) return;
 			const turnId = input.turn_id;
 			const text = await Bun.file(input.transcript_path).text();
-			const rollout = parseCodexRollout(text, turnId);
+			const rollout = timed(parseCodexRollout(text, turnId));
 			if (!rollout) {
-				store.recordFailure("parse", "codex:Stop", now);
+				store.recordFailure("parse", "codex:Stop", now, turnId);
 				debugHook(
 					"Codex rollout has no matching turn context; check the rollout format.",
 				);
 				return;
 			}
-			// Bind the turn's signals by the turn's own time: a late Stop must not land on a newer suggestion.
+			// Without timestamps only the turn's own link can place it: count the gap.
+			if (!Number.isFinite(rollout.at)) {
+				store.recordFailure("parse", "codex:Stop", now, turnId);
+				debugHook("Codex rollout has no timestamps; check the rollout format.");
+			}
 			const at = Number.isFinite(rollout.at) ? rollout.at : now;
-			const target = Number.isFinite(rollout.at)
-				? store.suggestionAt(input.session_id, at, cfg.tuning.openWindowMs)
-				: open;
+			const target = codexTarget(store, turnId, rollout);
 			if (target && rollout.calls.length === 0)
 				debugHook("No completed shell exit codes found for this turn.");
 			if (target)
@@ -464,34 +547,7 @@ export function createApi(
 						observed_at: at,
 					});
 				}
-			store.rewriteScope(
-				{
-					session_id: input.session_id,
-					source: "transcript",
-					scope_key: turnId,
-					message_count: 1,
-					from: now,
-					last_at: now,
-					openWindowMs: cfg.tuning.openWindowMs,
-				},
-				(windows) =>
-					windows.map((w) => ({
-						suggestion_id: w.id,
-						model: toCanonicalId(rollout.model, cfg.aliases),
-						effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
-						source: "transcript",
-						scope_key: turnId,
-						is_sidechain: false,
-						input_tokens: rollout.usage.input_tokens ?? 0,
-						output_tokens: rollout.usage.output_tokens ?? 0,
-						cache_read_tokens: rollout.usage.cache_read_input_tokens ?? 0,
-						cache_creation_tokens:
-							rollout.usage.cache_creation_input_tokens ?? 0,
-						rounds: null,
-						note: null,
-						reported_at: now,
-					})),
-			);
+			writeCodexUsage(store, turnId, rollout, target);
 		});
 	}
 
@@ -776,18 +832,25 @@ export function createApi(
 			try {
 				if (_event.startsWith("codex:")) {
 					const input = JSON.parse(stdin) as CodexHookInput;
-					if (input && typeof input.hook_event_name === "string")
-						await onCodexHook(input, await getConfig());
+					if (typeof input?.hook_event_name !== "string")
+						throw new Error("unknown hook input");
+					await onCodexHook(input, await getConfig());
 				} else {
 					const input = parseHookInput(stdin);
-					if (input) await onHook(input, await getConfig());
+					if (!input) throw new Error("unknown hook input");
+					await onHook(input, await getConfig());
 				}
 			} catch {
 				debugHook(
 					"Recording failed; check hook input, transcript access and database permissions.",
 				);
 				await withStore((store) =>
-					store.recordFailure("hook", _event, deps.clock.now()),
+					store.recordFailure(
+						"hook",
+						_event,
+						deps.clock.now(),
+						hookTurn(stdin),
+					),
 				).catch(() => {});
 			}
 		},

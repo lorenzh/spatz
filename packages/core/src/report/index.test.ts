@@ -255,6 +255,34 @@ test("attempts: a stronger retry counts for its own pair; escalations and all to
 	});
 });
 
+test("attempts: cheap -> middle -> strong charges both escalations to the cheap pair", async () => {
+	sug("e3", { top: ["m/cheap", "low"], scope: "escalate" });
+	const pairs = [
+		["m/cheap", "low", 0],
+		["m/middle", "medium", 0],
+		["m/strong", "high", 1],
+	] as const;
+	for (const [i, [model, effort, value]] of pairs.entries())
+		store.insertSignal({
+			suggestion_id: "e3",
+			kind: "test",
+			weight: 1,
+			value,
+			source: "PostToolUse",
+			model,
+			effort,
+			observed_at: i + 1,
+		});
+	const [type] = (await stats()).by_type;
+	expect(
+		type?.pairs.map(({ model, n, escalations }) => ({ model, n, escalations })),
+	).toEqual([
+		{ model: "m/cheap", n: 1, escalations: 2 },
+		{ model: "m/middle", n: 1, escalations: 0 },
+		{ model: "m/strong", n: 1, escalations: 0 },
+	]);
+});
+
 test("fallback reasons and silent failures are counted", async () => {
 	sug("jev");
 	sug("t", { fallback: "timeout" });
@@ -264,9 +292,12 @@ test("fallback reasons and silent failures are counted", async () => {
 	store.recordFailure("parse", "Stop", 1);
 	store.recordFailure("parse", "codex:Stop", 2);
 	store.recordFailure("hook", "PostToolUse", 3);
+	// One per affected turn: a second event of turn t1 does not count again.
+	store.recordFailure("parse", "PostToolUse", 4, "t1");
+	store.recordFailure("parse", "Stop", 5, "t1");
 	const r = await stats();
 	expect(r.fallbacks).toEqual({ timeout: 2, unknown: 1 });
-	expect(r.failures).toEqual({ parse: 2, hook: 1, launcher: 0 });
+	expect(r.failures).toEqual({ parse: 3, hook: 1, launcher: 0 });
 });
 
 test("reads the SQLite file read-only and leaves it unchanged", async () => {

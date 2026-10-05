@@ -29,9 +29,9 @@ export interface StatsOptions {
 // success test runs inside SQLite at double precision.
 const base = (q: number, noneOnlyModels: string[]) => `
 WITH s AS (SELECT * FROM db.suggestions WHERE is_test = 0),
-oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, attempt, attempt = MAX(attempt) OVER (PARTITION BY suggestion_id) AS is_last, model, CASE WHEN model IN (${noneOnlyModels.map((id) => `''${id.replaceAll("'", "''''")}''`).join(",") || "NULL"}) THEN ''none'' ELSE effort END AS effort, quality >= ${q} AS success FROM attempts')),
+oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, attempt, MAX(attempt) OVER (PARTITION BY suggestion_id) AS attempts, model, CASE WHEN model IN (${noneOnlyModels.map((id) => `''${id.replaceAll("'", "''''")}''`).join(",") || "NULL"}) THEN ''none'' ELSE effort END AS effort, quality >= ${q} AS success FROM attempts')),
 o AS (
-	SELECT s.id AS suggestion_id, o.attempt, o.is_last, s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
+	SELECT s.id AS suggestion_id, o.attempt::INTEGER AS attempt, o.attempts::INTEGER AS attempts, s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success::INTEGER AS success,
 		COALESCE(o.model = json_extract_string(s.ranking, '$[0].model')
 			AND o.effort = json_extract_string(s.ranking, '$[0].effort'), false)::INTEGER AS adopted
@@ -81,14 +81,14 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				tok.input_tokens, tok.output_tokens
 			FROM tok LEFT JOIN agg USING (task_type) ORDER BY tok.task_type`,
 		);
-		// Escalations and retries are cost of the first pair: it carries all tokens of its suggestions.
+		// Escalations and retries are cost of the first pair: it carries all later attempts and all tokens of its suggestions.
 		const pairs = await rows<PairStats & { task_type: TaskType }>(
 			`, tok AS (
 				SELECT suggestion_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
 				FROM db.usages GROUP BY suggestion_id
 			)
 			SELECT task_type, model, effort, COUNT(*)::INTEGER AS n, AVG(success) AS success_rate,
-				COUNT(*) FILTER (WHERE is_last = 0)::INTEGER AS escalations,
+				COALESCE(SUM(attempts - 1) FILTER (WHERE attempt = 1), 0)::INTEGER AS escalations,
 				COALESCE(SUM(tok.input_tokens) FILTER (WHERE attempt = 1), 0)::DOUBLE AS input_tokens,
 				COALESCE(SUM(tok.output_tokens) FILTER (WHERE attempt = 1), 0)::DOUBLE AS output_tokens
 			FROM o LEFT JOIN tok USING (suggestion_id) WHERE model IS NOT NULL GROUP BY ALL ORDER BY model, effort`,
@@ -136,7 +136,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					COALESCE(SUM(tok.output_tokens), 0)::DOUBLE AS output_tokens,
 					COALESCE(SUM(tok.cache_read_tokens), 0)::DOUBLE AS cache_read_tokens,
 					COALESCE(SUM(tok.cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens
-				FROM s LEFT JOIN oq ON oq.suggestion_id = s.id AND oq.is_last = 1 LEFT JOIN tok ON tok.suggestion_id = s.id
+				FROM s LEFT JOIN oq ON oq.suggestion_id = s.id AND oq.attempt = oq.attempts LEFT JOIN tok ON tok.suggestion_id = s.id
 				${type ? `WHERE s.task_type = '${type.replaceAll("'", "''")}'` : ""}
 				GROUP BY s.scope
 			)

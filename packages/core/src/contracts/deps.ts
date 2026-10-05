@@ -130,8 +130,21 @@ export interface Store {
 		openWindowMs: number,
 		agentId?: string | null,
 	): string | null;
-	/** Count a silent failure for spatz stats: a hook error or a transcript that parsed to nothing. */
-	recordFailure(kind: "parse" | "hook", source: string, at: number): void;
+	/** Like suggestionAt, but only among suggestions linked to this prompt or turn id (prompt_id or turn_id). */
+	boundSuggestion(
+		sessionId: string,
+		bindingId: string,
+		at: number,
+		openWindowMs: number,
+		agentId?: string | null,
+	): string | null;
+	/** Count a silent failure for spatz stats: a hook error or a transcript that parsed to nothing. One row per kind and turn; null counts every event. */
+	recordFailure(
+		kind: "parse" | "hook",
+		source: string,
+		at: number,
+		turnId?: string | null,
+	): void;
 	/** Set last_event_at. */
 	touch(suggestionId: string, at: number): void;
 	closeSuggestion(suggestionId: string, at: number): void;

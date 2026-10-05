@@ -147,12 +147,22 @@ const SCHEMA_V4 = [
 
 // Attempts: each signal counts for the pair that produced it, so a stronger retry is not credited to the
 // failed pair. Signals without a model (all rows before v5) use the suggestion's used pair, as in v1.
-// Per attempt: the latest report wins, else the latest value per hook kind, weighted mean over kinds.
+// In signal order, an attempt ends when the pair changes or with a report (its verdict): A->B->A is three
+// attempts, and a failed report, more work by the same pair (hook signals or a new turn) and a passing report
+// are two. A second report of the same pair and turn right after the first corrects it.
+// Per attempt: its latest report wins, else the latest value per hook kind, weighted mean over kinds.
+// Tokens: each usage row goes to the latest attempt of its model that started before the row was written,
+// else to the first attempt of that model.
 const SCHEMA_V5 = [
 	"ALTER TABLE suggestions ADD COLUMN fallback_reason TEXT CHECK (fallback_reason IN ('opt_out', 'secret', 'no_key', 'timeout', 'auth', 'rate_limit', 'error'))",
 	"ALTER TABLE signals ADD COLUMN model TEXT",
 	"ALTER TABLE signals ADD COLUMN effort TEXT",
-	"CREATE TABLE failures (kind TEXT NOT NULL CHECK (kind IN ('parse', 'hook')), source TEXT NOT NULL, observed_at INTEGER NOT NULL)",
+	// One row per affected turn; events without a turn id count one each.
+	"CREATE TABLE failures (kind TEXT NOT NULL CHECK (kind IN ('parse', 'hook')), source TEXT NOT NULL, observed_at INTEGER NOT NULL, turn_id TEXT)",
+	"CREATE UNIQUE INDEX failures_turn ON failures (kind, turn_id) WHERE turn_id IS NOT NULL",
+	// Two pairs in one turn (cheap report, then strong report) keep their own signals; a replay still replaces.
+	"DROP INDEX signals_turn",
+	"CREATE UNIQUE INDEX signals_turn ON signals (suggestion_id, source, turn_id, kind, COALESCE(model, ''), COALESCE(effort, '')) WHERE turn_id IS NOT NULL",
 	"DROP VIEW outcomes",
 	`CREATE VIEW attempts AS
 WITH usage_effort AS (
@@ -178,36 +188,63 @@ pair AS (
 	) WHERE rn = 1
 ),
 credited AS (
-	SELECT s.suggestion_id, s.kind, s.value, s.weight, s.observed_at, s.rowid AS rid,
+	SELECT s.suggestion_id, s.kind, s.value, s.weight, s.observed_at, s.turn_id, s.rowid AS rid,
 		COALESCE(s.model, p.model) AS model,
 		CASE WHEN s.model IS NULL THEN p.effort ELSE COALESCE(s.effort, e.effort) END AS effort
 	FROM signals s
 	LEFT JOIN pair p ON p.suggestion_id = s.suggestion_id
 	LEFT JOIN usage_effort e ON e.suggestion_id = s.suggestion_id AND e.model = s.model
 ),
-latest AS (
-	SELECT * FROM (
-		SELECT *, ROW_NUMBER() OVER (
-			PARTITION BY suggestion_id, model, effort, kind ORDER BY observed_at DESC, rid DESC
-		) AS rn,
-		MIN(observed_at) OVER (PARTITION BY suggestion_id, model, effort) AS first_at,
-		MAX(observed_at) OVER (PARTITION BY suggestion_id, model, effort) AS last_at
-		FROM credited
-	) WHERE rn = 1
+marked AS (
+	SELECT *, CASE WHEN LAG(rid) OVER w IS NULL OR LAG(model) OVER w IS NOT model
+		OR LAG(effort) OVER w IS NOT effort
+		OR (LAG(kind) OVER w = 'report' AND (kind <> 'report' OR LAG(turn_id) OVER w IS NOT turn_id))
+		THEN 1 ELSE 0 END AS starts
+	FROM credited WINDOW w AS (PARTITION BY suggestion_id ORDER BY observed_at, rid)
+),
+numbered AS (
+	SELECT *, SUM(starts) OVER (
+		PARTITION BY suggestion_id ORDER BY observed_at, rid ROWS UNBOUNDED PRECEDING
+	) AS attempt FROM marked
+),
+spans AS (
+	SELECT suggestion_id, attempt, MIN(model) AS model, MIN(effort) AS effort,
+		MIN(observed_at) AS first_at, MAX(observed_at) AS last_at
+	FROM numbered GROUP BY suggestion_id, attempt
 ),
 graded AS (
-	SELECT suggestion_id, model, effort, MIN(first_at) AS first_at, MAX(last_at) AS last_at, COALESCE(
+	SELECT suggestion_id, attempt, COALESCE(
 		MAX(CASE WHEN kind = 'report' THEN value END),
 		SUM(CASE WHEN kind <> 'report' THEN weight * value END)
 			/ SUM(CASE WHEN kind <> 'report' THEN weight END)
 	) AS quality
-	FROM latest GROUP BY suggestion_id, model, effort
+	FROM (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY suggestion_id, attempt, kind ORDER BY observed_at DESC, rid DESC
+		) AS rn FROM numbered
+	) WHERE rn = 1 GROUP BY suggestion_id, attempt
+),
+-- ponytail: usage is matched by write time, so A->B->A inside one transcript turn charges all A tokens to the later A.
+usage_attempt AS (
+	SELECT * FROM (
+		SELECT u.*, sp.attempt, ROW_NUMBER() OVER (
+			PARTITION BY u.rowid ORDER BY sp.first_at <= u.reported_at DESC,
+				CASE WHEN sp.first_at <= u.reported_at THEN -sp.first_at ELSE sp.first_at END
+		) AS rn
+		FROM usages u JOIN spans sp ON sp.suggestion_id = u.suggestion_id AND sp.model = u.model
+	) WHERE rn = 1
+),
+tokens AS (
+	SELECT suggestion_id, attempt, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+		SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens
+	FROM usage_attempt GROUP BY suggestion_id, attempt
 )
-SELECT suggestion_id, ROW_NUMBER() OVER (
-		PARTITION BY suggestion_id ORDER BY first_at, model, effort
-	) AS attempt,
-	model, effort, CAST(quality AS REAL) AS quality, first_at, last_at
-FROM graded`,
+SELECT sp.suggestion_id, sp.attempt, sp.model, sp.effort, CAST(g.quality AS REAL) AS quality,
+	sp.first_at, sp.last_at,
+	COALESCE(t.input_tokens, 0) AS input_tokens, COALESCE(t.output_tokens, 0) AS output_tokens,
+	COALESCE(t.cache_read_tokens, 0) AS cache_read_tokens, COALESCE(t.cache_creation_tokens, 0) AS cache_creation_tokens
+FROM spans sp JOIN graded g ON g.suggestion_id = sp.suggestion_id AND g.attempt = sp.attempt
+LEFT JOIN tokens t ON t.suggestion_id = sp.suggestion_id AND t.attempt = sp.attempt`,
 	"CREATE VIEW outcomes AS SELECT suggestion_id, quality, model, effort FROM attempts",
 ];
 
@@ -432,8 +469,40 @@ export function openStore(
 					?.id ?? null
 			);
 		},
-		recordFailure(kind, source, at) {
-			db.query("INSERT INTO failures VALUES (?, ?, ?)").run(kind, source, at);
+		boundSuggestion(sessionId, bindingId, at, openWindowMs, agentId = null) {
+			// The window rule of sessionWindows, limited to suggestions linked to this prompt or turn.
+			const row = db
+				.query<
+					{ id: string },
+					{
+						session: string;
+						agent: string | null;
+						binding: string;
+						at: number;
+						idle: number;
+					}
+				>(
+					`SELECT id FROM suggestions
+					WHERE session_id = $session AND agent_id IS $agent AND (prompt_id = $binding OR turn_id = $binding)
+					AND created_at <= $at AND MIN(COALESCE(closed_at, last_event_at + $idle + 1), last_event_at + $idle + 1) > $at
+					ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+				)
+				.get({
+					session: sessionId,
+					agent: windowAgent(sessionId, agentId),
+					binding: bindingId,
+					at,
+					idle: openWindowMs,
+				});
+			return row?.id ?? null;
+		},
+		recordFailure(kind, source, at, turnId = null) {
+			db.query("INSERT OR IGNORE INTO failures VALUES (?, ?, ?, ?)").run(
+				kind,
+				source,
+				at,
+				turnId,
+			);
 		},
 		touch(id, at) {
 			db.query("UPDATE suggestions SET last_event_at = ? WHERE id = ?").run(

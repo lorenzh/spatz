@@ -20,7 +20,7 @@ For the decision rule, read [recommendation.md](recommendation.md). For data tha
 | Suggestion | The result of one `spatz "<task>"` call: an id, a ranking of 1 to 3 candidates, a reason and the classification. |
 | Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz usage`, `spatz report` or Claude Code and Codex CLI transcripts. |
 | Signal | One observed result for a suggestion: a report value, a test run or a build run. It can name the pair that produced it. |
-| Attempt | One pair that worked on a suggestion. A retry with a stronger pair is a second attempt of the same suggestion. |
+| Attempt | One run of a pair on a suggestion. A retry with a stronger pair is a second attempt. A retry of the same pair after a report is also a new attempt. |
 | Outcome | The quality of one attempt (0 to 1), computed from its signals, plus its pair. A suggestion has one outcome per attempt. |
 | Cell | The pair (task type, difficulty). spatz learns success rates per cell. |
 
@@ -186,9 +186,9 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 | `suggestions` | One row per recommendation with its classification, ranking and strategy. Also stores timestamps, flags and attribution fields. No task text. |
 | `usages` | Model, effort and token counts per suggestion. `source` is `report`, `transcript`, `subagent`, `agent_tool` or `claude-code-mod`. A report usage also holds `rounds` and `note`. |
 | `signals` | One row per signal: kind (`report`, `test`, `build`), value, weight, source, time and the pair (`model`, `effort`) that produced it, when known. |
-| `attempts` | A view. One row per suggestion and pair with its order (`attempt`), quality and the times of its first and last signal. |
+| `attempts` | A view. One row per attempt with its order (`attempt`), pair, quality, the times of its first and last signal and its tokens. |
 | `outcomes` | A view over `attempts` with the columns of schema v1: `suggestion_id`, `quality`, `model`, `effort`. One row per attempt. See [recommendation.md](recommendation.md#quality-and-success). |
-| `failures` | One row per silent failure: kind (`parse`, `hook`), the hook event and the time. See [Silent failures](#silent-failures). |
+| `failures` | One row per silent failure and turn: kind (`parse`, `hook`), the hook event, the time and the turn id. See [Silent failures](#silent-failures). |
 | `usage_scopes` | One watermark per transcript scope. See below. |
 
 ### Migrations
@@ -201,7 +201,7 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 | 2 | Table `usage_scopes` |
 | 3 | Nullable routing and attribution fields. A unique index prevents duplicate direct signals per turn. |
 | 4 | English difficulty values, probability keys and pooling reasons. Row counts and outcomes stay unchanged. |
-| 5 | `suggestions.fallback_reason`, `signals.model` and `signals.effort`, the `failures` table and the `attempts` view. `outcomes` becomes one row per attempt. Existing rows and their outcomes stay unchanged. |
+| 5 | `suggestions.fallback_reason`, `signals.model` and `signals.effort`, the `failures` table and the `attempts` view. The signal index adds the pair. `outcomes` becomes one row per attempt. Existing rows and their outcomes stay unchanged. |
 
 `SCHEMA_V3` is the third entry in `MIGRATIONS`.
 `SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.
@@ -233,19 +233,29 @@ A cheap pair can fail a task, and a stronger pair can then fix it. If the final 
 
 A signal without a pair counts for the used pair: the latest report usage, else the model with the most output tokens. A signal with a model but no effort takes the latest recorded effort of that model in the suggestion.
 
-The `attempts` view groups the signals by suggestion and pair. Per attempt, the latest report wins. Without a report, the latest value per hook kind counts, as a weighted mean over the kinds. `attempt` numbers the pairs by their first signal. The first attempt is the first pair. `spatz report` returns the newest attempt of the reported model.
+The `attempts` view reads the signals of a suggestion in time order. A new attempt starts when:
 
-Learning uses every attempt as an outcome of its own pair. `spatz stats` counts escalations and all tokens of a suggestion as the cost of its first pair. See [cli.md](cli.md#spatz-stats).
+- the pair changes, so A, then B, then A again are three attempts;
+- a signal follows a report. A report is the verdict of its attempt. More hook signals of the same pair, or a report for another turn, start a new attempt of that pair.
+
+A second report of the same pair and turn directly after the first one corrects it. It does not start a new attempt.
+
+Per attempt, the latest report wins. Without a report, the latest value per hook kind counts, as a weighted mean over the kinds. `attempt` numbers the attempts in time order. `spatz report` returns the newest attempt of the reported model.
+
+Each usage row goes to one attempt of its model: the latest attempt that started before spatz wrote the row, else the first attempt of that model. So the view also shows the tokens of each attempt. Usage of one transcript turn is one row per model. If a turn ran A, B and A again, all A tokens of that turn go to the later A attempt.
+
+Learning uses every attempt as an outcome of its own pair. `spatz stats` counts all later attempts (retries and escalations) and all tokens of a suggestion as the cost of its first pair. See [cli.md](cli.md#spatz-stats).
 
 ### Signal binding
 
 Hooks run async. A test result of an old prompt can arrive after a new suggestion started. So spatz binds each signal to its own event, not to the suggestion that is open when the hook runs:
 
-- Claude Code: spatz finds the transcript message that issued the tool call (`tool_use_id`) in the event's prompt (`prompt_id`). If the call is missing, it takes the last message of that prompt. The signal goes to the suggestion whose window held that message. The message time is the signal time.
-- Codex: the signal goes to the suggestion whose window held the last rollout record of the turn (`turn_id`).
-- A late link that shortens an earlier window moves the hook signals inside the new window to the new suggestion. Reports stay where they are.
+- Claude Code: spatz finds the transcript message that issued the tool call (`tool_use_id`) in the event's prompt (`prompt_id`). If the call is missing, it takes the last message of that prompt. The message time is the signal time. A time after the hook time counts as the hook time.
+- Codex: the signal time is the time of the last rollout record of the turn (`turn_id`). The turn's token usage goes to the same suggestion as its signals.
+- spatz first looks for a suggestion that was linked in the same prompt or turn (`prompt_id` or `turn_id` of the suggestion) and whose window held the signal time. Else it takes any suggestion whose window held that time.
+- A late link that shortens an earlier window moves the hook signals inside the new window to the new suggestion. For Codex, the turn's usage moves with them. Reports stay where they are.
 
-If the transcript has no usable message, spatz uses the open suggestion and the hook time, as before schema v5, and counts a `parse` failure.
+If the transcript or rollout has no usable time, only a suggestion of the same prompt or turn that is open now can take the signal. Else the signal belongs to no suggestion. spatz never gives it to a suggestion of another prompt only because that suggestion is open. In both cases spatz counts a `parse` failure.
 
 ### Silent failures
 
@@ -253,11 +263,11 @@ Hooks never block the session, so they never show errors. spatz counts them inst
 
 | Kind | Where | Cause |
 | --- | --- | --- |
-| `parse` | `failures` table | A transcript or rollout gave nothing for the turn: no message for a test or build call, no assistant message for `Stop` or `SubagentStop`, or no turn context for Codex `Stop`. The Claude Code and Codex formats are not documented, so this is the first sign of a format change. |
-| `hook` | `failures` table | `spatz hook` failed, for example because a transcript was missing or the database was busy. |
+| `parse` | `failures` table | A transcript or rollout gave nothing for the turn: no message or no time for a test or build call, no assistant message for `Stop` or `SubagentStop`, or no turn context or no timestamps for Codex `Stop`. The Claude Code and Codex formats are not documented, so this is the first sign of a format change. |
+| `hook` | `failures` table | `spatz hook` failed, for example because the input was not valid hook JSON, a transcript was missing or the database was busy. |
 | `launcher` | `~/.spatz/launcher-failures` | The plugin launcher could not start the CLI for a hook, or the CLI failed. The launcher cannot write the database, so it appends one line with the event name. |
 
-The rows hold no prompt text, command text or tool output.
+Each kind counts a turn once: the subagent id, else the prompt id (Claude Code) or the turn id (Codex). An event without such an id counts on its own. The rows hold no prompt text, command text or tool output.
 
 ### Direct attribution
 
@@ -279,7 +289,7 @@ Repeated submissions replace one row. Follow-up turns keep separate rows.
 The API reads no transcript for direct usage.
 
 Direct reports store `turn_id` and `agent_id` in `signals` and report usage rows.
-The signal index covers `(suggestion_id, source, turn_id, kind)` for non-null turns.
+The signal index covers `(suggestion_id, source, turn_id, kind, model, effort)` for non-null turns. So two pairs that report in one turn keep both reports, and a replay replaces its own row.
 The outcome view aggregates one outcome per attempt.
 Usage alone never creates an outcome.
 

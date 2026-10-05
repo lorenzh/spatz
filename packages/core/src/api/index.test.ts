@@ -532,7 +532,32 @@ async function linked(s: ReturnType<typeof setup>) {
 	return suggestion_id;
 }
 
+/** suggest + link to SESSION via the Codex PostToolUse hook of this turn. */
+async function codexLinked(s: ReturnType<typeof setup>, turn: string) {
+	const { suggestion_id } = await s.api.suggest(suggestInput());
+	await s.api.handleHook(
+		"codex:PostToolUse",
+		JSON.stringify({
+			session_id: SESSION,
+			turn_id: turn,
+			transcript_path: "/nope",
+			hook_event_name: "PostToolUse",
+			tool_name: "Bash",
+			tool_input: { command: `spatz "fix it" --models ${MODELS}` },
+			tool_response: `suggestion_id: ${suggestion_id}`,
+		}),
+	);
+	return suggestion_id;
+}
+
 const iso = (t: number) => new Date(t).toISOString();
+/** Adds a timestamp to every rollout line. */
+const stamped = (jsonl: string, at: number) =>
+	jsonl
+		.split("\n")
+		.filter(Boolean)
+		.map((l) => JSON.stringify({ timestamp: iso(at), ...JSON.parse(l) }))
+		.join("\n");
 const assistant = (
 	id: string,
 	model: string,
@@ -560,7 +585,8 @@ describe("handleHook", () => {
 	test("Codex command events create outcomes without a report and replay without duplicate signals", async () => {
 		const dbPath = join(dir, "recording.db");
 		const s = setup({ openStore: () => openStore(dbPath) });
-		const id = await linked(s);
+		// The fixture has no timestamps: the turn's own link places it.
+		const id = await codexLinked(s, "todo-turn");
 		const rollout = await Bun.file(
 			`${import.meta.dir}/../signals/fixtures/codex-command-events.jsonl`,
 		).text();
@@ -668,7 +694,7 @@ describe("handleHook", () => {
 	});
 	test("Codex Stop records rollout shell outcomes and cumulative tokens", async () => {
 		const s = setup();
-		const id = await linked(s);
+		const id = await codexLinked(s, "11111111-1111-1111-1111-111111111111");
 		const path = `${import.meta.dir}/../signals/fixtures/codex-rollout.jsonl`;
 		const rollout = (await Bun.file(path).text()).replace(
 			'cmd:\\"false\\"',
@@ -1503,11 +1529,32 @@ describe("direct mod attribution", () => {
 			agent: "claude-code-mod",
 			scope: "subagent",
 		});
-		await s.api.handleHook("PostToolUse", bash("bun test"));
+		// Both calls are in their transcripts: the mod turn ids are not Claude prompt ids.
+		const main = join(dir, "main.jsonl");
+		const call = JSON.stringify({
+			type: "assistant",
+			timestamp: iso(T0 + 1000),
+			message: {
+				id: "m1",
+				model: "claude-sonnet-5-5",
+				content: [{ type: "tool_use", id: "toolu_1", name: "Bash" }],
+			},
+		});
+		await Bun.write(main, call);
+		await Bun.write(join(dir, "main", "subagents", "agent-a1.jsonl"), call);
+		s.setNow(T0 + 2000);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				...JSON.parse(bash("bun test")),
+				transcript_path: main,
+			}),
+		);
 		await s.api.handleHook(
 			"PostToolUseFailure",
 			JSON.stringify({
 				...JSON.parse(bash("bun test", "", "PostToolUseFailure")),
+				transcript_path: main,
 				agent_id: "a1",
 			}),
 		);
@@ -1656,9 +1703,15 @@ describe("direct mod attribution", () => {
 				{ scope_key: "t1", turn_id: "t1", agent_id: "a1" },
 				{ scope_key: "t2", turn_id: "t2", agent_id: "a1" },
 			]);
-			expect(db.query("SELECT quality FROM outcomes").get()).toEqual({
-				quality: 0,
-			});
+			// A retry of the same pair in a new turn is its own attempt: the first pass stays.
+			expect(
+				db
+					.query("SELECT attempt, quality FROM attempts ORDER BY attempt")
+					.all(),
+			).toEqual([
+				{ attempt: 1, quality: 1 },
+				{ attempt: 2, quality: 0 },
+			]);
 		} finally {
 			db.close();
 		}
@@ -2025,7 +2078,7 @@ test("missing efforts from mod usage, Claude hooks and Codex hooks use the avail
 		.replaceAll("gpt-6-luna", "gpt-future")
 		.replace(/,"effort":"[^"]*"/g, "");
 	const codexPath = join(dir, "codex.jsonl");
-	await Bun.write(codexPath, rollout);
+	await Bun.write(codexPath, stamped(rollout, T0 + 1000));
 	await s.api.handleHook(
 		"codex:Stop",
 		JSON.stringify({
@@ -2161,7 +2214,7 @@ describe("attempts, signal binding and failure counts", () => {
 		}
 	});
 
-	test("without the event in the transcript: the open suggestion as before, and a parse failure", async () => {
+	test("without the event in the transcript: the open suggestion of its own prompt, and a parse failure", async () => {
 		const s = setup();
 		const id = await linked(s);
 		s.setNow(T0 + 1000);
@@ -2171,7 +2224,7 @@ describe("attempts, signal binding and failure counts", () => {
 			observed_at: T0 + 1000,
 		});
 		expect(s.argsOf("recordFailure")).toEqual([
-			["parse", "PostToolUse", T0 + 1000],
+			["parse", "PostToolUse", T0 + 1000, PROMPT],
 		]);
 	});
 
@@ -2227,6 +2280,26 @@ describe("attempts, signal binding and failure counts", () => {
 				},
 			],
 		]);
+		// Usage goes with the signal, so the old suggestion gets a used pair and a learning row.
+		expect(
+			s
+				.argsOf("upsertUsage")
+				.map(([u]) => (u as { suggestion_id: string }).suggestion_id),
+		).toEqual([first]);
+		expect(s.store.outcome(first)).toEqual({
+			suggestion_id: first,
+			quality: 0,
+			model: "openai/gpt-6-luna",
+			effort: "low",
+		});
+		const taskType = s.store.getSuggestion(first)?.task_type ?? "other";
+		expect(s.store.cellStats(taskType)).toContainEqual(
+			expect.objectContaining({
+				model: "openai/gpt-6-luna",
+				effort: "low",
+				n: 1,
+			}),
+		);
 	});
 
 	test("hook errors and empty transcript turns are counted", async () => {
@@ -2236,7 +2309,7 @@ describe("attempts, signal binding and failure counts", () => {
 		};
 		await failing.api.handleHook("PostToolUse", bash("bun test"));
 		expect(failing.argsOf("recordFailure")).toEqual([
-			["hook", "PostToolUse", T0],
+			["hook", "PostToolUse", T0, PROMPT],
 		]);
 
 		const s = setup();
@@ -2265,8 +2338,8 @@ describe("attempts, signal binding and failure counts", () => {
 			}),
 		);
 		expect(s.argsOf("recordFailure")).toEqual([
-			["parse", "Stop", T0],
-			["parse", "codex:Stop", T0],
+			["parse", "Stop", T0, PROMPT],
+			["parse", "codex:Stop", T0, "nope"],
 		]);
 	});
 
@@ -2296,5 +2369,233 @@ describe("attempts, signal binding and failure counts", () => {
 			hook: 2,
 			launcher: 2,
 		});
+	});
+});
+
+describe("bindings without a time, same-turn escalation, reconciliation and failure turns", () => {
+	const codexRollout = (turns: [string, number][]) =>
+		turns
+			.flatMap(([turn, exit_code]) => [
+				{
+					type: "turn_context",
+					payload: { turn_id: turn, model: "gpt-6-luna", effort: "low" },
+				},
+				{
+					type: "event_msg",
+					payload: {
+						type: "item_completed",
+						item: {
+							type: "CommandExecution",
+							id: `c-${turn}`,
+							command: ["/bin/bash", "-lc", "bun test"],
+							exit_code,
+						},
+					},
+				},
+			])
+			.map((r) => JSON.stringify(r))
+			.join("\n");
+	const codexStop = (turn: string, path: string) =>
+		JSON.stringify({
+			session_id: SESSION,
+			turn_id: turn,
+			transcript_path: path,
+			hook_event_name: "Stop",
+		});
+	const codexLink = (id: string, turn: string, path = "/nope") =>
+		JSON.stringify({
+			session_id: SESSION,
+			turn_id: turn,
+			transcript_path: path,
+			hook_event_name: "PostToolUse",
+			tool_name: "Bash",
+			tool_input: { command: `spatz "fix it" --models ${MODELS}` },
+			tool_response: `suggestion_id: ${id}`,
+		});
+
+	test("Claude: without a transcript an event names its prompt; an old prompt never lands on the new suggestion", async () => {
+		const s = setup();
+		const inPrompt = (json: string, prompt: string) =>
+			JSON.stringify({ ...JSON.parse(json), prompt_id: prompt });
+		const old = (await s.api.suggest(suggestInput())).suggestion_id;
+		await s.api.handleHook("PostToolUse", inPrompt(linkHook(old), "p1"));
+		s.setNow(T0 + 5000);
+		const now = (await s.api.suggest(suggestInput())).suggestion_id;
+		await s.api.handleHook("PostToolUse", inPrompt(linkHook(now), "p2"));
+		s.setNow(T0 + 6000);
+		const fail = bash("bun test", "", "PostToolUseFailure");
+		await s.api.handleHook("PostToolUseFailure", inPrompt(fail, "p1"));
+		await s.api.handleHook("PostToolUseFailure", inPrompt(fail, "p3"));
+		expect(s.argsOf("insertSignal")).toEqual([]);
+		await s.api.handleHook("PostToolUse", inPrompt(bash("bun test"), "p2"));
+		expect(s.argsOf("insertSignal")).toEqual([
+			[expect.objectContaining({ suggestion_id: now, value: 1 })],
+		]);
+		expect(s.argsOf("recordFailure").map(([, , , turn]) => turn)).toEqual([
+			"p1",
+			"p3",
+			"p2",
+		]);
+	});
+
+	test("Codex: a rollout without timestamps binds only by its turn and counts as a parse failure", async () => {
+		const s = setup();
+		const old = (await s.api.suggest(suggestInput())).suggestion_id;
+		await s.api.handleHook("codex:PostToolUse", codexLink(old, "t1"));
+		s.setNow(T0 + 5000);
+		const now = (await s.api.suggest(suggestInput())).suggestion_id;
+		await s.api.handleHook("codex:PostToolUse", codexLink(now, "t2"));
+		const path = join(dir, "rollout.jsonl");
+		await Bun.write(
+			path,
+			codexRollout([
+				["t1", 1],
+				["t2", 0],
+				["t3", 1],
+			]),
+		);
+		s.setNow(T0 + 6000);
+		await s.api.handleHook("codex:Stop", codexStop("t1", path));
+		await s.api.handleHook("codex:Stop", codexStop("t3", path));
+		expect(s.argsOf("insertSignal")).toEqual([]);
+		await s.api.handleHook("codex:Stop", codexStop("t2", path));
+		expect(s.argsOf("insertSignal")).toEqual([
+			[expect.objectContaining({ suggestion_id: now, value: 1 })],
+		]);
+		expect(s.store.outcome(now)?.model).toBe("openai/gpt-6-luna");
+		expect(s.store.outcome(old)).toBeNull();
+		expect(s.argsOf("recordFailure")).toEqual([
+			["parse", "codex:Stop", T0 + 6000, "t1"],
+			["parse", "codex:Stop", T0 + 6000, "t3"],
+			["parse", "codex:Stop", T0 + 6000, "t2"],
+		]);
+	});
+
+	test("Codex: a late link moves the turn's signals and usage together", async () => {
+		const s = setup();
+		const first = (await s.api.suggest(suggestInput())).suggestion_id;
+		await s.api.handleHook("codex:PostToolUse", codexLink(first, "t0"));
+		s.setNow(T0 + 5000);
+		const late = (await s.api.suggest(suggestInput())).suggestion_id;
+		const path = join(dir, "rollout.jsonl");
+		await Bun.write(path, stamped(codexRollout([["t1", 1]]), T0 + 6000));
+		s.setNow(T0 + 7000);
+		await s.api.handleHook("codex:Stop", codexStop("t1", path));
+		expect(s.store.outcome(first)?.model).toBe("openai/gpt-6-luna");
+		// A newer suggestion of another turn shrinks the first window: t1 stays where its time is.
+		s.setNow(T0 + 7500);
+		const newer = (await s.api.suggest(suggestInput())).suggestion_id;
+		await s.api.handleHook("codex:PostToolUse", codexLink(newer, "t2", path));
+		expect(s.store.outcome(first)?.model).toBe("openai/gpt-6-luna");
+		expect(s.store.usageScopes([newer])).toEqual([]);
+		s.setNow(T0 + 8000);
+		await s.api.handleHook("codex:PostToolUse", codexLink(late, "t1", path));
+		expect(s.store.outcome(first)).toBeNull();
+		expect(s.store.outcome(newer)).toBeNull();
+		expect(s.store.usageScopes([newer])).toEqual([]);
+		expect(s.store.outcome(late)).toEqual({
+			suggestion_id: late,
+			quality: 0,
+			model: "openai/gpt-6-luna",
+			effort: "low",
+		});
+		expect(s.store.usageScopes([first])).toEqual([]);
+		expect(s.store.usageScopes([late])).toEqual([
+			{ source: "transcript", scope_key: "t1", effort: "low" },
+		]);
+	});
+
+	test("a transcript time ahead of the clock counts as the hook time", async () => {
+		const s = setup();
+		const id = await linked(s);
+		const path = join(dir, "ahead.jsonl");
+		await Bun.write(
+			path,
+			JSON.stringify({
+				type: "assistant",
+				timestamp: iso(T0 + HOUR),
+				message: {
+					id: "m1",
+					model: "claude-sonnet-5-5",
+					content: [{ type: "tool_use", id: "toolu_1", name: "Bash" }],
+				},
+			}),
+		);
+		s.setNow(T0 + 1000);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				...JSON.parse(bash("bun test")),
+				transcript_path: path,
+			}),
+		);
+		expect(s.argsOf("insertSignal")).toEqual([
+			[expect.objectContaining({ suggestion_id: id, observed_at: T0 + 1000 })],
+		]);
+	});
+
+	test("two direct reports in one turn keep the cheap failure; a replay does not duplicate", async () => {
+		const dbPath = join(dir, "escalate.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const { suggestion_id } = await s.api.suggest(suggestInput());
+		const cheap = {
+			suggestionId: suggestion_id,
+			model: "gpt-6-luna",
+			effort: "low",
+			result: "fail" as const,
+			source: "claude-code-mod" as const,
+			turn: "t1",
+		};
+		await s.api.report(cheap);
+		await s.api.report(cheap);
+		s.setNow(T0 + 1000);
+		await s.api.report({
+			...cheap,
+			model: "claude-opus-5-5",
+			effort: "high",
+			result: "pass",
+		});
+		const db = new Database(dbPath);
+		try {
+			expect(db.query("SELECT COUNT(*) AS n FROM signals").get()).toEqual({
+				n: 2,
+			});
+			expect(
+				db
+					.query("SELECT model, effort, quality FROM attempts ORDER BY attempt")
+					.all(),
+			).toEqual([
+				{ model: "openai/gpt-6-luna", effort: "low", quality: 0 },
+				{ model: "anthropic/claude-opus-5.5", effort: "high", quality: 1 },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("malformed hook input counts as a hook failure; failures count once per turn", async () => {
+		const dbPath = join(dir, "failures.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		await s.api.handleHook("PostToolUse", "{not json");
+		await s.api.handleHook("codex:Stop", '{"turn_id":"t9"}');
+		await linked(s);
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		await s.api.handleHook("PostToolUse", bash("bun build"));
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT kind, source, turn_id FROM failures ORDER BY kind, observed_at",
+					)
+					.all(),
+			).toEqual([
+				{ kind: "hook", source: "PostToolUse", turn_id: null },
+				{ kind: "hook", source: "codex:Stop", turn_id: "t9" },
+				{ kind: "parse", source: "PostToolUse", turn_id: PROMPT },
+			]);
+		} finally {
+			db.close();
+		}
 	});
 });

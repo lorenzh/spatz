@@ -413,7 +413,8 @@ describe("stats", () => {
 			input_tokens: other?.input_tokens,
 			output_tokens: other?.output_tokens,
 		});
-		expect(s.failures).toEqual({ parse: 0, hook: 0, launcher: 0 });
+		// The two hook calls with input that is not hook JSON (above) count; the broken store cannot.
+		expect(s.failures).toEqual({ parse: 0, hook: 2, launcher: 0 });
 		expect(s.fallbacks).toEqual({ opt_out: 3 });
 		expect(s.coverage).toBeCloseTo(2 / 3, 6);
 	});

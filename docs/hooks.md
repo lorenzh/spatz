@@ -179,7 +179,7 @@ A suggestion is open from its creation until the first of these events:
 - The next linked suggestion with the same session and agent id. The old window ends at the new suggestion.
 - 2 hours without activity in that window. Each matching hook event resets this time.
 
-Signals go to the suggestion whose window in the matching session and agent sequence held the tool call. Without the call in the transcript, they go to the open suggestion. Token usage goes to the suggestion whose window holds the time stamp of each transcript message. Messages before the first suggestion of that window sequence count for no suggestion.
+Signals go to the suggestion whose window in the matching session and agent sequence held the tool call. A suggestion linked in the same prompt comes first. Without the call in the transcript, they go only to an open suggestion of the same prompt. Else they belong to no suggestion, and spatz counts a `parse` failure. Token usage goes to the suggestion whose window holds the time stamp of each transcript message. Messages before the first suggestion of that window sequence count for no suggestion.
 
 Hooks run async, so the link can arrive after `Stop` or `SubagentStop`. In that case spatz reads the transcripts again and puts each message in the correct window. It also moves the test and build signals inside the new window to the new suggestion. A replayed or older transcript snapshot does not overwrite newer data.
 
@@ -267,7 +267,7 @@ Older rollouts use shell calls matched to outputs by call id.
 Each result stays within its turn. Commands without an exit code give no signal.
 The latest test and build results for that turn replace earlier results when Stop runs again.
 These signals use source `Stop` and the turn ID. Replayed events do not add duplicate signals.
-They go to the suggestion whose window held the turn's last rollout record, so a late `Stop` does not land on a newer suggestion. Without rollout timestamps, they go to the open suggestion.
+They go to the suggestion whose window held the turn's last rollout record, so a late `Stop` does not land on a newer suggestion. A suggestion linked in the same turn comes first. The turn's token usage goes to the same suggestion. Without rollout timestamps, they go only to an open suggestion of the same turn, and spatz counts a `parse` failure.
 Codex has no `SubagentStop` or `PostToolUseFailure` hook.
 
 ### Hook diagnostics
@@ -284,8 +284,10 @@ Diagnostics contain no prompt text, command text or tool output.
 failures: parse=<count>  hook=<count>  launcher=<count>
 ```
 
-- `parse`: a transcript or rollout gave nothing for a turn. A rising count can mean a format change in Claude Code or Codex.
-- `hook`: `spatz hook` failed.
+- `parse`: a transcript or rollout gave nothing, or no time, for a turn. A rising count can mean a format change in Claude Code or Codex.
+- `hook`: `spatz hook` failed, or its input was not valid hook JSON.
+
+Each count is a number of turns: several failed events of one turn count once.
 - `launcher`: the plugin's `bin/spatz` could not run the CLI for a hook, or the CLI failed. The launcher appends the event name to `~/.spatz/launcher-failures`. Delete the file to reset the count.
 
 For a database access error, check write access to `~/.spatz`.

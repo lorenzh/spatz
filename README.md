@@ -90,7 +90,7 @@ spatz stats
 
 Replace `<suggestion_id>` with the ID from the recommendation.
 Results can be `pass`, `partial`, or `fail`.
-An explicit report overrides hook signals for that recommendation.
+A report sets the result of the attempt with that pair. Earlier attempts with other pairs keep their own results, so a failed cheaper attempt still counts as a failure.
 
 For experiments, add `--dry-run` to the recommendation command.
 These suggestions never count toward learning or statistics.

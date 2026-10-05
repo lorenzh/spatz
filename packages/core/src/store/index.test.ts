@@ -7,6 +7,7 @@ import type { Store } from "../contracts/deps.ts";
 import type {
 	Effort,
 	SignalKind,
+	SignalRecord,
 	SuggestionRecord,
 	UsageRecord,
 } from "../contracts/types.ts";
@@ -475,7 +476,7 @@ describe("outcomes", () => {
 		store.insertSuggestion(suggestion());
 		signal(store, "test", 1, 10);
 		signal(store, "build", 1, 11);
-		signal(store, "report", 0, 5);
+		signal(store, "report", 0, 15);
 		expect(store.outcome("s1")?.quality).toBe(0);
 		signal(store, "report", 0.5, 20);
 		expect(store.outcome("s1")?.quality).toBe(0.5);
@@ -1264,8 +1265,173 @@ describe("v5: attempts, signal binding and failures", () => {
 			expect(
 				db.query("SELECT * FROM failures ORDER BY observed_at").all(),
 			).toEqual([
-				{ kind: "parse", source: "Stop", observed_at: 5 },
-				{ kind: "hook", source: "PostToolUse", observed_at: 6 },
+				{ kind: "parse", source: "Stop", observed_at: 5, turn_id: null },
+				{ kind: "hook", source: "PostToolUse", observed_at: 6, turn_id: null },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+});
+
+describe("v5: attempt identity, same-turn reports, bindings and failure turns", () => {
+	const H2 = 2 * 60 * 60 * 1000;
+	const attempts = (path: string) => {
+		const db = new Database(path);
+		try {
+			return db
+				.query(
+					"SELECT attempt, model, effort, quality, input_tokens, output_tokens FROM attempts ORDER BY attempt",
+				)
+				.all();
+		} finally {
+			db.close();
+		}
+	};
+	const sig = (
+		store: Store,
+		model: string,
+		kind: "test" | "report",
+		value: number,
+		observed_at: number,
+		over: Partial<SignalRecord> = {},
+	) =>
+		store.insertSignal({
+			suggestion_id: "s1",
+			kind,
+			value,
+			weight: 1,
+			source: kind === "report" ? "report" : "PostToolUse",
+			model,
+			effort: "low",
+			observed_at,
+			...over,
+		});
+
+	test("A -> B -> A is three attempts, each with its own tokens", () => {
+		const path = tempDb();
+		const store = open(path);
+		store.insertSuggestion(suggestion());
+		sig(store, "m/a", "test", 0, 10);
+		store.upsertUsage(
+			usage({ model: "m/a", effort: "low", scope_key: "1", reported_at: 15 }),
+		);
+		sig(store, "m/b", "test", 0, 20);
+		store.upsertUsage(
+			usage({ model: "m/b", effort: "low", scope_key: "2", reported_at: 25 }),
+		);
+		sig(store, "m/a", "test", 1, 30);
+		store.upsertUsage(
+			usage({
+				model: "m/a",
+				effort: "low",
+				scope_key: "3",
+				reported_at: 35,
+				output_tokens: 7,
+			}),
+		);
+		expect(attempts(path)).toEqual([
+			{
+				attempt: 1,
+				model: "m/a",
+				effort: "low",
+				quality: 0,
+				input_tokens: 10,
+				output_tokens: 100,
+			},
+			{
+				attempt: 2,
+				model: "m/b",
+				effort: "low",
+				quality: 0,
+				input_tokens: 10,
+				output_tokens: 100,
+			},
+			{
+				attempt: 3,
+				model: "m/a",
+				effort: "low",
+				quality: 1,
+				input_tokens: 10,
+				output_tokens: 7,
+			},
+		]);
+		expect(store.cellStats("code.bugfix")).toContainEqual(
+			expect.objectContaining({ model: "m/a", n: 2, sum_quality: 1 }),
+		);
+	});
+
+	test("a failed report, more work and a passing report of the same pair are two attempts; a correction is not", () => {
+		const path = tempDb();
+		const store = open(path);
+		store.insertSuggestion(suggestion());
+		sig(store, "m/a", "report", 0, 10);
+		sig(store, "m/a", "test", 1, 20);
+		sig(store, "m/a", "report", 1, 30);
+		expect(attempts(path)).toMatchObject([
+			{ attempt: 1, model: "m/a", quality: 0 },
+			{ attempt: 2, model: "m/a", quality: 1 },
+		]);
+		// A second report right after, same pair and turn: corrects attempt 2.
+		sig(store, "m/a", "report", 0.5, 40);
+		expect(attempts(path)).toMatchObject([
+			{ attempt: 1, quality: 0 },
+			{ attempt: 2, quality: 0.5 },
+		]);
+	});
+
+	test("two pairs reporting in one turn keep both reports; a replay replaces its own", () => {
+		const path = tempDb();
+		const store = open(path);
+		store.insertSuggestion(suggestion());
+		const direct = { source: "claude-code-mod" as const, turn_id: "t1" };
+		sig(store, "m/cheap", "report", 0, 10, direct);
+		sig(store, "m/strong", "report", 1, 20, { ...direct, effort: "high" });
+		sig(store, "m/cheap", "report", 0, 11, direct);
+		expect(attempts(path)).toMatchObject([
+			{ attempt: 1, model: "m/cheap", effort: "low", quality: 0 },
+			{ attempt: 2, model: "m/strong", effort: "high", quality: 1 },
+		]);
+		expect(store.outcome("s1", "m/cheap")?.quality).toBe(0);
+	});
+
+	test("boundSuggestion finds the window of a prompt's own suggestion", () => {
+		const store = open();
+		store.insertSuggestion(suggestion({ id: "p1s", created_at: 100 }));
+		store.insertSuggestion(suggestion({ id: "p2s", created_at: 200 }));
+		store.linkSession("p1s", "sess", "p1", 100);
+		store.linkSession("p2s", "sess", "p2", 200);
+		expect(store.boundSuggestion("sess", "p1", 150, H2)).toBe("p1s");
+		// p1's window closed when p2 started: a p1 event now belongs to nothing, not to p2.
+		expect(store.boundSuggestion("sess", "p1", 250, H2)).toBeNull();
+		expect(store.boundSuggestion("sess", "p2", 250, H2)).toBe("p2s");
+		expect(store.boundSuggestion("sess", "p3", 250, H2)).toBeNull();
+		store.insertSuggestion(
+			suggestion({ id: "mod", created_at: 300, turn_id: "t9" }),
+		);
+		store.linkSession("mod", "sess", null, 300);
+		expect(store.boundSuggestion("sess", "t9", 300, H2)).toBe("mod");
+	});
+
+	test("failures count once per kind and turn; events without a turn count each", () => {
+		const path = tempDb();
+		const store = open(path);
+		store.recordFailure("parse", "PostToolUse", 1, "t1");
+		store.recordFailure("parse", "Stop", 2, "t1");
+		store.recordFailure("hook", "PostToolUse", 3, "t1");
+		store.recordFailure("hook", "Stop", 4);
+		store.recordFailure("hook", "Stop", 5);
+		const db = new Database(path);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT kind, COUNT(*) AS n FROM failures GROUP BY kind ORDER BY kind",
+					)
+					.all(),
+			).toEqual([
+				{ kind: "hook", n: 3 },
+				{ kind: "parse", n: 1 },
 			]);
 		} finally {
 			db.close();

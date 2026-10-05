@@ -354,7 +354,7 @@ export interface PairStats {
 	n: number;
 	/** Share of outcomes with quality >= 0.8. */
 	success_rate: number;
-	/** Outcomes of this pair that a later attempt with another pair followed. */
+	/** Later attempts (retries and escalations, of any pair) after the suggestions this pair tried first. */
 	escalations: number;
 	/** All tokens of the suggestions this pair tried first, retries and escalations included. */
 	input_tokens: number;

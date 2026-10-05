@@ -122,7 +122,7 @@ For the command options, read [cli.md](cli.md).
 
 ## Quality and success
 
-The `outcomes` view computes one quality value per attempt from its signals. An attempt is one pair that worked on the suggestion. Each signal counts for the pair that produced it. A signal without a pair counts for the used pair. See [how-it-works.md](how-it-works.md#attempts).
+The `outcomes` view computes one quality value per attempt from its signals. An attempt is one run of a pair on the suggestion: it ends when the pair changes or with a report. Each signal counts for the pair that produced it. A signal without a pair counts for the used pair. See [how-it-works.md](how-it-works.md#attempts).
 
 | Signal | Source | Value | Weight |
 |---|---|---|---|
@@ -132,11 +132,11 @@ The `outcomes` view computes one quality value per attempt from its signals. An 
 
 The rules:
 
-1. If the attempt has a report, the quality is the value of its latest report. Its hook signals do not count.
+1. If the attempt has a report, the quality is the value of its latest report. Its hook signals do not count. A second report directly after the first, for the same pair and turn, is a correction.
 2. Without a report, spatz takes the latest value per signal kind of the attempt. The quality is the weighted mean over the kinds.
 3. Without a signal, there is no outcome.
 
-So a cheap pair that failed keeps its failure when a stronger pair fixes the task. Both outcomes count, each for its own pair.
+So a cheap pair that failed keeps its failure when a stronger pair fixes the task. Both outcomes count, each for its own pair. A pair that fails, gets a report and then succeeds in a retry has two outcomes: one failure and one success.
 
 The used pair, for signals without a pair, comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest recorded effort for that model. If the catalog lists only `none` for a model, spatz records missing effort as `none`.
 Learning also treats older null-effort outcomes as `none` for those models.
