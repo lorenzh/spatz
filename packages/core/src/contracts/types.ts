@@ -251,6 +251,10 @@ export type SignalSource =
 export interface SignalRecord {
 	turn_id?: string | null;
 	agent_id?: string | null;
+	/** Canonical model of the attempt that produced the signal; null (legacy) credits the suggestion's used pair. */
+	model?: string | null;
+	/** Effort of that attempt; null takes the model's latest usage effort. */
+	effort?: Effort | null;
 	suggestion_id: string;
 	kind: SignalKind;
 	value: number;
@@ -291,11 +295,11 @@ export interface UsageRecord {
 	reported_at: number;
 }
 
-/** One row of the SQL view `outcomes`. */
+/** One row of the SQL view `outcomes`: one per attempt (pair) of a suggestion. */
 export interface Outcome {
 	suggestion_id: string;
 	quality: number;
-	/** Used pair: report usage, else model with most output tokens. */
+	/** The pair its signals name; legacy signals use the report usage, else the model with most output tokens. */
 	model: string | null;
 	effort: Effort | null;
 }
@@ -333,6 +337,8 @@ export interface SuggestionRecord {
 	explored: boolean;
 	control: boolean;
 	fallback_used: boolean;
+	/** Why the rules replaced Jev; null without fallback and for rows older than schema v5. */
+	fallback_reason: FallbackReason | null;
 	is_test: boolean;
 	/** Epoch ms of the last linked event; drives the 2 h open window. */
 	last_event_at: number;
@@ -348,6 +354,11 @@ export interface PairStats {
 	n: number;
 	/** Share of outcomes with quality >= 0.8. */
 	success_rate: number;
+	/** Outcomes of this pair that a later attempt with another pair followed. */
+	escalations: number;
+	/** All tokens of the suggestions this pair tried first, retries and escalations included. */
+	input_tokens: number;
+	output_tokens: number;
 }
 
 export interface TypeStats {
@@ -383,6 +394,10 @@ export interface StatsReport {
 	/** Success rate of learned vs control, compared per cell, weighted by count per cell. null without data. */
 	learned_success: number | null;
 	control_success: number | null;
+	/** Non-test suggestions per fallback_reason; "unknown" for rows older than schema v5. */
+	fallbacks: Record<string, number>;
+	/** Silent failures: hook input whose transcript parsed to nothing, hook errors, plugin launcher errors. */
+	failures: { parse: number; hook: number; launcher: number };
 }
 
 // ---------- Config ----------

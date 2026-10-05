@@ -145,7 +145,73 @@ const SCHEMA_V4 = [
 	'mittel+schwer level', 'medium+hard level')`,
 ];
 
-const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
+// Attempts: each signal counts for the pair that produced it, so a stronger retry is not credited to the
+// failed pair. Signals without a model (all rows before v5) use the suggestion's used pair, as in v1.
+// Per attempt: the latest report wins, else the latest value per hook kind, weighted mean over kinds.
+const SCHEMA_V5 = [
+	"ALTER TABLE suggestions ADD COLUMN fallback_reason TEXT CHECK (fallback_reason IN ('opt_out', 'secret', 'no_key', 'timeout', 'auth', 'rate_limit', 'error'))",
+	"ALTER TABLE signals ADD COLUMN model TEXT",
+	"ALTER TABLE signals ADD COLUMN effort TEXT",
+	"CREATE TABLE failures (kind TEXT NOT NULL CHECK (kind IN ('parse', 'hook')), source TEXT NOT NULL, observed_at INTEGER NOT NULL)",
+	"DROP VIEW outcomes",
+	`CREATE VIEW attempts AS
+WITH usage_effort AS (
+	SELECT suggestion_id, model, effort FROM (
+		SELECT suggestion_id, model, effort, ROW_NUMBER() OVER (
+			PARTITION BY suggestion_id, model ORDER BY reported_at DESC, rowid DESC
+		) AS rn FROM usages WHERE effort IS NOT NULL
+	) WHERE rn = 1
+),
+candidates AS (
+	SELECT suggestion_id, model, effort, 0 AS prio, reported_at AS rank_key
+	FROM usages WHERE source = 'report'
+	UNION ALL
+	SELECT u.suggestion_id, u.model, e.effort, 1, SUM(u.output_tokens)
+	FROM usages u LEFT JOIN usage_effort e ON e.suggestion_id = u.suggestion_id AND e.model = u.model
+	GROUP BY u.suggestion_id, u.model
+),
+pair AS (
+	SELECT suggestion_id, model, effort FROM (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY suggestion_id ORDER BY prio, rank_key DESC, model
+		) AS rn FROM candidates
+	) WHERE rn = 1
+),
+credited AS (
+	SELECT s.suggestion_id, s.kind, s.value, s.weight, s.observed_at, s.rowid AS rid,
+		COALESCE(s.model, p.model) AS model,
+		CASE WHEN s.model IS NULL THEN p.effort ELSE COALESCE(s.effort, e.effort) END AS effort
+	FROM signals s
+	LEFT JOIN pair p ON p.suggestion_id = s.suggestion_id
+	LEFT JOIN usage_effort e ON e.suggestion_id = s.suggestion_id AND e.model = s.model
+),
+latest AS (
+	SELECT * FROM (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY suggestion_id, model, effort, kind ORDER BY observed_at DESC, rid DESC
+		) AS rn,
+		MIN(observed_at) OVER (PARTITION BY suggestion_id, model, effort) AS first_at,
+		MAX(observed_at) OVER (PARTITION BY suggestion_id, model, effort) AS last_at
+		FROM credited
+	) WHERE rn = 1
+),
+graded AS (
+	SELECT suggestion_id, model, effort, MIN(first_at) AS first_at, MAX(last_at) AS last_at, COALESCE(
+		MAX(CASE WHEN kind = 'report' THEN value END),
+		SUM(CASE WHEN kind <> 'report' THEN weight * value END)
+			/ SUM(CASE WHEN kind <> 'report' THEN weight END)
+	) AS quality
+	FROM latest GROUP BY suggestion_id, model, effort
+)
+SELECT suggestion_id, ROW_NUMBER() OVER (
+		PARTITION BY suggestion_id ORDER BY first_at, model, effort
+	) AS attempt,
+	model, effort, CAST(quality AS REAL) AS quality, first_at, last_at
+FROM graded`,
+	"CREATE VIEW outcomes AS SELECT suggestion_id, quality, model, effort FROM attempts",
+];
+
+const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /** Opens the db with WAL and busy_timeout 5000 and migrates to SCHEMA_VERSION. */
@@ -207,7 +273,7 @@ export function openStore(
 			db.query(
 				`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
 				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
-				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id)`,
+				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason)`,
 			).run({
 				...r,
 				difficulty: normalizeDifficulty(r.difficulty),
@@ -220,6 +286,7 @@ export function openStore(
 				control: Number(r.control),
 				fallback_used: Number(r.fallback_used),
 				is_test: Number(r.is_test),
+				fallback_reason: r.fallback_reason ?? null,
 			});
 		},
 		getSuggestion(id) {
@@ -304,6 +371,13 @@ export function openStore(
 						ORDER BY created_at, rowid LIMIT 1`,
 					)
 					.get(sessionId, me.agent_id, me.created_at, me.rowid);
+				// Hook signals that landed on an earlier window before this link arrived belong here.
+				const end = next?.created_at ?? null;
+				for (const { id: from } of shrunk)
+					db.query(
+						`UPDATE OR IGNORE signals SET suggestion_id = $id WHERE suggestion_id = $from AND kind <> 'report'
+						AND observed_at >= $start AND ($end IS NULL OR observed_at < $end)`,
+					).run({ id, from, start: me.created_at, end });
 				if (next)
 					shrunk.push(
 						...db
@@ -352,6 +426,15 @@ export function openStore(
 				.get(sessionId, windowAgent(sessionId, agentId), now - openWindowMs);
 			return row?.id ?? null;
 		},
+		suggestionAt(sessionId, at, openWindowMs, agentId = null) {
+			return (
+				store.sessionWindows(sessionId, at, at, openWindowMs, agentId).at(-1)
+					?.id ?? null
+			);
+		},
+		recordFailure(kind, source, at) {
+			db.query("INSERT INTO failures VALUES (?, ?, ?)").run(kind, source, at);
+		},
 		touch(id, at) {
 			db.query("UPDATE suggestions SET last_event_at = ? WHERE id = ?").run(
 				at,
@@ -363,8 +446,14 @@ export function openStore(
 		},
 		insertSignal(r) {
 			db.query(
-				`INSERT OR REPLACE INTO signals VALUES ($suggestion_id, $kind, $value, $weight, $source, $observed_at, $turn_id, $agent_id)`,
-			).run({ ...r, turn_id: r.turn_id ?? null, agent_id: r.agent_id ?? null });
+				`INSERT OR REPLACE INTO signals VALUES ($suggestion_id, $kind, $value, $weight, $source, $observed_at, $turn_id, $agent_id, $model, $effort)`,
+			).run({
+				...r,
+				turn_id: r.turn_id ?? null,
+				agent_id: r.agent_id ?? null,
+				model: r.model ?? null,
+				effort: r.model && noneOnly.has(r.model) ? "none" : (r.effort ?? null),
+			});
 		},
 		upsertUsage(r) {
 			db.query(
@@ -451,12 +540,13 @@ export function openStore(
 				})
 				.immediate();
 		},
-		outcome(id) {
+		outcome(id, model) {
 			return db
-				.query<Outcome, [string]>(
-					"SELECT * FROM outcomes WHERE suggestion_id = ?",
+				.query<Outcome, [string, string | null]>(
+					`SELECT suggestion_id, quality, model, effort FROM attempts
+					WHERE suggestion_id = ?1 AND (?2 IS NULL OR model = ?2) ORDER BY last_at DESC, attempt DESC LIMIT 1`,
 				)
-				.get(id);
+				.get(id, model ?? null);
 		},
 		dispose() {
 			db.close();

@@ -24,14 +24,14 @@ export interface StatsOptions {
 	onSql?: (sql: string) => void;
 }
 
-// Non-test suggestions and their outcomes. The sqlite scanner reads the view's
+// Non-test suggestions and their outcomes, one per attempt. The sqlite scanner reads the view's
 // CAST(... AS REAL) column as FLOAT (0.79999999 -> 0.800000011920929), so the
 // success test runs inside SQLite at double precision.
 const base = (q: number, noneOnlyModels: string[]) => `
 WITH s AS (SELECT * FROM db.suggestions WHERE is_test = 0),
-oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, CASE WHEN model IN (${noneOnlyModels.map((id) => `''${id.replaceAll("'", "''''")}''`).join(",") || "NULL"}) THEN ''none'' ELSE effort END AS effort, quality >= ${q} AS success FROM outcomes')),
+oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, attempt, attempt = MAX(attempt) OVER (PARTITION BY suggestion_id) AS is_last, model, CASE WHEN model IN (${noneOnlyModels.map((id) => `''${id.replaceAll("'", "''''")}''`).join(",") || "NULL"}) THEN ''none'' ELSE effort END AS effort, quality >= ${q} AS success FROM attempts')),
 o AS (
-	SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
+	SELECT s.id AS suggestion_id, o.attempt, o.is_last, s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success::INTEGER AS success,
 		COALESCE(o.model = json_extract_string(s.ranking, '$[0].model')
 			AND o.effort = json_extract_string(s.ranking, '$[0].effort'), false)::INTEGER AS adopted
@@ -75,29 +75,45 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					COALESCE(SUM(u.output_tokens), 0)::DOUBLE AS output_tokens
 				FROM s LEFT JOIN db.usages u ON u.suggestion_id = s.id GROUP BY ALL
 			), agg AS (
-				SELECT task_type, COUNT(*)::INTEGER AS n, AVG(adopted) AS adoption_rate FROM o GROUP BY ALL
+				SELECT task_type, COUNT(*)::INTEGER AS n, AVG(adopted) FILTER (WHERE attempt = 1) AS adoption_rate FROM o GROUP BY ALL
 			)
 			SELECT tok.task_type, COALESCE(agg.n, 0) AS n, COALESCE(agg.adoption_rate, 0) AS adoption_rate,
 				tok.input_tokens, tok.output_tokens
 			FROM tok LEFT JOIN agg USING (task_type) ORDER BY tok.task_type`,
 		);
+		// Escalations and retries are cost of the first pair: it carries all tokens of its suggestions.
 		const pairs = await rows<PairStats & { task_type: TaskType }>(
-			`SELECT task_type, model, effort, COUNT(*)::INTEGER AS n, AVG(success) AS success_rate
-			FROM o WHERE model IS NOT NULL GROUP BY ALL ORDER BY model, effort`,
+			`, tok AS (
+				SELECT suggestion_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
+				FROM db.usages GROUP BY suggestion_id
+			)
+			SELECT task_type, model, effort, COUNT(*)::INTEGER AS n, AVG(success) AS success_rate,
+				COUNT(*) FILTER (WHERE is_last = 0)::INTEGER AS escalations,
+				COALESCE(SUM(tok.input_tokens) FILTER (WHERE attempt = 1), 0)::DOUBLE AS input_tokens,
+				COALESCE(SUM(tok.output_tokens) FILTER (WHERE attempt = 1), 0)::DOUBLE AS output_tokens
+			FROM o LEFT JOIN tok USING (suggestion_id) WHERE model IS NOT NULL GROUP BY ALL ORDER BY model, effort`,
 		);
 		const [cov] = await rows<{ coverage: number | null }>(
-			`SELECT COUNT(o.suggestion_id) / NULLIF(COUNT(*), 0) AS coverage
+			`SELECT COUNT(DISTINCT o.suggestion_id) / NULLIF(COUNT(DISTINCT s.id), 0) AS coverage
 			FROM s LEFT JOIN db.outcomes o ON o.suggestion_id = s.id`,
+		);
+		const fallbacks = await rows<{ reason: string; n: number }>(
+			`SELECT COALESCE(fallback_reason, 'unknown') AS reason, COUNT(*)::INTEGER AS n
+			FROM s WHERE fallback_used = 1 GROUP BY ALL ORDER BY reason`,
+		);
+		const failures = await rows<{ kind: "parse" | "hook"; n: number }>(
+			"SELECT kind, COUNT(*)::INTEGER AS n FROM db.failures GROUP BY ALL",
 		);
 		// Learned picks (strategy learned, no exploration) vs the control group, per cell (task_type, difficulty)
 		// with both groups, weighted by the cell's count of these outcomes. Exploration, jev-choice and rules are no learned pick.
+		// Only the first attempt shows whether the pick itself worked.
 		const [cmp] = await rows<{
 			learned_success: number | null;
 			control_success: number | null;
 		}>(
 			`, cmp AS (
 				SELECT task_type, difficulty, success, control = 1 AS is_control FROM o
-				WHERE control = 1 OR (strategy = 'learned' AND explored = 0)
+				WHERE attempt = 1 AND (control = 1 OR (strategy = 'learned' AND explored = 0))
 			), cells AS (
 				SELECT COUNT(*) AS w,
 					AVG(success) FILTER (WHERE NOT is_control) AS l,
@@ -120,7 +136,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					COALESCE(SUM(tok.output_tokens), 0)::DOUBLE AS output_tokens,
 					COALESCE(SUM(tok.cache_read_tokens), 0)::DOUBLE AS cache_read_tokens,
 					COALESCE(SUM(tok.cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens
-				FROM s LEFT JOIN oq ON oq.suggestion_id = s.id LEFT JOIN tok ON tok.suggestion_id = s.id
+				FROM s LEFT JOIN oq ON oq.suggestion_id = s.id AND oq.is_last = 1 LEFT JOIN tok ON tok.suggestion_id = s.id
 				${type ? `WHERE s.task_type = '${type.replaceAll("'", "''")}'` : ""}
 				GROUP BY s.scope
 			)
@@ -146,6 +162,13 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			coverage: cov?.coverage ?? 0,
 			learned_success: cmp?.learned_success ?? null,
 			control_success: cmp?.control_success ?? null,
+			fallbacks: Object.fromEntries(fallbacks.map((f) => [f.reason, f.n])),
+			failures: {
+				parse: failures.find((f) => f.kind === "parse")?.n ?? 0,
+				hook: failures.find((f) => f.kind === "hook")?.n ?? 0,
+				// The api fills this from the launcher log: the launcher cannot write the database.
+				launcher: 0,
+			},
 		};
 	} finally {
 		c.closeSync();

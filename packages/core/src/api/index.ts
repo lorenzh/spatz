@@ -54,6 +54,7 @@ import {
 	parseCodexRollout,
 	subagentMessages,
 	sumByModel,
+	toolCallMessage,
 } from "../signals/transcript.ts";
 import { loadConfig } from "./deps.ts";
 
@@ -176,7 +177,7 @@ export function createApi(
 			fields: ScopeFields,
 		) => {
 			const timed = messages.filter((m) => Number.isFinite(m.at));
-			if (timed.length === 0) return;
+			if (timed.length === 0) return false;
 			const times = timed.map((m) => m.at);
 			store.rewriteScope(
 				{
@@ -198,7 +199,14 @@ export function createApi(
 						),
 					),
 			);
+			return true;
 		};
+		const parsed = (store: Store, ok: boolean) => {
+			if (!ok) store.recordFailure("parse", input.hook_event_name, now);
+		};
+		// ponytail: subagent path derived from the Claude Code layout <session>/subagents/agent-<id>.jsonl
+		const subagentPath = (agentId: string) =>
+			`${input.transcript_path.replace(/\.jsonl$/, "")}/subagents/agent-${agentId}.jsonl`;
 
 		return withStore(async (store) => {
 			// Each event refreshes its agent window; handbacks are ignored above.
@@ -258,9 +266,8 @@ export function createApi(
 						// A delayed link can shrink windows that Stop or SubagentStop already filled: rewrite those scopes.
 						for (const scope of store.usageScopes(shrunk)) {
 							const sub = scope.source === "subagent";
-							// ponytail: subagent path derived from the Claude Code layout <session>/subagents/agent-<id>.jsonl
 							const path = sub
-								? `${input.transcript_path.replace(/\.jsonl$/, "")}/subagents/agent-${scope.scope_key}.jsonl`
+								? subagentPath(scope.scope_key)
 								: input.transcript_path;
 							const text = await Bun.file(path)
 								.text()
@@ -276,39 +283,83 @@ export function createApi(
 						}
 						return;
 					}
-					const signal = open && signalFromBashEvent(input, open, now);
-					if (signal) store.insertSignal(signal);
+					const signal = signalFromBashEvent(input, "", now);
+					if (!signal) return;
+					// Bind the signal to its own tool call and prompt: a late hook must not land on a newer suggestion.
+					const text = await Bun.file(
+						input.agent_id
+							? subagentPath(input.agent_id)
+							: input.transcript_path,
+					)
+						.text()
+						.catch(() => "");
+					const call = toolCallMessage(
+						text,
+						input.agent_id ? undefined : input.prompt_id,
+						input.tool_use_id,
+					);
+					parsed(store, call !== null);
+					const target = call
+						? store.suggestionAt(
+								input.session_id,
+								call.at,
+								cfg.tuning.openWindowMs,
+								input.agent_id ?? null,
+							)
+						: open;
+					if (!target) return;
+					// The model that ran the call is the attempt inside a subagent or a mod-routed loop.
+					// A main session that dispatched the work only verifies it: keep the suggestion's used pair.
+					const credit =
+						call &&
+						(input.agent_id !== undefined ||
+							store.getSuggestion(target)?.agent === "claude-code-mod");
+					store.insertSignal({
+						...signal,
+						suggestion_id: target,
+						...(call && { observed_at: call.at }),
+						...(credit && {
+							model: canonical(call.model),
+							effort: effortFromHook(input),
+						}),
+					});
 					return;
 				}
 				case "Stop": {
 					const promptId = input.prompt_id;
 					if (!promptId) return;
-					return writeWindowed(
+					return parsed(
 						store,
-						mainTurnMessages(
-							await Bun.file(input.transcript_path).text(),
-							promptId,
+						writeWindowed(
+							store,
+							mainTurnMessages(
+								await Bun.file(input.transcript_path).text(),
+								promptId,
+							),
+							{
+								source: "transcript",
+								scope_key: promptId,
+								is_sidechain: false,
+								effort: effortFromHook(input),
+							},
 						),
-						{
-							source: "transcript",
-							scope_key: promptId,
-							is_sidechain: false,
-							effort: effortFromHook(input),
-						},
 					);
 				}
 				case "SubagentStop":
-					return writeWindowed(
+					return parsed(
 						store,
-						subagentMessages(
-							await Bun.file(input.agent_transcript_path).text(),
+						writeWindowed(
+							store,
+							subagentMessages(
+								await Bun.file(input.agent_transcript_path).text(),
+							),
+							{
+								source: "subagent",
+								scope_key: input.agent_id,
+								is_sidechain: true,
+								effort: effortFromHook(input),
+							},
 						),
-						{
-							source: "subagent",
-							scope_key: input.agent_id,
-							is_sidechain: true,
-							effort: effortFromHook(input),
-						},
 					);
 			}
 		});
@@ -386,25 +437,31 @@ export function createApi(
 			const text = await Bun.file(input.transcript_path).text();
 			const rollout = parseCodexRollout(text, turnId);
 			if (!rollout) {
+				store.recordFailure("parse", "codex:Stop", now);
 				debugHook(
 					"Codex rollout has no matching turn context; check the rollout format.",
 				);
 				return;
 			}
-			if (open && rollout.calls.length === 0)
+			// Bind the turn's signals by the turn's own time: a late Stop must not land on a newer suggestion.
+			const at = Number.isFinite(rollout.at) ? rollout.at : now;
+			const target = Number.isFinite(rollout.at)
+				? store.suggestionAt(input.session_id, at, cfg.tuning.openWindowMs)
+				: open;
+			if (target && rollout.calls.length === 0)
 				debugHook("No completed shell exit codes found for this turn.");
-			if (open)
+			if (target)
 				for (const call of rollout.calls) {
 					const kind = detectCommandKind(call.command);
 					if (kind !== "test" && kind !== "build") continue;
 					store.insertSignal({
-						suggestion_id: open,
+						suggestion_id: target,
 						kind,
 						value: call.exit_code === 0 ? 1 : 0,
 						weight: SIGNAL_WEIGHTS[kind],
 						source: "Stop",
 						turn_id: turnId,
-						observed_at: now,
+						observed_at: at,
 					});
 				}
 			store.rewriteScope(
@@ -557,6 +614,7 @@ export function createApi(
 					explored: d.explored,
 					control: d.control,
 					fallback_used: c.fallback_used,
+					fallback_reason: c.fallback_reason,
 					is_test: dryRun,
 					last_event_at: now,
 					closed_at: null,
@@ -700,6 +758,8 @@ export function createApi(
 					value: REPORT_VALUES[result],
 					weight: SIGNAL_WEIGHTS.report,
 					source: source ?? "report",
+					model: toCanonicalId(model, cfg.aliases),
+					effort: effort as Effort,
 					...(turn && {
 						turn_id: turn,
 						agent_id: suggestion.agent_id,
@@ -707,7 +767,7 @@ export function createApi(
 					observed_at: now,
 				});
 				store.closeSuggestion(suggestionId, now);
-				return store.outcome(suggestionId);
+				return store.outcome(suggestionId, toCanonicalId(model, cfg.aliases));
 			});
 		},
 
@@ -726,6 +786,9 @@ export function createApi(
 				debugHook(
 					"Recording failed; check hook input, transcript access and database permissions.",
 				);
+				await withStore((store) =>
+					store.recordFailure("hook", _event, deps.clock.now()),
+				).catch(() => {});
 			}
 		},
 
@@ -736,7 +799,7 @@ export function createApi(
 			await withStore(() => {});
 			const runStats =
 				internals.runStats ?? (await import("../report/index.ts")).runStats;
-			return runStats({
+			const report = await runStats({
 				dbPath: deps.dbPath,
 				extensionDir: deps.duckdbExtensionDir,
 				...(type && { type }),
@@ -744,6 +807,14 @@ export function createApi(
 				successQuality: cfg.tuning.successQuality,
 				noneOnlyModels,
 			});
+			// The plugin launcher appends one line per failed hook call: it cannot reach the database.
+			const launcher = await Bun.file(
+				join(deps.homeDir, ".spatz", "launcher-failures"),
+			)
+				.text()
+				.catch(() => "");
+			report.failures.launcher = launcher.split("\n").filter(Boolean).length;
+			return report;
 		},
 	};
 }

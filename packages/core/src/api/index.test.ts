@@ -249,6 +249,7 @@ describe("suggest", () => {
 			explored: false,
 			control: false,
 			fallback_used: false,
+			fallback_reason: null,
 			is_test: false,
 			last_event_at: T0,
 			closed_at: null,
@@ -405,6 +406,8 @@ describe("report", () => {
 					weight: 1,
 					source: "report",
 					observed_at: T0 + 1000,
+					model: "anthropic/claude-opus-5.5",
+					effort: "high",
 				},
 			],
 		]);
@@ -1326,6 +1329,8 @@ describe("stats", () => {
 			coverage: 0,
 			learned_success: null,
 			control_success: null,
+			fallbacks: {},
+			failures: { parse: 0, hook: 0, launcher: 0 },
 		};
 		const seen: unknown[] = [];
 		const s = setup();
@@ -1420,6 +1425,8 @@ describe("direct mod attribution", () => {
 						coverage: 0,
 						learned_success: null,
 						control_success: null,
+						fallbacks: {},
+						failures: { parse: 0, hook: 0, launcher: 0 },
 					};
 				},
 			},
@@ -2040,4 +2047,254 @@ test("missing efforts from mod usage, Claude hooks and Codex hooks use the avail
 	} finally {
 		db.close();
 	}
+});
+
+describe("attempts, signal binding and failure counts", () => {
+	const turnTranscript = async (calls: [string, string, number][]) => {
+		const path = join(dir, "main.jsonl");
+		await Bun.write(
+			path,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT, timestamp: iso(T0) }),
+				...calls.map(([tool, model, at], i) =>
+					JSON.stringify({
+						type: "assistant",
+						timestamp: iso(at),
+						message: {
+							id: `m${i}`,
+							model,
+							content: [{ type: "tool_use", id: tool, name: "Bash" }],
+						},
+					}),
+				),
+			].join("\n"),
+		);
+		return path;
+	};
+	const testHook = (
+		path: string,
+		tool: string,
+		event: "PostToolUse" | "PostToolUseFailure" = "PostToolUseFailure",
+	) =>
+		JSON.stringify(
+			base({
+				hook_event_name: event,
+				transcript_path: path,
+				tool_name: "Bash",
+				tool_input: { command: "bun test" },
+				tool_use_id: tool,
+				...(event === "PostToolUse"
+					? { tool_response: { stdout: "", stderr: "", interrupted: false } }
+					: { error: "Exit code 1" }),
+			}),
+		);
+
+	test("a late test hook lands on the suggestion of its tool call; a dispatching main session keeps the used pair", async () => {
+		const s = setup();
+		const first = await linked(s);
+		const path = await turnTranscript([
+			["toolu_old", "claude-sonnet-5-5", T0 + 1000],
+		]);
+		s.setNow(T0 + 5000);
+		await linked(s);
+		s.setNow(T0 + 6000);
+		await s.api.handleHook("PostToolUseFailure", testHook(path, "toolu_old"));
+		expect(s.argsOf("insertSignal")).toEqual([
+			[
+				{
+					suggestion_id: first,
+					kind: "test",
+					value: 0,
+					weight: 1,
+					source: "PostToolUseFailure",
+					observed_at: T0 + 1000,
+				},
+			],
+		]);
+		expect(s.argsOf("recordFailure")).toEqual([]);
+	});
+
+	test("a stronger retry is credited to its own pair, the failed cheap pair keeps its failure", async () => {
+		const dbPath = join(dir, "attempts.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const { suggestion_id: id } = await s.api.suggest({
+			...suggestInput(),
+			scope: "escalate",
+			source: "claude-code-mod",
+			session: SESSION,
+			turn: PROMPT,
+		});
+		const path = await turnTranscript([
+			["toolu_cheap", "claude-sonnet-5-5", T0 + 1000],
+			["toolu_strong", "claude-opus-5-5", T0 + 2000],
+		]);
+		s.setNow(T0 + 3000);
+		await s.api.handleHook("PostToolUseFailure", testHook(path, "toolu_cheap"));
+		await s.api.handleHook(
+			"PostToolUse",
+			testHook(path, "toolu_strong", "PostToolUse"),
+		);
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT attempt, model, effort, quality FROM attempts WHERE suggestion_id = ? ORDER BY attempt",
+					)
+					.all(id),
+			).toEqual([
+				{
+					attempt: 1,
+					model: "anthropic/claude-sonnet-5.5",
+					effort: "high",
+					quality: 0,
+				},
+				{
+					attempt: 2,
+					model: "anthropic/claude-opus-5.5",
+					effort: "high",
+					quality: 1,
+				},
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("without the event in the transcript: the open suggestion as before, and a parse failure", async () => {
+		const s = setup();
+		const id = await linked(s);
+		s.setNow(T0 + 1000);
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		expect(s.argsOf("insertSignal")[0]?.[0]).toMatchObject({
+			suggestion_id: id,
+			observed_at: T0 + 1000,
+		});
+		expect(s.argsOf("recordFailure")).toEqual([
+			["parse", "PostToolUse", T0 + 1000],
+		]);
+	});
+
+	test("a late Codex Stop binds its turn by the rollout time", async () => {
+		const s = setup();
+		const first = await linked(s);
+		const path = join(dir, "rollout.jsonl");
+		await Bun.write(
+			path,
+			[
+				{
+					type: "turn_context",
+					payload: { turn_id: "t1", model: "gpt-6-luna", effort: "low" },
+				},
+				{
+					type: "event_msg",
+					payload: {
+						type: "item_completed",
+						item: {
+							type: "CommandExecution",
+							id: "c1",
+							command: ["/bin/bash", "-lc", "bun test"],
+							exit_code: 1,
+						},
+					},
+				},
+			]
+				.map((r) => JSON.stringify({ timestamp: iso(T0 + 1000), ...r }))
+				.join("\n"),
+		);
+		s.setNow(T0 + 5000);
+		await linked(s);
+		s.setNow(T0 + 6000);
+		await s.api.handleHook(
+			"codex:Stop",
+			JSON.stringify({
+				session_id: SESSION,
+				turn_id: "t1",
+				transcript_path: path,
+				hook_event_name: "Stop",
+			}),
+		);
+		expect(s.argsOf("insertSignal")).toEqual([
+			[
+				{
+					suggestion_id: first,
+					kind: "test",
+					value: 0,
+					weight: 1,
+					source: "Stop",
+					turn_id: "t1",
+					observed_at: T0 + 1000,
+				},
+			],
+		]);
+	});
+
+	test("hook errors and empty transcript turns are counted", async () => {
+		const failing = setup();
+		failing.store.findOpenSuggestion = () => {
+			throw new Error("SQLITE_BUSY");
+		};
+		await failing.api.handleHook("PostToolUse", bash("bun test"));
+		expect(failing.argsOf("recordFailure")).toEqual([
+			["hook", "PostToolUse", T0],
+		]);
+
+		const s = setup();
+		await linked(s);
+		const path = join(dir, "empty.jsonl");
+		await Bun.write(path, JSON.stringify({ type: "user", promptId: PROMPT }));
+		await s.api.handleHook(
+			"Stop",
+			JSON.stringify(
+				base({
+					hook_event_name: "Stop",
+					stop_hook_active: false,
+					transcript_path: path,
+				}),
+			),
+		);
+		const missing = join(dir, "missing.jsonl");
+		await Bun.write(missing, '{"type":"future_rollout_format"}');
+		await s.api.handleHook(
+			"codex:Stop",
+			JSON.stringify({
+				session_id: SESSION,
+				turn_id: "nope",
+				transcript_path: missing,
+				hook_event_name: "Stop",
+			}),
+		);
+		expect(s.argsOf("recordFailure")).toEqual([
+			["parse", "Stop", T0],
+			["parse", "codex:Stop", T0],
+		]);
+	});
+
+	test("suggest stores the fallback reason; stats adds launcher failures", async () => {
+		const s = setup();
+		const { suggestion_id } = await s.api.suggest(suggestInput());
+		expect(s.store.getSuggestion(suggestion_id)?.fallback_reason).toBe(
+			"no_key",
+		);
+		const report: StatsReport = {
+			by_type: [],
+			coverage: 0,
+			learned_success: null,
+			control_success: null,
+			fallbacks: {},
+			failures: { parse: 1, hook: 2, launcher: 0 },
+		};
+		const api = createApi(s.deps, { runStats: async () => report });
+		expect((await api.stats({})).failures).toEqual({
+			parse: 1,
+			hook: 2,
+			launcher: 0,
+		});
+		await Bun.write(join(dir, ".spatz", "launcher-failures"), "1\n2\n");
+		expect((await api.stats({})).failures).toEqual({
+			parse: 1,
+			hook: 2,
+			launcher: 2,
+		});
+	});
 });

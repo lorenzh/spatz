@@ -99,7 +99,7 @@ export interface Store {
 	getSuggestion(id: string): SuggestionRecord | null;
 	/** Non-test outcomes with a used pair, grouped by (task_type, difficulty, model, effort), for one task_type (all difficulties). */
 	cellStats(taskType: TaskType): CellStat[];
-	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */
+	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Moves hook signals observed inside the new window off the suggestions it shrinks. Returns the ids whose closed_at moved earlier. */
 	linkSession(
 		suggestionId: string,
 		sessionId: string,
@@ -123,6 +123,15 @@ export interface Store {
 		openWindowMs: number,
 		agentId?: string | null,
 	): { id: string; start: number; end: number }[];
+	/** The latest window of the selected agent sequence that contains this moment; else null. */
+	suggestionAt(
+		sessionId: string,
+		at: number,
+		openWindowMs: number,
+		agentId?: string | null,
+	): string | null;
+	/** Count a silent failure for spatz stats: a hook error or a transcript that parsed to nothing. */
+	recordFailure(kind: "parse" | "hook", source: string, at: number): void;
 	/** Set last_event_at. */
 	touch(suggestionId: string, at: number): void;
 	closeSuggestion(suggestionId: string, at: number): void;
@@ -159,7 +168,8 @@ export interface Store {
 			windows: { id: string; start: number; end: number }[],
 		) => UsageRecord[],
 	): boolean;
-	outcome(suggestionId: string): Outcome | null;
+	/** The attempt with the latest signal, of this model when given. */
+	outcome(suggestionId: string, model?: string): Outcome | null;
 	/** Close the database handle. */
 	dispose(): void;
 }

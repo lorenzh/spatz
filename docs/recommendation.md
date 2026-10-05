@@ -2,7 +2,7 @@
 title: How spatz picks a model and effort
 description: The decision rule of spatz: cells, the Beta estimate, thresholds, cost order, critical tasks, exploration, the control group and how quality is computed.
 tags: [spatz, recommendation, learning]
-keywords: [decision rule, strategy, learned, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
+keywords: [decision rule, strategy, learned, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, attempt, retry, escalation, stats, scope, turn, agent, session]
 ---
 
 # How spatz picks a model and effort
@@ -108,10 +108,10 @@ The control group gets the most expensive candidate in 10 % of the normal sugges
 
 | Field | Meaning |
 |---|---|
-| `learned_success` | Success rate of learned picks: strategy `learned` and not explored. |
-| `control_success` | Success rate of the control group. |
+| `learned_success` | Success rate of learned picks: strategy `learned` and not explored. Only the first attempt counts. |
+| `control_success` | Success rate of the control group. Only the first attempt counts. |
 | `coverage` | Share of suggestions (without `--dry-run`) that have an outcome. |
-| `adoption` | Per task type: share of outcomes whose used pair is the recommended pair. |
+| `adoption` | Per task type: share of suggestions whose first attempt used the recommended pair. |
 | `success` | Per pair: share of outcomes with quality `≥ 0.8`. |
 
 spatz compares `learned_success` and `control_success` per cell. It uses only cells that have both groups. It weights each cell by its number of outcomes in both groups. If no cell has both groups, both fields are empty (`-` in text output, `null` in JSON).
@@ -122,7 +122,7 @@ For the command options, read [cli.md](cli.md).
 
 ## Quality and success
 
-The `outcomes` view computes one quality value per suggestion from its signals.
+The `outcomes` view computes one quality value per attempt from its signals. An attempt is one pair that worked on the suggestion. Each signal counts for the pair that produced it. A signal without a pair counts for the used pair. See [how-it-works.md](how-it-works.md#attempts).
 
 | Signal | Source | Value | Weight |
 |---|---|---|---|
@@ -132,11 +132,13 @@ The `outcomes` view computes one quality value per suggestion from its signals.
 
 The rules:
 
-1. If a report exists, the quality is the value of the latest report. Hook signals do not count.
-2. Without a report, spatz takes the latest value per signal kind. The quality is the weighted mean over the kinds.
+1. If the attempt has a report, the quality is the value of its latest report. Its hook signals do not count.
+2. Without a report, spatz takes the latest value per signal kind of the attempt. The quality is the weighted mean over the kinds.
 3. Without a signal, there is no outcome.
 
-The used pair comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest recorded effort for that model. If the catalog lists only `none` for a model, spatz records missing effort as `none`.
+So a cheap pair that failed keeps its failure when a stronger pair fixes the task. Both outcomes count, each for its own pair.
+
+The used pair, for signals without a pair, comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest recorded effort for that model. If the catalog lists only `none` for a model, spatz records missing effort as `none`.
 Learning also treats older null-effort outcomes as `none` for those models.
 For other models, outcomes without a known effort do not count for learning.
 
@@ -154,14 +156,14 @@ Session windows use `(session_id, agent_id)`. Each subagent can keep an independ
 The main sequence uses a null agent id.
 A suggestion can cover several turns. Direct usage records each turn separately.
 Direct usage has no success value. Explicit reports or test/build signals supply that value.
-The outcome view still computes one outcome per suggestion.
+The outcome view computes one outcome per attempt.
 See [how-it-works.md](how-it-works.md#direct-attribution) for the fields and migration.
 
 `spatz stats --by scope` compares outcomes and token totals per scope.
 It includes input, output, cache-read and cache-creation tokens.
 The cache-read share divides cache-read tokens by all input tokens, including cache creation.
 Suggestions without a scope appear on a separate line.
-`n` counts outcomes. Usage without an outcome still contributes tokens.
+`n` counts suggestions with an outcome. Success uses the last attempt. Usage without an outcome still contributes tokens.
 The view does not estimate cost or routing latency.
 See [cli.md](cli.md#spatz-stats) for the output fields.
 

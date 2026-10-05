@@ -16,9 +16,12 @@ export interface CodexRollout {
 	effort: string | null;
 	usage: TranscriptUsage;
 	calls: { command: string; exit_code: number }[];
+	/** Epoch ms of the turn's last record; NaN when the rollout has no timestamps. */
+	at: number;
 }
 
 type RolloutRecord = {
+	timestamp?: unknown;
 	type?: string;
 	payload?: {
 		[key: string]: unknown;
@@ -76,9 +79,12 @@ export function parseCodexRollout(
 	const exits = new Map<string, number>();
 	const completed = new Map<string, CodexRollout["calls"][number]>();
 	let currentTurn: string | undefined;
-	for (const { type, payload: p } of rows) {
+	let at = -Infinity;
+	for (const { type, payload: p, timestamp } of rows) {
 		if (type === "turn_context") currentTurn = p?.turn_id;
 		if (!p || (p.turn_id ?? currentTurn) !== turnId) continue;
+		const t = typeof timestamp === "string" ? Date.parse(timestamp) : NaN;
+		if (Number.isFinite(t)) at = Math.max(at, t);
 		if (type === "event_msg" && p.type === "item_completed") {
 			const item = p.item;
 			const argv = item?.command;
@@ -131,6 +137,7 @@ export function parseCodexRollout(
 	return {
 		model: turn.model,
 		effort: typeof turn.effort === "string" ? turn.effort : null,
+		at: Number.isFinite(at) ? at : NaN,
 		usage: {
 			input_tokens: usage.input_tokens ?? 0,
 			cache_read_input_tokens: usage.cached_input_tokens ?? 0,
@@ -151,7 +158,12 @@ interface Line {
 	type?: unknown;
 	promptId?: unknown;
 	timestamp?: unknown;
-	message?: { id?: unknown; model?: unknown; usage?: TranscriptUsage };
+	message?: {
+		id?: unknown;
+		model?: unknown;
+		usage?: TranscriptUsage;
+		content?: unknown;
+	};
 }
 
 /** One API message: model, usage and when it was written (epoch ms, NaN when missing). */
@@ -222,6 +234,37 @@ export function mainTurnMessages(
 			current = e.promptId;
 		return current === promptId;
 	});
+}
+
+/**
+ * The assistant message that issued this tool call, found in any prompt; else the last message of the prompt
+ * (undefined: of the whole transcript); null when there is none. A hook names its tool call and prompt, so
+ * this gives the time and model of the event even when the hook runs late.
+ */
+export function toolCallMessage(
+	jsonl: string,
+	promptId: string | undefined,
+	toolUseId: string,
+): AssistantMessage | null {
+	let current: unknown;
+	let last: AssistantMessage | null = null;
+	for (const e of lines(jsonl)) {
+		if (e.type === "user" && typeof e.promptId === "string")
+			current = e.promptId;
+		if (e.type !== "assistant") continue;
+		const { model, usage = {}, content } = e.message ?? {};
+		const at = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
+		if (typeof model !== "string" || !Number.isFinite(at)) continue;
+		const message = { model, at, usage };
+		if (
+			Array.isArray(content) &&
+			content.some((c) => c?.type === "tool_use" && c.id === toolUseId)
+		)
+			return message;
+		// ponytail: the prompt's last message is a guess when the call is missing; a late hook may see a later message.
+		if (promptId === undefined || current === promptId) last = message;
+	}
+	return last;
 }
 
 /** All assistant messages of a subagent transcript. */

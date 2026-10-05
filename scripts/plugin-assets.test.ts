@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pluginNames, syncPluginAssets } from "./plugin-assets.ts";
@@ -107,6 +107,37 @@ test.skipIf(process.platform === "win32")(
 				/^npx -y @spatz\/cli@/,
 			);
 			expect(await proc.exited).toBe(0);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
+test.skipIf(process.platform === "win32")(
+	"launcher counts failed hook calls for spatz stats, never other commands",
+	async () => {
+		const root = await mkdtemp(join(tmpdir(), "spatz-launcher-fail-"));
+		try {
+			const tools = join(root, "tools");
+			const bare = join(root, "bare");
+			for (const dir of [tools, bare]) {
+				await mkdir(dir);
+				await symlink(Bun.which("mkdir") ?? "/bin/mkdir", join(dir, "mkdir"));
+			}
+			await Bun.write(join(tools, "bunx"), "#!/bin/sh\nexit 3\n");
+			await chmod(join(tools, "bunx"), 0o755);
+			const run = (path: string, ...args: string[]) =>
+				Bun.spawn([resolve("packages/codex-hooks/bin/spatz"), ...args], {
+					env: { PATH: path, HOME: root },
+					stdout: "pipe",
+					stderr: "pipe",
+				}).exited;
+			const log = join(root, ".spatz", "launcher-failures");
+			expect(await run(tools, "report", "x")).toBe(3);
+			expect(await Bun.file(log).exists()).toBe(false);
+			expect(await run(tools, "hook", "Stop")).toBe(3);
+			expect(await run(bare, "hook", "Stop")).toBe(1);
+			expect(await Bun.file(log).text()).toBe("Stop\nStop\n");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

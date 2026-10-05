@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { parseMainTranscript, parseSubagentTranscript } from "./transcript.ts";
+import {
+	parseCodexRollout,
+	parseMainTranscript,
+	parseSubagentTranscript,
+	toolCallMessage,
+} from "./transcript.ts";
 
 const dir = `${import.meta.dir}/fixtures`;
 const main = await Bun.file(`${dir}/main-transcript.jsonl`).text();
@@ -134,5 +139,76 @@ describe("robustness and privacy", () => {
 			expect(Object.keys(r).sort()).toEqual(keys);
 			expect(JSON.stringify(r)).not.toContain("SECRET");
 		}
+	});
+});
+
+describe("toolCallMessage", () => {
+	const at = (t: string) => Date.parse(t);
+	const call = (id: string, model: string, timestamp: string, tool?: string) =>
+		JSON.stringify({
+			type: "assistant",
+			timestamp,
+			message: {
+				id,
+				model,
+				content: tool
+					? [{ type: "tool_use", id: tool, name: "Bash" }]
+					: [{ type: "text" }],
+			},
+		});
+	const jsonl = [
+		JSON.stringify({ type: "user", promptId: "p1" }),
+		call("m1", "claude-haiku", "2026-10-01T00:00:01Z", "toolu_a"),
+		call("m2", "claude-haiku", "2026-10-01T00:00:02Z"),
+		JSON.stringify({ type: "user", promptId: "p2" }),
+		call("m3", "claude-opus", "2026-10-01T00:00:03Z", "toolu_b"),
+		call("m4", "claude-opus", "2026-10-01T00:00:04Z"),
+	].join("\n");
+
+	test("finds the message that issued the tool call, in any prompt", () => {
+		expect(toolCallMessage(jsonl, "p1", "toolu_a")).toMatchObject({
+			model: "claude-haiku",
+			at: at("2026-10-01T00:00:01Z"),
+		});
+		expect(toolCallMessage(jsonl, undefined, "toolu_b")).toMatchObject({
+			model: "claude-opus",
+			at: at("2026-10-01T00:00:03Z"),
+		});
+	});
+
+	test("without the tool call: the prompt's last message; nothing when the prompt is unknown", () => {
+		expect(toolCallMessage(jsonl, "p1", "toolu_x")).toMatchObject({
+			model: "claude-haiku",
+			at: at("2026-10-01T00:00:02Z"),
+		});
+		expect(toolCallMessage(jsonl, "p9", "toolu_x")).toBeNull();
+		expect(toolCallMessage("{bad", "p1", "toolu_a")).toBeNull();
+	});
+});
+
+describe("parseCodexRollout time", () => {
+	const turn = (id: string, timestamp?: string) =>
+		JSON.stringify({
+			timestamp,
+			type: "turn_context",
+			payload: { turn_id: id, model: "gpt-6-luna" },
+		});
+	test("at is the last record time of the turn, NaN without timestamps", () => {
+		const jsonl = [
+			turn("t1", "2026-10-01T00:00:01Z"),
+			JSON.stringify({
+				timestamp: "2026-10-01T00:00:05Z",
+				type: "response_item",
+				payload: { type: "message" },
+			}),
+			turn("t2", "2026-10-01T00:00:09Z"),
+		].join("\n");
+		expect(parseCodexRollout(jsonl, "t1")?.at).toBe(
+			Date.parse("2026-10-01T00:00:05Z"),
+		);
+		expect(parseCodexRollout(jsonl, "t2")?.at).toBe(
+			Date.parse("2026-10-01T00:00:09Z"),
+		);
+		expect(parseCodexRollout(turn("t3"), "t3")?.at).toBeNaN();
 	});
 });

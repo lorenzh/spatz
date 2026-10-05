@@ -392,7 +392,7 @@ describe("stats", () => {
 		const other = s.by_type.find((t) => t.task_type === "other");
 		// Non-test suggestions: first (partial), luna (none), linked (pass).
 		expect(other?.n).toBe(2);
-		expect(other?.pairs).toEqual([
+		expect(other?.pairs).toMatchObject([
 			{
 				model: "anthropic/claude-opus-5.5",
 				effort: "high",
@@ -407,6 +407,14 @@ describe("stats", () => {
 			},
 		]);
 		expect(other?.output_tokens).toBeGreaterThan(0);
+		// The first pair of a suggestion carries all of its tokens.
+		expect(other?.pairs[1]).toMatchObject({
+			escalations: 0,
+			input_tokens: other?.input_tokens,
+			output_tokens: other?.output_tokens,
+		});
+		expect(s.failures).toEqual({ parse: 0, hook: 0, launcher: 0 });
+		expect(s.fallbacks).toEqual({ opt_out: 3 });
 		expect(s.coverage).toBeCloseTo(2 / 3, 6);
 	});
 

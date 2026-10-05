@@ -25,6 +25,7 @@ describe("parseCodexRollout", () => {
 			`${import.meta.dir}/fixtures/codex-command-events.jsonl`,
 		).text();
 		expect(parseCodexRollout(rollout, "todo-turn")).toEqual({
+			at: NaN,
 			model: "gpt-6-luna",
 			effort: "low",
 			usage: {
@@ -52,6 +53,7 @@ describe("parseCodexRollout", () => {
 			"11111111-1111-1111-1111-111111111111",
 		);
 		expect(result).toEqual({
+			at: NaN,
 			model: "gpt-6-luna",
 			effort: "low",
 			usage: {

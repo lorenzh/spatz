@@ -60,6 +60,7 @@ function suggestion(over: Partial<SuggestionRecord> = {}): SuggestionRecord {
 		explored: false,
 		control: false,
 		fallback_used: true,
+		fallback_reason: "opt_out",
 		is_test: false,
 		last_event_at: 1000,
 		closed_at: null,
@@ -142,7 +143,7 @@ describe("schema", () => {
 		const migrated = new Database(path);
 		try {
 			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: 4,
+				user_version: 5,
 			});
 			expect(
 				migrated.query("SELECT difficulty FROM suggestions ORDER BY id").all(),
@@ -152,7 +153,7 @@ describe("schema", () => {
 				})),
 			);
 			for (const [i, table] of tables.entries())
-				expect(migrated.query(`SELECT * FROM ${table}`).all()).toEqual(
+				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
 					before[i] ?? [],
 				);
 			const row = migrated
@@ -210,7 +211,7 @@ describe("schema", () => {
 					[id],
 				);
 				db.run(
-					"INSERT INTO signals VALUES (?, 'report', 1, 1, 'report', 1, NULL, NULL)",
+					"INSERT INTO signals VALUES (?, 'report', 1, 1, 'report', 1, NULL, NULL, NULL, NULL)",
 					[id],
 				);
 			}
@@ -235,7 +236,7 @@ describe("schema", () => {
 		}
 	});
 
-	test("populated v2 migrates to v4 without losing rows or outcomes", async () => {
+	test("populated v2 migrates to v5 without losing rows or outcomes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "spatz-v2-"));
 		dirs.push(dir);
 		const path = join(dir, "v2.db");
@@ -257,7 +258,7 @@ describe("schema", () => {
 		const migrated = openDatabase(path);
 		try {
 			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: 4,
+				user_version: 5,
 			});
 			for (const [i, table] of tables.entries()) {
 				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
@@ -279,7 +280,7 @@ describe("schema", () => {
 			migrated.close();
 		}
 	});
-	test("creates tables, the outcomes view and user_version 4", () => {
+	test("creates tables, the outcomes view and user_version 5", () => {
 		const path = tempDb();
 		open(path).dispose();
 		stores.length = 0;
@@ -302,11 +303,11 @@ describe("schema", () => {
 				{ name: "usage_scopes", type: "table" },
 			]),
 		);
-		expect(SCHEMA_VERSION).toBe(4);
-		expect(version?.user_version).toBe(4);
+		expect(SCHEMA_VERSION).toBe(5);
+		expect(version?.user_version).toBe(5);
 	});
 
-	test("a version 1 db migrates to version 4 and keeps its data", async () => {
+	test("a version 1 db migrates to version 5 and keeps its data", async () => {
 		const path = join(mkdtempSync(join(tmpdir(), "spatz-v1-")), "v1.db");
 		dirs.push(join(path, ".."));
 		const db = new Database(path, { create: true });
@@ -327,7 +328,7 @@ describe("schema", () => {
 			.get();
 		check.close();
 		expect(table).toEqual({ name: "usage_scopes" });
-		expect(version?.user_version).toBe(4);
+		expect(version?.user_version).toBe(5);
 	});
 
 	test("reopening keeps data and does not re-migrate", () => {
@@ -407,6 +408,7 @@ describe("suggestions", () => {
 			explored: true,
 			control: true,
 			fallback_used: false,
+			fallback_reason: null,
 			is_test: true,
 			last_event_at: 99,
 			closed_at: 100,
@@ -986,4 +988,287 @@ test("usage scopes select the highest ranked effort, not lexical maximum", () =>
 		expect(store.usageScopes(["s1"])[0]?.effort).toBe(i === 4 ? "max" : effort);
 	}
 	expect(store.usageScopes([])).toEqual([]);
+});
+
+describe("v5: attempts, signal binding and failures", () => {
+	test("a v4 database copy migrates to v5 without losing rows or outcomes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "spatz-v4-"));
+		dirs.push(dir);
+		const path = join(dir, "v4.db");
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v4.sql")).text());
+		const tables = ["suggestions", "usages", "signals", "usage_scopes"];
+		const before = tables.map((t) =>
+			db.query(`SELECT * FROM ${t} ORDER BY rowid`).all(),
+		);
+		const outcomes = db
+			.query("SELECT * FROM outcomes ORDER BY suggestion_id")
+			.all();
+		expect(outcomes).toHaveLength(2);
+		db.close();
+		const migrated = openDatabase(path);
+		try {
+			expect(migrated.query("PRAGMA user_version").get()).toEqual({
+				user_version: 5,
+			});
+			for (const [i, table] of tables.entries())
+				expect(
+					migrated.query(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+				).toMatchObject(before[i] as object[]);
+			expect(
+				migrated.query("SELECT * FROM outcomes ORDER BY suggestion_id").all(),
+			).toEqual(outcomes);
+			expect(
+				migrated.query("SELECT DISTINCT model, effort FROM signals").all(),
+			).toEqual([{ model: null, effort: null }]);
+			expect(
+				migrated
+					.query("SELECT DISTINCT fallback_reason FROM suggestions")
+					.all(),
+			).toEqual([{ fallback_reason: null }]);
+			expect(
+				migrated
+					.query(
+						"SELECT suggestion_id, attempt FROM attempts ORDER BY suggestion_id",
+					)
+					.all(),
+			).toEqual([
+				{ suggestion_id: "h", attempt: 1 },
+				{ suggestion_id: "r", attempt: 1 },
+			]);
+		} finally {
+			migrated.close();
+		}
+	});
+
+	test("each signal counts for the pair that produced it: a retry is not credited to the failed pair", () => {
+		const store = open();
+		store.insertSuggestion(suggestion());
+		store.upsertUsage(
+			usage({ model: "m/cheap", effort: "low", output_tokens: 10 }),
+		);
+		store.upsertUsage(
+			usage({ model: "m/strong", effort: "high", output_tokens: 5 }),
+		);
+		const hook = {
+			weight: 1,
+			source: "PostToolUse" as const,
+			suggestion_id: "s1",
+			kind: "test" as const,
+		};
+		store.insertSignal({
+			...hook,
+			value: 0,
+			model: "m/cheap",
+			effort: "low",
+			observed_at: 10,
+		});
+		store.insertSignal({
+			...hook,
+			value: 1,
+			model: "m/strong",
+			effort: "high",
+			observed_at: 20,
+		});
+		expect(store.cellStats("code.bugfix")).toEqual([
+			{
+				task_type: "code.bugfix",
+				difficulty: "medium",
+				model: "m/cheap",
+				effort: "low",
+				n: 1,
+				sum_quality: 0,
+			},
+			{
+				task_type: "code.bugfix",
+				difficulty: "medium",
+				model: "m/strong",
+				effort: "high",
+				n: 1,
+				sum_quality: 1,
+			},
+		]);
+		// The current outcome is the attempt with the latest signal.
+		expect(store.outcome("s1")).toEqual({
+			suggestion_id: "s1",
+			quality: 1,
+			model: "m/strong",
+			effort: "high",
+		});
+		// A report for the stronger pair keeps the failed attempt.
+		store.insertSignal({
+			...hook,
+			kind: "report",
+			source: "report",
+			value: 1,
+			model: "m/strong",
+			effort: "high",
+			observed_at: 30,
+		});
+		expect(
+			store.cellStats("code.bugfix").map((c) => [c.model, c.sum_quality]),
+		).toEqual([
+			["m/cheap", 0],
+			["m/strong", 1],
+		]);
+	});
+
+	test("attempts are ordered by their first signal; a missing signal effort comes from the model's usage", () => {
+		const path = tempDb();
+		const store = open(path);
+		store.insertSuggestion(suggestion());
+		store.upsertUsage(usage({ model: "m/b", effort: "medium" }));
+		store.insertSignal({
+			suggestion_id: "s1",
+			kind: "build",
+			value: 1,
+			weight: 0.8,
+			source: "PostToolUse",
+			model: "m/b",
+			effort: null,
+			observed_at: 50,
+		});
+		store.insertSignal({
+			suggestion_id: "s1",
+			kind: "test",
+			value: 0,
+			weight: 1,
+			source: "PostToolUseFailure",
+			model: "m/a",
+			effort: "low",
+			observed_at: 40,
+		});
+		const db = new Database(path);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT suggestion_id, attempt, model, effort, quality, first_at, last_at FROM attempts ORDER BY attempt",
+					)
+					.all(),
+			).toEqual([
+				{
+					suggestion_id: "s1",
+					attempt: 1,
+					model: "m/a",
+					effort: "low",
+					quality: 0,
+					first_at: 40,
+					last_at: 40,
+				},
+				{
+					suggestion_id: "s1",
+					attempt: 2,
+					model: "m/b",
+					effort: "medium",
+					quality: 1,
+					first_at: 50,
+					last_at: 50,
+				},
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("the none-only rule applies to signal efforts", () => {
+		const store = openStore(":memory:", ["m/none"]);
+		stores.push(store);
+		store.insertSuggestion(suggestion());
+		store.insertSignal({
+			suggestion_id: "s1",
+			kind: "test",
+			value: 1,
+			weight: 1,
+			source: "PostToolUse",
+			model: "m/none",
+			effort: null,
+			observed_at: 1,
+		});
+		expect(store.outcome("s1")).toMatchObject({
+			model: "m/none",
+			effort: "none",
+		});
+	});
+
+	test("suggestionAt finds the window that contained a moment, not the one open now", () => {
+		const H2 = 2 * 60 * 60 * 1000;
+		const store = open();
+		store.insertSuggestion(
+			suggestion({ id: "old", created_at: 100, last_event_at: 100 }),
+		);
+		store.insertSuggestion(
+			suggestion({ id: "new", created_at: 200, last_event_at: 200 }),
+		);
+		store.linkSession("old", "sess", "p1", 100);
+		store.linkSession("new", "sess", "p2", 200);
+		expect(store.suggestionAt("sess", 150, H2)).toBe("old");
+		expect(store.suggestionAt("sess", 250, H2)).toBe("new");
+		expect(store.suggestionAt("sess", 50, H2)).toBeNull();
+		expect(store.suggestionAt("other", 150, H2)).toBeNull();
+	});
+
+	test("a late link moves hook signals observed after its start, but not reports", () => {
+		const path = tempDb();
+		const store = open(path);
+		store.insertSuggestion(
+			suggestion({ id: "old", created_at: 100, last_event_at: 100 }),
+		);
+		store.insertSuggestion(
+			suggestion({ id: "new", created_at: 200, last_event_at: 200 }),
+		);
+		store.linkSession("old", "sess", "p1", 100);
+		const hook = {
+			suggestion_id: "old",
+			kind: "test" as const,
+			weight: 1,
+			source: "PostToolUse" as const,
+			value: 1,
+		};
+		store.insertSignal({ ...hook, observed_at: 150 });
+		store.insertSignal({ ...hook, observed_at: 250 });
+		store.insertSignal({
+			...hook,
+			kind: "report",
+			source: "report",
+			observed_at: 260,
+		});
+		store.linkSession("new", "sess", "p2", 300);
+		const db = new Database(path);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT suggestion_id, kind, observed_at FROM signals ORDER BY observed_at",
+					)
+					.all(),
+			).toEqual([
+				{ suggestion_id: "old", kind: "test", observed_at: 150 },
+				{ suggestion_id: "new", kind: "test", observed_at: 250 },
+				{ suggestion_id: "old", kind: "report", observed_at: 260 },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("failures and the fallback reason are stored", () => {
+		const path = tempDb();
+		const store = open(path);
+		store.insertSuggestion(suggestion({ fallback_reason: "timeout" }));
+		expect(store.getSuggestion("s1")?.fallback_reason).toBe("timeout");
+		store.recordFailure("parse", "Stop", 5);
+		store.recordFailure("hook", "PostToolUse", 6);
+		const db = new Database(path);
+		try {
+			expect(
+				db.query("SELECT * FROM failures ORDER BY observed_at").all(),
+			).toEqual([
+				{ kind: "parse", source: "Stop", observed_at: 5 },
+				{ kind: "hook", source: "PostToolUse", observed_at: 6 },
+			]);
+		} finally {
+			db.close();
+		}
+	});
 });

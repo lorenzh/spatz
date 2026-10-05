@@ -56,12 +56,18 @@ const statsReport: StatsReport = {
 					effort: "medium",
 					n: 3,
 					success_rate: 2 / 3,
+					escalations: 1,
+					input_tokens: 1000,
+					output_tokens: 300,
 				},
 				{
 					model: "anthropic/claude-opus-5.5",
 					effort: null,
 					n: 1,
 					success_rate: 1,
+					escalations: 0,
+					input_tokens: 200,
+					output_tokens: 40,
 				},
 			],
 			adoption_rate: 0.75,
@@ -72,6 +78,8 @@ const statsReport: StatsReport = {
 	coverage: 0.8,
 	learned_success: 0.7,
 	control_success: null,
+	fallbacks: { no_key: 2, timeout: 1 },
+	failures: { parse: 3, hook: 1, launcher: 0 },
 };
 
 function fakeIO(stdin: () => Promise<string> = async () => "{}") {
@@ -665,9 +673,11 @@ describe("stats", () => {
 		expect(stdout()).toBe(
 			[
 				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340",
-				"  openai/gpt-6-sol:medium  n=3  success=67%",
-				"  anthropic/claude-opus-5.5:-  n=1  success=100%",
+				"  openai/gpt-6-sol:medium  n=3  success=67%  escalations=1  input_tokens=1000  output_tokens=300",
+				"  anthropic/claude-opus-5.5:-  n=1  success=100%  escalations=0  input_tokens=200  output_tokens=40",
 				"coverage: 80%  learned_success: 70%  control_success: -",
+				"fallbacks: no_key=2  timeout=1",
+				"failures: parse=3  hook=1  launcher=0",
 			].join("\n"),
 		);
 	});
@@ -680,11 +690,17 @@ describe("stats", () => {
 				coverage: 0,
 				learned_success: null,
 				control_success: 0.5,
+				fallbacks: {},
+				failures: { parse: 0, hook: 0, launcher: 0 },
 			}),
 		});
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
-			"coverage: 0%  learned_success: -  control_success: 50%",
+			[
+				"coverage: 0%  learned_success: -  control_success: 50%",
+				"fallbacks: -",
+				"failures: parse=0  hook=0  launcher=0",
+			].join("\n"),
 		);
 	});
 

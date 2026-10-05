@@ -7,6 +7,7 @@ import type { Store } from "../contracts/deps.ts";
 import type {
 	Difficulty,
 	Effort,
+	FallbackReason,
 	ReportResult,
 	RoutingScope,
 	StrategyName,
@@ -46,6 +47,8 @@ interface SugOpts {
 	top?: [string, Effort];
 	strategy?: StrategyName;
 	explored?: boolean;
+	/** Sets fallback_used; null is a row from before schema v5. */
+	fallback?: FallbackReason | null;
 }
 
 function sug(id: string, o: SugOpts = {}) {
@@ -69,7 +72,8 @@ function sug(id: string, o: SugOpts = {}) {
 		reason: "r",
 		explored: o.explored ?? false,
 		control: o.control ?? false,
-		fallback_used: false,
+		fallback_used: o.fallback !== undefined,
+		fallback_reason: o.fallback ?? null,
 		is_test: o.is_test ?? false,
 		last_event_at: 1,
 		closed_at: null,
@@ -117,6 +121,13 @@ function report(
 		observed_at: 1,
 	});
 }
+
+/** Pair fields of a pair that never escalated: its suggestions' tokens. */
+const first = (input_tokens: number, output_tokens: number) => ({
+	escalations: 0,
+	input_tokens,
+	output_tokens,
+});
 
 const noInstall = (sql: string) => {
 	if (/\bINSTALL\b/i.test(sql)) throw new Error(`INSTALL blocked: ${sql}`);
@@ -174,7 +185,88 @@ test("empty db: no types, coverage 0, no comparison", async () => {
 		coverage: 0,
 		learned_success: null,
 		control_success: null,
+		fallbacks: {},
+		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
+});
+
+test("attempts: a stronger retry counts for its own pair; escalations and all tokens count for the first pair", async () => {
+	sug("e1", { top: ["m/cheap", "low"], scope: "escalate" });
+	usage("e1", "m/cheap", "low", [10, 1], "transcript");
+	usage("e1", "m/strong", "high", [20, 2], "transcript");
+	const hook = { suggestion_id: "e1", kind: "test" as const, weight: 1 };
+	store.insertSignal({
+		...hook,
+		value: 0,
+		source: "PostToolUseFailure",
+		model: "m/cheap",
+		effort: "low",
+		observed_at: 1,
+	});
+	store.insertSignal({
+		...hook,
+		value: 1,
+		source: "PostToolUse",
+		model: "m/strong",
+		effort: "high",
+		observed_at: 2,
+	});
+	const r = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		onSql: noInstall,
+	});
+	expect(r.by_scope).toMatchObject([
+		{ scope: "escalate", n: 1, success_rate: 1, input_tokens: 30 },
+	]);
+	expect(await stats()).toMatchObject({
+		by_type: [
+			{
+				task_type: "code.bugfix",
+				n: 2,
+				pairs: [
+					{
+						model: "m/cheap",
+						effort: "low",
+						n: 1,
+						success_rate: 0,
+						escalations: 1,
+						input_tokens: 30,
+						output_tokens: 3,
+					},
+					{
+						model: "m/strong",
+						effort: "high",
+						n: 1,
+						success_rate: 1,
+						escalations: 0,
+						input_tokens: 0,
+						output_tokens: 0,
+					},
+				],
+				adoption_rate: 1,
+				input_tokens: 30,
+				output_tokens: 3,
+			},
+		],
+		coverage: 1,
+	});
+});
+
+test("fallback reasons and silent failures are counted", async () => {
+	sug("jev");
+	sug("t", { fallback: "timeout" });
+	sug("t2", { fallback: "timeout" });
+	sug("old", { fallback: null });
+	sug("dry", { fallback: "no_key", is_test: true });
+	store.recordFailure("parse", "Stop", 1);
+	store.recordFailure("parse", "codex:Stop", 2);
+	store.recordFailure("hook", "PostToolUse", 3);
+	const r = await stats();
+	expect(r.fallbacks).toEqual({ timeout: 2, unknown: 1 });
+	expect(r.failures).toEqual({ parse: 2, hook: 1, launcher: 0 });
 });
 
 test("reads the SQLite file read-only and leaves it unchanged", async () => {
@@ -215,7 +307,15 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 		onSql: noInstall,
 	});
 	expect(result.by_type[0]?.pairs).toEqual([
-		{ model, effort: "none", n: 1, success_rate: 1 },
+		{
+			model,
+			effort: "none",
+			n: 1,
+			success_rate: 1,
+			escalations: 0,
+			input_tokens: 0,
+			output_tokens: 1,
+		},
 	]);
 });
 
@@ -268,8 +368,14 @@ describe("one dataset", () => {
 		task_type: "code.bugfix",
 		n: 3,
 		pairs: [
-			{ model: "m/a", effort: "low", n: 1, success_rate: 1 },
-			{ model: "m/b", effort: "high", n: 2, success_rate: 0.5 },
+			{ model: "m/a", effort: "low", n: 1, success_rate: 1, ...first(100, 10) },
+			{
+				model: "m/b",
+				effort: "high",
+				n: 2,
+				success_rate: 0.5,
+				...first(500, 50),
+			},
 		],
 		adoption_rate: 2 / 3,
 		input_tokens: 605,
@@ -278,7 +384,9 @@ describe("one dataset", () => {
 	const review: TypeStats = {
 		task_type: "review",
 		n: 1,
-		pairs: [{ model: "m/a", effort: "low", n: 1, success_rate: 0 }],
+		pairs: [
+			{ model: "m/a", effort: "low", n: 1, success_rate: 0, ...first(7, 3) },
+		],
 		adoption_rate: 1,
 		input_tokens: 7,
 		output_tokens: 3,
@@ -313,6 +421,8 @@ test("only dry-run suggestions: counts nothing", async () => {
 		coverage: 0,
 		learned_success: null,
 		control_success: null,
+		fallbacks: {},
+		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
 });
 
@@ -372,8 +482,8 @@ test("success is quality >= 0.8; pairs and adoption distinguish effort", async (
 	signal("e4", 0.79);
 	const [s] = (await stats()).by_type;
 	expect(s?.pairs).toEqual([
-		{ model: "m/a", effort: "high", n: 3, success_rate: 1 / 3 },
-		{ model: "m/a", effort: "low", n: 1, success_rate: 1 },
+		{ model: "m/a", effort: "high", n: 3, success_rate: 1 / 3, ...first(3, 3) },
+		{ model: "m/a", effort: "low", n: 1, success_rate: 1, ...first(1, 1) },
 	]);
 	expect(s?.adoption_rate).toBe(3 / 4);
 });
@@ -387,8 +497,8 @@ test("success boundary keeps double precision: 0.79999999 fails, 0.8 passes", as
 	signal("b2", 0.8);
 	const r = await stats();
 	expect(r.by_type[0]?.pairs).toEqual([
-		{ model: "m/a", effort: "low", n: 1, success_rate: 0 },
-		{ model: "m/b", effort: "high", n: 1, success_rate: 1 },
+		{ model: "m/a", effort: "low", n: 1, success_rate: 0, ...first(1, 1) },
+		{ model: "m/b", effort: "high", n: 1, success_rate: 1, ...first(1, 1) },
 	]);
 	expect(r.learned_success).toBe(0);
 	expect(r.control_success).toBe(1);

@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version, attempt, escalation, fallback, failures]
 ---
 
 # spatz CLI reference
@@ -159,7 +159,7 @@ Both examples ran with `SPATZ_NO_JEV=1` and an empty database. That is why `fall
 
 ## spatz report
 
-This command records the pair you used and the result of the task. A report wins over all hook signals for this suggestion. The report also closes the suggestion, so later hook events do not go to it.
+This command records the pair you used and the result of the task. A report wins over the hook signals of its pair. Signals of other pairs stay separate attempts, so a failed cheaper attempt keeps its failure. The report also closes the suggestion, so later hook events do not go to it.
 
 ### Flags
 
@@ -175,9 +175,9 @@ This command records the pair you used and the result of the task. A report wins
 | `--turn <id>` | string | none | Identify a direct report's turn. Needs `--source claude-code-mod`. |
 | `--source claude-code-mod` | string | none | Identify a direct mod report. Needs `--turn`. |
 
-If you send a second report for the same suggestion, the newest report counts.
+If you send a second report for the same suggestion and pair, the newest report counts.
 Direct reports replace the signal for the same suggestion, source, turn and kind.
-Each new turn keeps its own signal. The outcome view still returns one outcome per suggestion.
+Each new turn keeps its own signal. The outcome view returns one outcome per attempt (pair).
 The report stores the turn id and the suggestion's agent id on its usage and signal rows.
 
 ### Text output
@@ -191,7 +191,7 @@ reported: <suggestion_id>  quality: <0..1>  pair: <model>:<effort>
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `suggestion_id` | string | The reported suggestion. |
-| `quality` | number | `1`, `0.5` or `0` from `--result`. |
+| `quality` | number | The quality of the reported model's newest attempt: `1`, `0.5` or `0` from `--result`. |
 | `model` | string | Canonical id of the used model. |
 | `effort` | string | The used effort. |
 
@@ -279,6 +279,7 @@ For older rollouts, it matches calls to outputs by call id. See [hooks.md](hooks
 | `<event>` | string, positional | none | The hook event name. spatz takes the event from `hook_event_name` in the stdin JSON. The argument only makes the settings file easier to read. |
 
 The command prints nothing by default and always exits with code 0. It ignores invalid JSON and all errors.
+It counts errors and transcripts that parse to nothing. `spatz stats` shows the counts.
 With `SPATZ_DEBUG=1`, hooks write fixed diagnostics to stderr. They contain no prompt text or tool output.
 
 ### Example
@@ -310,8 +311,8 @@ For none-only catalog models, stats count old rows with a missing effort as `non
 | `by_scope` field | Meaning |
 | --- | --- |
 | `scope` | The stored routing scope, or `null`. |
-| `n` | Number of suggestions with an outcome. Several usage rows still count as one outcome. |
-| `success_rate` | Share of outcomes with quality at least 0.8. Without outcomes, JSON gives `null` and text gives `-`. |
+| `n` | Number of suggestions with an outcome. Several usage rows and attempts still count as one outcome. |
+| `success_rate` | Share of these suggestions whose last attempt has quality at least 0.8. Without outcomes, JSON gives `null` and text gives `-`. |
 | `input_tokens`, `output_tokens` | Total recorded input and output tokens. |
 | `cache_read_tokens`, `cache_creation_tokens` | Total recorded cache tokens. |
 | `cache_read_share` | `cache_read_tokens / (input_tokens + cache_read_tokens + cache_creation_tokens)`. With no input tokens, the share is zero. |
@@ -330,8 +331,10 @@ The first run needs network access once. See [configuration.md](configuration.md
 
 ```text
 <task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>
-  <model>:<effort>  n=<count>  success=<pct>
+  <model>:<effort>  n=<count>  success=<pct>  escalations=<count>  input_tokens=<count>  output_tokens=<count>
 coverage: <pct>  learned_success: <pct or ->  control_success: <pct or ->
+fallbacks: <reason>=<count>  ... (or -)
+failures: parse=<count>  hook=<count>  launcher=<count>
 ```
 
 There is one block per task type, with one indented line per used pair. `-` means "no data".
@@ -342,31 +345,39 @@ There is one block per task type, with one indented line per used pair. `-` mean
 | --- | --- | --- |
 | `by_type` | array | One entry per task type that has suggestions. |
 | `by_type[].task_type` | string | The task type. |
-| `by_type[].n` | number | Count of outcomes. An outcome exists when a suggestion has at least one signal. |
+| `by_type[].n` | number | Count of outcomes, one per attempt. An outcome exists when an attempt has at least one signal. |
 | `by_type[].pairs` | array | One entry per used pair. |
 | `by_type[].pairs[].model` | string | Canonical model id. |
 | `by_type[].pairs[].effort` | string or null | `null` when no hook input gave an effort. |
 | `by_type[].pairs[].n` | number | Count of outcomes with this pair. |
 | `by_type[].pairs[].success_rate` | number, 0 to 1 | Share of outcomes with quality of 0.8 or more. |
-| `by_type[].adoption_rate` | number, 0 to 1 | Share of outcomes whose used pair is `ranking[0]`. |
+| `by_type[].pairs[].escalations` | number | Outcomes of this pair after which another pair worked on the same suggestion. |
+| `by_type[].pairs[].input_tokens`, `output_tokens` | number | All tokens of the suggestions that this pair tried first. Retries and escalations count as cost of the first pair. |
+| `by_type[].adoption_rate` | number, 0 to 1 | Share of suggestions whose first attempt used `ranking[0]`. |
 | `by_type[].input_tokens` | number | Sum of recorded input tokens. |
 | `by_type[].output_tokens` | number | Sum of recorded output tokens. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | Success rate of learned picks. spatz compares only cells that have both learned and control outcomes, and weights each cell by its count. |
-| `control_success` | number or null | Success rate of the control group in the same cells. |
+| `control_success` | number or null | Success rate of the control group in the same cells. Both rates use the first attempt. |
+| `fallbacks` | object | Non-test suggestions per rule fallback reason, for example `{"no_key": 3}`. `unknown` counts rows from before schema v5. See [how-it-works.md](how-it-works.md#rule-fallback). |
+| `failures.parse` | number | Hook events whose transcript or rollout gave nothing. A rising count can mean that Claude Code or Codex changed its format. |
+| `failures.hook` | number | `spatz hook` calls that failed. |
+| `failures.launcher` | number | Hook calls that the plugin launcher could not run. Lines in `~/.spatz/launcher-failures`. |
 
 ### Example
 
 ```console
 $ spatz stats
 other  n=1  adoption=100%  input_tokens=0  output_tokens=0
-  anthropic/claude-sonnet-5.5:medium  n=1  success=100%
+  anthropic/claude-sonnet-5.5:medium  n=1  success=100%  escalations=0  input_tokens=0  output_tokens=0
 coverage: 14%  learned_success: -  control_success: -
+fallbacks: opt_out=7
+failures: parse=0  hook=0  launcher=0
 ```
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1,"escalations":0,"input_tokens":0,"output_tokens":0}],"adoption_rate":1,"input_tokens":0,"output_tokens":0}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes

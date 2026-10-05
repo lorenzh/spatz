@@ -71,12 +71,18 @@ function formatStats(r: StatsReport): string {
 		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}`,
 		...t.pairs.map(
 			(p) =>
-				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}`,
+				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}  escalations=${p.escalations}  input_tokens=${p.input_tokens}  output_tokens=${p.output_tokens}`,
 		),
 	]);
 	const opt = (x: number | null) => (x === null ? "-" : pct(x));
 	lines.push(
 		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  control_success: ${opt(r.control_success)}`,
+		`fallbacks: ${
+			Object.entries(r.fallbacks)
+				.map(([reason, n]) => `${reason}=${n}`)
+				.join("  ") || "-"
+		}`,
+		`failures: parse=${r.failures.parse}  hook=${r.failures.hook}  launcher=${r.failures.launcher}`,
 	);
 	return lines.join("\n");
 }

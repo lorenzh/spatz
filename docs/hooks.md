@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
+keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics, tool_use_id, prompt_id, late hook, attempt, failures, launcher]
 ---
 
 # Claude Code hooks for spatz
@@ -87,7 +87,9 @@ spatz handles these four events. Other events do no harm, but they give no signa
 
 spatz ignores the `SubagentHandback` tool event and the second `UserPromptSubmit` that a subagent handback starts.
 
-Signal weights: `test` 1.0, `build` 0.8, `report` 1.0. Without a report, spatz takes the newest value per signal kind. The quality is the weighted mean over the kinds. Without any signal, the suggestion has no outcome. Token usage alone does not make an outcome.
+A test or build signal belongs to its own tool call. spatz finds the transcript message with the event's `tool_use_id` in the event's `prompt_id` and uses its time, so a late hook does not land on a newer suggestion. Inside a subagent, or in a main session that the mod routes, the signal also names the model of that message and the event's effort. Then it counts for that pair only, as its own attempt. See [how-it-works.md](how-it-works.md#signal-binding).
+
+Signal weights: `test` 1.0, `build` 0.8, `report` 1.0. Without a report, spatz takes the newest value per signal kind of each attempt. The quality is the weighted mean over the kinds. Without any signal, the suggestion has no outcome. Token usage alone does not make an outcome.
 
 The hooks store no prompt text and no tool output. They store signals, model ids, efforts and token counts. See [privacy.md](privacy.md).
 
@@ -177,9 +179,9 @@ A suggestion is open from its creation until the first of these events:
 - The next linked suggestion with the same session and agent id. The old window ends at the new suggestion.
 - 2 hours without activity in that window. Each matching hook event resets this time.
 
-Signals go to the open suggestion of the matching session and agent window. Token usage goes to the suggestion whose window holds the time stamp of each transcript message. Messages before the first suggestion of that window sequence count for no suggestion.
+Signals go to the suggestion whose window in the matching session and agent sequence held the tool call. Without the call in the transcript, they go to the open suggestion. Token usage goes to the suggestion whose window holds the time stamp of each transcript message. Messages before the first suggestion of that window sequence count for no suggestion.
 
-Hooks run async, so the link can arrive after `Stop` or `SubagentStop`. In that case spatz reads the transcripts again and puts each message in the correct window. A replayed or older transcript snapshot does not overwrite newer data.
+Hooks run async, so the link can arrive after `Stop` or `SubagentStop`. In that case spatz reads the transcripts again and puts each message in the correct window. It also moves the test and build signals inside the new window to the new suggestion. A replayed or older transcript snapshot does not overwrite newer data.
 
 ## Subagents
 
@@ -265,6 +267,7 @@ Older rollouts use shell calls matched to outputs by call id.
 Each result stays within its turn. Commands without an exit code give no signal.
 The latest test and build results for that turn replace earlier results when Stop runs again.
 These signals use source `Stop` and the turn ID. Replayed events do not add duplicate signals.
+They go to the suggestion whose window held the turn's last rollout record, so a late `Stop` does not land on a newer suggestion. Without rollout timestamps, they go to the open suggestion.
 Codex has no `SubagentStop` or `PostToolUseFailure` hook.
 
 ### Hook diagnostics
@@ -274,6 +277,16 @@ The hooks write fixed messages to stderr for recording errors or missing Codex r
 They also report when a linked Codex turn has no readable shell exit codes.
 An empty turn can produce that message too.
 Diagnostics contain no prompt text, command text or tool output.
+
+`spatz stats` also shows silent failures without `SPATZ_DEBUG`:
+
+```text
+failures: parse=<count>  hook=<count>  launcher=<count>
+```
+
+- `parse`: a transcript or rollout gave nothing for a turn. A rising count can mean a format change in Claude Code or Codex.
+- `hook`: `spatz hook` failed.
+- `launcher`: the plugin's `bin/spatz` could not run the CLI for a hook, or the CLI failed. The launcher appends the event name to `~/.spatz/launcher-failures`. Delete the file to reset the count.
 
 For a database access error, check write access to `~/.spatz`.
 SQLite also needs access to its WAL and shared-memory files.
