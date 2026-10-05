@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "spatz hook PostToolUse --agent codex",
+						"command": "\"${PLUGIN_ROOT}/bin/spatz\" hook PostToolUse --agent codex",
 						"timeout": 10
 					}
 				]
@@ -17,7 +17,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "spatz hook Stop --agent codex",
+						"command": "\"${PLUGIN_ROOT}/bin/spatz\" hook Stop --agent codex",
 						"timeout": 10
 					}
 				]

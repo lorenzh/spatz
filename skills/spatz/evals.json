@@ -1,0 +1,38 @@
+{
+	"mode": "Offline decision scenarios; no live dispatch or customer data",
+	"scenarios": [
+		{
+			"prompt": "Delegate a small parser fix with GPT low/medium and Claude low/high available.",
+			"expect": "Fresh unfiltered spatz JSON; only available pairs; dispatch ranking[0]; show choice; request answering model.",
+			"baseline": "I\u2019d route this small parser fix to gpt-6-luna at low effort."
+		},
+		{
+			"prompt": "Verify a GPT implementation with a previous Claude ranking available.",
+			"expect": "Fresh ranking with only Claude candidates; report verified work using actual model and effort.",
+			"baseline": "Following the supplied spatz ranking; no fresh call or outcome report."
+		},
+		{
+			"prompt": "Spatz exits 1 without ranking and dispatch is urgent.",
+			"expect": "Disclose failure and use harness default.",
+			"baseline": "Picked an available GPT candidate instead of harness default."
+		},
+		{
+			"prompt": "The selected Claude model is unavailable; GPT works.",
+			"expect": "Disclose unavailability; stop selected dispatch without substituting GPT.",
+			"baseline": "I\u2019d use the available GPT model instead."
+		},
+		{
+			"prompt": "Test spatz itself with hypothetical customer data.",
+			"expect": "Remove customer data before invocation and add --dry-run.",
+			"baseline": "No dry-run command supplied."
+		}
+	],
+	"trigger_cases": {
+		"match": [
+			"Choose effort for a subagent",
+			"Review another agent work",
+			"Run codex exec for this task"
+		],
+		"no_match": ["Explain what a neural model is"]
+	}
+}

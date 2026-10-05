@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { syncPluginAssets } from "./plugin-assets.ts";
 import { releaseVersion } from "./release-version.ts";
 
 /** Run on Linux with zip installed, after release-version.ts stamps the manifests. */
@@ -13,6 +14,7 @@ export async function buildPlugins(
 	releaseVersion(`v${version}`);
 	if (tag !== "nightly" && tag !== `v${version}`)
 		throw new Error("Plugin release tag does not match its version");
+	await syncPluginAssets(root);
 	const out = resolve(outDir);
 	await mkdir(out, { recursive: true });
 	const marketplace = await Bun.file(

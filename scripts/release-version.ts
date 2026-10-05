@@ -1,5 +1,6 @@
 import { appendFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { syncPluginAssets } from "./plugin-assets.ts";
 
 // SemVer 2.0: numeric identifiers cannot have leading zeroes.
 const numeric = "(?:0|[1-9][0-9]*)";
@@ -36,6 +37,7 @@ export async function setReleaseVersion(
 			text.replace(/("version"\s*:\s*)"[^"]*"/g, `$1"${release.version}"`),
 		);
 	}
+	await syncPluginAssets(root);
 	return release;
 }
 

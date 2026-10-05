@@ -20,7 +20,11 @@ test("the hooks plugin runs the four spatz events asynchronously", () => {
 			{
 				...(matcher && { matcher }),
 				hooks: [
-					{ type: "command", command: `spatz hook ${event}`, async: true },
+					{
+						type: "command",
+						command: `"\${CLAUDE_PLUGIN_ROOT}/bin/spatz" hook ${event}`,
+						async: true,
+					},
 				],
 			},
 		]);

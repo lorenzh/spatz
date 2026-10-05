@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { buildPlugins } from "./build-plugins.ts";
@@ -17,6 +17,7 @@ test.skipIf(process.platform === "win32")(
 				"packages/claude-hooks",
 				"packages/codex-hooks",
 				"packages/cli/package.json",
+				"skills/spatz/SKILL.md",
 			])
 				await cp(resolve(import.meta.dir, "..", path), join(root, path), {
 					recursive: true,
@@ -52,6 +53,15 @@ test.skipIf(process.platform === "win32")(
 					const extract = join(root, `extract-${tag}-${plugin.name}`);
 					const unpack = Bun.spawn(["unzip", "-q", archive, "-d", extract]);
 					expect(await unpack.exited).toBe(0);
+					expect(
+						(await stat(join(extract, "bin/spatz"))).mode & 0o111,
+					).not.toBe(0);
+					expect(await Bun.file(join(extract, "bin/spatz")).text()).toContain(
+						`@spatz/cli@${version}`,
+					);
+					expect(
+						await Bun.file(join(extract, "skills/spatz/SKILL.md")).text(),
+					).toBe(await Bun.file(join(root, "skills/spatz/SKILL.md")).text());
 					const manifest = await Bun.file(
 						join(extract, ".claude-plugin/plugin.json"),
 					).json();
@@ -86,6 +96,12 @@ test.skipIf(process.platform === "win32")(
 				expect(
 					await Bun.file(join(codexExtract, "hooks/hooks.json")).exists(),
 				).toBe(true);
+				expect(
+					(await stat(join(codexExtract, "bin/spatz"))).mode & 0o111,
+				).not.toBe(0);
+				expect(
+					await Bun.file(join(codexExtract, "skills/spatz/SKILL.md")).text(),
+				).toBe(await Bun.file(join(root, "skills/spatz/SKILL.md")).text());
 				const sha256 = createHash("sha256")
 					.update(await Bun.file(file).bytes())
 					.digest("hex");

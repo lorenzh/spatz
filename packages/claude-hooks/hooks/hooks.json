@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "spatz hook PostToolUse",
+						"command": "\"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook PostToolUse",
 						"async": true
 					}
 				]
@@ -18,7 +18,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "spatz hook PostToolUseFailure",
+						"command": "\"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook PostToolUseFailure",
 						"async": true
 					}
 				]
@@ -27,7 +27,11 @@
 		"Stop": [
 			{
 				"hooks": [
-					{ "type": "command", "command": "spatz hook Stop", "async": true }
+					{
+						"type": "command",
+						"command": "\"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook Stop",
+						"async": true
+					}
 				]
 			}
 		],
@@ -36,7 +40,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "spatz hook SubagentStop",
+						"command": "\"${CLAUDE_PLUGIN_ROOT}/bin/spatz\" hook SubagentStop",
 						"async": true
 					}
 				]

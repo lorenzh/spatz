@@ -36,6 +36,7 @@ test("release versions stamp the CLI, all plugins and marketplace entries", asyn
 		"packages/claude-hooks/.claude-plugin/plugin.json",
 		"packages/codex-hooks/.codex-plugin/plugin.json",
 		".claude-plugin/marketplace.json",
+		"skills/spatz/SKILL.md",
 	] as const;
 	try {
 		for (const path of paths)
@@ -59,6 +60,12 @@ test("release versions stamp the CLI, all plugins and marketplace entries", asyn
 				expect((await Bun.file(join(root, path)).json()).version).toBe(
 					tag.slice(1),
 				);
+			for (const name of ["claude-mod", "claude-hooks", "codex-hooks"]) {
+				const launcher = await Bun.file(
+					join(root, `packages/${name}/bin/spatz`),
+				).text();
+				expect(launcher).toContain(`@spatz/cli@${tag.slice(1)}`);
+			}
 			const marketplace = await Bun.file(join(root, paths[4])).json();
 			expect(
 				marketplace.plugins.map(
