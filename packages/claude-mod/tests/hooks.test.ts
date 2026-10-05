@@ -275,7 +275,7 @@ const SONNET_MEDIUM = { model: "claude-sonnet-5-5", effort: "medium" };
 describe("subagent scope (default)", () => {
 	test("spawn in apply mode passes the alias, keeps the full id for steps, links session and spawn", async () => {
 		const s = session({ ...apply });
-		const { passed } = await s.spawn({ model: "inherited" });
+		const { passed } = await s.spawn({});
 		expect(passed.model).toBe("sonnet");
 		const [argv] = s.suggests() as [string[]];
 		expect(s.flag(argv, "--scope")).toBe("subagent");
@@ -366,16 +366,16 @@ describe("subagent scope (default)", () => {
 				}),
 			},
 		);
-		const { passed } = await s.spawn({ model: "inherited" });
-		expect(passed.model).toBe("inherited");
+		const { passed } = await s.spawn({});
+		expect(passed.model).toBeUndefined();
 		const { seen } = await s.step({ turnId: "t1", agentId: "a1" });
 		expect(seen).toMatchObject({ model: "claude-sonnet-4-6", effort: "low" });
 	});
 
 	test("show mode never rewrites spawn or steps", async () => {
 		const s = session({ mode: "show", record: "off" });
-		const { passed } = await s.spawn({ model: "inherited" });
-		expect(passed.model).toBe("inherited");
+		const { passed } = await s.spawn({});
+		expect(passed.model).toBeUndefined();
 		const { seen } = await s.step({
 			turnId: "t1",
 			agentId: "a1",
@@ -387,10 +387,10 @@ describe("subagent scope (default)", () => {
 
 	test("off mode makes no call at all", async () => {
 		const s = session({ mode: "off" });
-		const { passed } = await s.spawn({ model: "inherited" });
+		const { passed } = await s.spawn({});
 		await s.step({ turnId: "t1", agentId: "a1" });
 		await s.start("t2", LONG);
-		expect(passed.model).toBe("inherited");
+		expect(passed.model).toBeUndefined();
 		expect(s.argvs).toEqual([]);
 	});
 
@@ -453,8 +453,8 @@ describe("subagent scope (default)", () => {
 			{ exitCode: 0, stdout: "nope", stderr: "" },
 		]) {
 			const s = session({ ...apply }, { suggestion: () => bad });
-			const { passed } = await s.spawn({ model: "inherited" });
-			expect(passed.model).toBe("inherited");
+			const { passed } = await s.spawn({});
+			expect(passed.model).toBeUndefined();
 			const { seen } = await s.step({ turnId: "t1", agentId: "a1" });
 			expect(seen.model).toBe("inherited");
 		}
@@ -466,9 +466,7 @@ describe("subagent scope (default)", () => {
 				},
 			},
 		);
-		expect((await hung.spawn({ model: "inherited" })).passed.model).toBe(
-			"inherited",
-		);
+		expect((await hung.spawn({})).result.model).toBe("inherited");
 	});
 
 	test("no spatz call may wait longer than the 6 s bridge timeout", async () => {
@@ -495,6 +493,69 @@ describe("subagent scope (default)", () => {
 			const s = session({ ...apply, scope });
 			await s.spawn({});
 			expect(s.suggests()).toEqual([]);
+		}
+	});
+});
+
+describe("pinned choices and exploration", () => {
+	const exploredHard = (critical = false) => ({
+		suggestion: () => ({
+			exitCode: 0,
+			stdout: JSON.stringify({
+				suggestion_id: "s1",
+				ranking: [{ model: "anthropic/claude-sonnet-5.5", effort: "low" }],
+				classification: {
+					task_type: "review",
+					difficulty: "hard",
+					criticality: critical ? "high" : "none",
+				},
+				explored: true,
+			}),
+			stderr: "",
+		}),
+	});
+
+	for (const scope of [
+		"subagent",
+		"step",
+		"escalate",
+		"turn",
+		"session",
+	] as const) {
+		test(`${scope}: an explicit model or a pinned agent type is not routed, nor are its steps`, async () => {
+			for (const e of [{ model: "opus" }, { subagentType: "Explore" }]) {
+				const s = session({ ...apply, scope });
+				const { passed } = await s.spawn(e);
+				expect(passed.model).toBe(e.model);
+				expect(s.suggests()).toEqual([]);
+				const { seen } = await s.step({ turnId: "t1", agentId: "a1" });
+				expect(seen.model).toBe("inherited");
+				expect(s.suggests()).toEqual([]);
+			}
+		});
+	}
+
+	test("general-purpose is routed; respectPinned off routes pinned types too", async () => {
+		const s = session({ ...apply });
+		expect(
+			(await s.spawn({ subagentType: "general-purpose" })).passed.model,
+		).toBe("sonnet");
+		const off = session({ ...apply, respectPinned: false });
+		expect(
+			(await off.spawn({ subagentType: "Explore", model: "opus" })).passed
+				.model,
+		).toBe("sonnet");
+	});
+
+	test("an explored pick on a hard or critical task is dropped unless exploreHard is on", async () => {
+		for (const critical of [false, true]) {
+			const s = session({ ...apply }, exploredHard(critical));
+			expect((await s.spawn({})).passed.model).toBeUndefined();
+			const on = session(
+				{ ...apply, exploreHard: true },
+				exploredHard(critical),
+			);
+			expect((await on.spawn({})).passed.model).toBe("sonnet");
 		}
 	});
 });

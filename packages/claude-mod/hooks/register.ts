@@ -133,6 +133,7 @@ export function register(on: On, options: PluginOptions = {}) {
 			(error) => logFailure(io, error),
 		);
 		if (!d) return undefined;
+		if (d.exploredRisky && !s.exploreHard) return undefined;
 		last = d;
 		show(io);
 		return d;
@@ -235,6 +236,12 @@ export function register(on: On, options: PluginOptions = {}) {
 	on("agent.spawn", async ($, e, next) => {
 		const io = bind($, s.spatz);
 		if (s.mode === "off" || e.fork) return next(e);
+		// An explicit model or a named agent type is the caller's choice; so are all steps of that agent.
+		if (
+			s.respectPinned &&
+			(e.model || (e.subagentType && e.subagentType !== "general-purpose"))
+		)
+			return next(e);
 		if (s.scope === "step") {
 			const result = await next(e);
 			if (result.agentId && !result.deny) prompts.set(result.agentId, e.prompt);

@@ -19,6 +19,10 @@ export interface Settings {
 	minPromptChars: number;
 	/** escalate switches to the next stronger pair after this many failing test/build results. */
 	escalateAfter: number;
+	/** Leave a spawn alone when it names a model or an agent type other than general-purpose (the hook cannot see whether a type pins a model). */
+	respectPinned: boolean;
+	/** Allow exploration picks (a cheaper pair to collect data) on hard or critical tasks. */
+	exploreHard: boolean;
 	spatz: string;
 	models: string[];
 }
@@ -48,6 +52,10 @@ export function readSettings(options: Options): Settings {
 		record: oneOf(RECORDS, options.record, "auto"),
 		minPromptChars: count(options.minPromptChars, 20),
 		escalateAfter: Math.max(1, count(options.escalateAfter, 2)),
+		respectPinned: !(
+			options.respectPinned === false || options.respectPinned === "false"
+		),
+		exploreHard: options.exploreHard === true || options.exploreHard === "true",
 		spatz: text("spatz", "spatz"),
 		models: text("models", "")
 			.split(",")
