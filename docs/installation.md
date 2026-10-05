@@ -32,11 +32,7 @@ See the [binary installation commands](../README.md#releases).
 Linux binaries need glibc. Windows binaries are experimental. We have not tested Windows hooks.
 
 A shell alias does not count as an installed executable.
-The mod keeps its `spatz` executable option and defaults to `spatz` on `PATH`.
-Its function-hook API has no plugin-root resolver that this plugin uses.
-To use the mod without a CLI install, set that option to the installed plugin's absolute `bin/spatz` path.
-Run that launcher with `--version` first: the mod's CLI calls time out after six seconds.
-After a plugin update, check the option because the install path can change.
+The mod uses its plugin's `bin/spatz` launcher by default. Set its `spatz` executable option only when you want a custom executable.
 
 ## Configure classification
 

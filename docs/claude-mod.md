@@ -11,12 +11,11 @@ The `spatz-mod` plugin is the Claude Code mod in `packages/claude-mod`.
 It asks the `spatz` CLI for a recommendation.
 In `show` mode it shows the recommendation. In `apply` mode it also changes model and effort.
 The mod needs Claude Code 2.1.287 or newer.
-Its `spatz` executable option defaults to `spatz` on `PATH`.
-To avoid a separate CLI install, set it to the installed plugin's absolute `bin/spatz` path.
-The launcher needs Node.js (npx) or Bun. Run it with `--version` before using the mod's six-second calls.
+Its `spatz` executable option uses the plugin's `bin/spatz` launcher by default.
+Set the option only to use a custom executable. The launcher needs Node.js (npx) or Bun.
 See [installation](installation.md) for cache warm-up and update limits.
 
-Install the CLI through the [installation guide](installation.md), then run these commands in Claude Code:
+The mod runs the CLI through its bundled launcher, so a separate install is optional (see the [installation guide](installation.md)). The first call downloads about 60 MB; warm it once with `sh "<plugin root>/bin/spatz" --version`. Then run these commands in Claude Code:
 
 ```text
 /plugin marketplace add lorenzh/spatz
@@ -92,7 +91,7 @@ Set them as plugin options (`userConfig`). The `/spatz` commands override the fi
 | `record` | `auto` | Usage recording, see below. |
 | `minPromptChars` | `20` | Shortest prompt that gets a new decision in `turn` and `escalate`. |
 | `escalateAfter` | `2` | Failing test or build results before `escalate` switches. |
-| `spatz` | `spatz` | The CLI executable. |
+| `spatz` | `spatz` | The CLI executable. The default runs the plugin's launcher (`sh <plugin root>/bin/spatz`); any other value is used as is. |
 | `models` | `claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high` | Candidate pairs, strongest model first. |
 
 An unknown value falls back to its default.
