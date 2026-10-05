@@ -1,20 +1,44 @@
 {
 	"name": "spatz-mod",
 	"version": "0.1.0",
-	"description": "Suggests Claude models for subagents using spatz.",
+	"description": "Recommends Claude models and effort with spatz and can apply them to subagents and the main session.",
 	"author": { "name": "spatz" },
 	"userConfig": {
 		"mode": {
 			"type": "string",
 			"title": "Mode",
 			"default": "show",
-			"description": "show or apply model suggestions"
+			"description": "off, show (recommend only) or apply (rewrite model and effort)"
 		},
 		"scope": {
 			"type": "string",
-			"title": "Scope",
+			"title": "Routing scope",
 			"default": "subagent",
-			"description": "Routing scope"
+			"description": "When spatz decides: step, turn, subagent, session or escalate"
+		},
+		"main": {
+			"type": "boolean",
+			"title": "Apply to the main session",
+			"default": false,
+			"description": "In apply mode, also rewrite the main session. A model switch drops the prompt cache."
+		},
+		"record": {
+			"type": "string",
+			"title": "Record usage",
+			"default": "auto",
+			"description": "auto (off while the spatz-hooks plugin is enabled), on or off"
+		},
+		"minPromptChars": {
+			"type": "number",
+			"title": "Shortest prompt that gets a new decision",
+			"default": 20,
+			"description": "turn and escalate keep the last decision for shorter prompts"
+		},
+		"escalateAfter": {
+			"type": "number",
+			"title": "Failures before escalating",
+			"default": 2,
+			"description": "escalate moves to the next stronger pair after this many failing test or build results"
 		},
 		"spatz": {
 			"type": "string",
@@ -26,7 +50,7 @@
 			"type": "string",
 			"title": "Models",
 			"default": "claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high",
-			"description": "Claude model candidates"
+			"description": "Claude model candidates, strongest model first"
 		}
 	}
 }
