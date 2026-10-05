@@ -44,7 +44,7 @@
 			"type": "string",
 			"title": "spatz executable",
 			"default": "spatz",
-			"description": "spatz executable"
+			"description": "Executable to run; the default uses this plugin's launcher"
 		},
 		"models": {
 			"type": "string",
