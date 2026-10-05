@@ -131,18 +131,19 @@ ALTER TABLE signals ADD COLUMN agent_id TEXT;
 CREATE UNIQUE INDEX signals_turn ON signals (suggestion_id, source, turn_id, kind) WHERE turn_id IS NOT NULL;
 `;
 
-const SCHEMA_V4 = `
-UPDATE suggestions SET difficulty = ${difficultySql("difficulty")};
-UPDATE suggestions SET probabilities = json_set(probabilities, '$.difficulty', json((
+// One statement per entry: bun:sqlite run() ignores step errors after the first statement of a multi-statement string.
+const SCHEMA_V4 = [
+	`UPDATE suggestions SET difficulty = ${difficultySql("difficulty")}`,
+	`UPDATE suggestions SET probabilities = json_set(probabilities, '$.difficulty', json((
 	SELECT json_group_object(${difficultySql("key")}, value)
 	FROM json_each(suggestions.probabilities, '$.difficulty')
 	WHERE key NOT IN ('leicht', 'mittel', 'schwer')
 		OR json_type(suggestions.probabilities, '$.difficulty.' || ${difficultySql("key")}) IS NULL
-))) WHERE json_type(probabilities, '$.difficulty') = 'object';
-UPDATE suggestions SET reason = replace(replace(reason,
+))) WHERE json_type(probabilities, '$.difficulty') = 'object'`,
+	`UPDATE suggestions SET reason = replace(replace(reason,
 	'leicht+mittel+schwer level', 'easy+medium+hard level'),
-	'mittel+schwer level', 'medium+hard level');
-`;
+	'mittel+schwer level', 'medium+hard level')`,
+];
 
 const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -160,7 +161,7 @@ export function openDatabase(dbPath: string): Database {
 		// IMMEDIATE + re-check: two processes opening the same file must not both migrate.
 		db.transaction(() => {
 			if (version() !== v) return;
-			db.run(MIGRATIONS[v] as string);
+			for (const sql of [MIGRATIONS[v] ?? []].flat()) db.run(sql);
 			db.run(`PRAGMA user_version = ${v + 1}`);
 		}).immediate();
 	}

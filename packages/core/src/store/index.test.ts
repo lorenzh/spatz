@@ -68,6 +68,27 @@ function suggestion(over: Partial<SuggestionRecord> = {}): SuggestionRecord {
 }
 
 describe("schema", () => {
+	test("a failing v4 statement rolls back the whole migration", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "spatz-v3-"));
+		dirs.push(dir);
+		const path = join(dir, "v3.db");
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v3.sql")).text());
+		db.run(
+			`INSERT INTO suggestions VALUES ('1', 1, NULL, NULL, 'review', 'mittel', 'none', '{"difficulty":{"leicht":1}', NULL, 'learned', '[]', 'r', 0, 0, 0, 0, 1, NULL, NULL, NULL, NULL, NULL)`,
+		);
+		db.close();
+		expect(() => openDatabase(path)).toThrow();
+		const after = new Database(path, { readonly: true });
+		expect(after.query("PRAGMA user_version").get()).toEqual({
+			user_version: 3,
+		});
+		expect(after.query("SELECT difficulty FROM suggestions").get()).toEqual({
+			difficulty: "mittel",
+		});
+		after.close();
+	});
+
 	test("v3 difficulty migration preserves rows, outcomes and unrelated JSON", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "spatz-v3-"));
 		dirs.push(dir);
