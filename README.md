@@ -19,7 +19,7 @@ What does not work yet:
 
 - Signal collection works only with Claude Code hooks. Other coding agents can only use `spatz report`.
 - There is no MCP server.
-- There is no npm package. You run spatz from a clone of this repository.
+- There is no npm package. Use a release archive or a repository clone.
 
 ## How it works
 
@@ -46,10 +46,48 @@ flowchart LR
 
 ## Requirements
 
-- Bun 1.4.
+- Bun 1.4 for development or installation from source. Release archives include the runtime.
 - Optional: a TypeSafe AI API key for Jev classification. Jev is in early access.
 
 spatz works without a key. Without a key, spatz uses the keyword rules. These rules set only the criticality. The task type is always `other`.
+
+## Releases
+
+Download an archive and its matching `.sha256` file from [GitHub Releases](https://github.com/lorenzh/spatz/releases).
+Choose `linux` or `darwin` (macOS), then `x64` (Intel/AMD) or `arm64` (including Apple Silicon).
+Linux builds need glibc. They do not support Alpine Linux.
+
+Check the checksum before you extract the archive. This Linux x64 example uses version `0.1.0`. Use your downloaded version:
+
+```bash
+version=0.1.0
+archive="spatz-cli-$version-linux-x64.tar.gz"
+sha256sum --check "$archive.sha256"
+```
+
+On macOS, use `shasum -a 256 --check "$archive.sha256"` and a `darwin` archive.
+The release also contains `SHA256SUMS` with checksums for all archives.
+
+Keep the archive contents together. Put a symlink to the executable on your `PATH`:
+
+```bash
+mkdir -p ~/.local/lib/spatz ~/.local/bin
+tar -xzf "$archive" -C ~/.local/lib/spatz
+ln -sfn "$HOME/.local/lib/spatz/${archive%.tar.gz}/spatz" ~/.local/bin/spatz
+export PATH="$HOME/.local/bin:$PATH"
+spatz --version
+```
+
+If needed, add the `PATH` line to your shell profile.
+Each archive includes `spatz`, `LICENSE`, `README.md`, the DuckDB binding, and the DuckDB shared library.
+`spatz stats` needs the binding and shared library beside the executable.
+On first use, it downloads DuckDB's SQLite extension into `~/.spatz/duckdb-extensions`.
+Later runs can use that extension offline.
+
+The fixed [`nightly` release](https://github.com/lorenzh/spatz/releases/tag/nightly) is unstable.
+When `main` has a new commit, it updates daily at 03:00 UTC.
+You can also start a manual workflow run.
+See [RELEASING.md](RELEASING.md) for the release procedure.
 
 ## Install and quickstart
 
@@ -110,10 +148,11 @@ If you add the spatz hooks to `.claude/settings.json` of a project, spatz learns
 
 ## Commands
 
-Every command except `spatz hook` accepts `--json` for machine-readable output.
+The suggestion, report, and stats commands accept `--json` for machine-readable output.
 
 | Command | Purpose |
 | --- | --- |
+| `spatz --version` | Print the CLI version. |
 | `spatz "<task>" --models <list> [--dry-run]` | Rank the candidate pairs for a task. Prints `suggestion_id: <id>` first. |
 | `spatz report <suggestion_id> --model <m> --effort <e> --result pass\|partial\|fail [--rounds <n>] [--note <t>]` | Record the pair that you used and the result. |
 | `spatz hook <event>` | Read a Claude Code hook event from stdin. Prints nothing and always exits 0. |

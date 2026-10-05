@@ -1,0 +1,91 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-nightly
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+      date: ${{ steps.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.0'
+      - id: version
+        name: Skip unchanged main and derive nightly version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          previous="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == "nightly") | .target_commitish')"
+          if [[ "$sha" == "$previous" ]]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          date="$(date -u +%Y%m%d)"
+          base="$(bun -p 'require("./packages/cli/package.json").version')"
+          bun scripts/release-version.ts "v${base%%+*}-nightly.$date+${sha:0:7}"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    uses: ./.github/workflows/build-release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      ref: ${{ needs.version.outputs.sha }}
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Replace nightly release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ needs.version.outputs.sha }}
+          RELEASE_DATE: ${{ needs.version.outputs.date }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd dist
+          cat ./*.sha256 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          existing="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == "nightly") | .id')"
+          if [[ -n "$existing" ]]; then
+            gh release delete nightly --yes --cleanup-tag
+          fi
+          # Also recover an orphan tag from a previously interrupted publish.
+          tag="$(gh api "repos/$GH_REPO/git/matching-refs/tags/nightly" --jq '.[] | select(.ref == "refs/tags/nightly") | .ref')"
+          if [[ -n "$tag" ]]; then gh api --method DELETE "repos/$GH_REPO/git/refs/tags/nightly"; fi
+          printf 'Unstable nightly build: %s (UTC).\n\nCommit: %s\nVersion: %s\n' \
+            "$RELEASE_DATE" "$RELEASE_SHA" "$RELEASE_VERSION" > notes.md
+          gh release create nightly ./*.tar.gz ./*.sha256 SHA256SUMS \
+            --target "$RELEASE_SHA" --prerelease --latest=false \
+            --title "Nightly $RELEASE_DATE" --notes-file notes.md

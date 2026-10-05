@@ -14,7 +14,7 @@ You get an answer in the advisory. The fix and the advisory become public after 
 
 ## Supported versions
 
-spatz is a proof of concept. Only the `main` branch gets security fixes. There are no releases.
+spatz is a proof of concept. Only the `main` branch gets security fixes. Older releases do not receive backported fixes.
 
 ## Scope
 
