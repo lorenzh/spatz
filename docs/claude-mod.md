@@ -49,15 +49,15 @@ One setting picks when spatz decides. The default is `subagent`. Every scope wor
 | Scope | spatz decides | The mod rewrites | Trade-offs |
 | --- | --- | --- | --- |
 | `step` | At every model request of the main session and of subagents, before the request starts. | Model and effort of that request. | Costs the most latency: one spatz call per request. The model can change inside a turn, so the prompt cache breaks often. Use it for experiments. |
-| `turn` | At the start of each user turn in the main session. | Every request of that turn. | One call per turn. A switch between turns breaks the cache once. Subagents are not touched. |
+| `turn` | At the start of each user turn in the main session. | Every main-session request of that turn. | One call per turn. A switch between turns breaks the cache once. Subagents are not touched. |
 | `subagent` | When the Agent tool starts a subagent, from the brief. | The model at spawn, and model and effort on every request of that subagent. | Adds latency only when an agent starts. The main session keeps its cache. Forks are skipped, because a fork inherits the parent model. |
-| `session` | At the first turn of the session. | Every request of the session. | One call in total. The decision cannot follow a change of task. |
-| `escalate` | Like `turn` for the main session and like `subagent` for subagents. | The same, plus a switch to the next stronger pair after repeated failures. | The only scope that changes the pair inside a turn or agent run. |
+| `session` | At the first turn of the session. | Every main-session request of the session. | One call in total. The decision cannot follow a change of task. Subagents are not touched. |
+| `escalate` | Like `turn` for the main session and like `subagent` for subagents. | The same, plus a switch to the next stronger pair after repeated failures. | The only scope that steps up because of failures. `step` can also change the pair inside a turn, but it decides each request anew. |
 
 How the pieces work:
 
 - `turn` and `escalate` skip a prompt shorter than `minPromptChars` (20 characters). The turn then uses the last decision.
-- `session` decides at the first turn that has text. Later turns reuse that decision.
+- `session` decides at the first turn that has text. Later turns of the main session reuse that decision. The mod does not rewrite subagent requests in this scope.
 - `escalate` counts failing Bash results of test or build commands in the same turn or agent run. A failure is a Bash result that reports an error. After `escalateAfter` failures (2), the pair moves one step up. The mod keeps the new pair for the rest of that turn or run. The counter starts again after each switch.
 - The ladder comes from `models`. The list names the strongest model first. Inside a model the efforts go from low to high. If the current pair is already the top, or is not on the list, nothing changes.
 - For a subagent, the agent id exists only after the spawn. The mod asks spatz without session or agent id. After the spawn it calls `spatz link` with the real agent id and the session ([cli.md](cli.md)). Until then the suggestion is in no session window. If the link fails, the mod still routes, but the suggestion has no agent id. Step and escalation use the real agent id from the start.
