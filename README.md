@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img src="docs/assets/banner-light.svg" alt="spatz" width="340" height="84">
+</picture>
+
 # spatz
 
 **Choose a model and effort for your coding task. Learn from the result.**
