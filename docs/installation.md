@@ -11,7 +11,12 @@ The plugins include a `bin/spatz` launcher and the `spatz` routing skill.
 Hooks and skills work without a separate CLI install when Node.js (npx) or Bun is available.
 The launcher uses an installed `spatz` on `PATH` first, then `bunx`, then `npx -y`.
 Both package runners use the plugin's exact version. The first run downloads about 60 MB.
-The plugin hooks and launcher need a POSIX shell. Native Windows (Claude Code and Codex) is not supported by the plugins yet.
+
+## Platform support
+
+Linux builds need glibc. spatz does not support Alpine Linux.
+The CLI binary for Windows x64 is experimental, and some releases omit it.
+The plugin hooks and launcher need a POSIX shell. The plugins do not support native Windows (Claude Code and Codex). We have not tested Windows hooks.
 
 ## Install the CLI
 
@@ -29,7 +34,6 @@ You can also download a binary archive from [GitHub Releases](https://github.com
 Choose your OS and CPU architecture. Check its `.sha256` file before extraction.
 Keep the executable and DuckDB libraries together, then put the executable on `PATH`.
 See the [binary installation commands](../README.md#releases).
-Linux binaries need glibc. Windows binaries are experimental. We have not tested Windows hooks.
 
 A shell alias does not count as an installed executable.
 The mod uses its plugin's `bin/spatz` launcher by default. Set its `spatz` executable option only when you want a custom executable.

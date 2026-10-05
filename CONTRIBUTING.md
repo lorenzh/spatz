@@ -68,6 +68,14 @@ Lefthook runs two Git hooks:
 | --- | --- |
 | `packages/core` (`@spatz/core`) | All logic: `classify`, `catalog`, `recommend`, `signals`, `store`, `report`, `api`, `contracts`. |
 | `packages/cli` (`@spatz/cli`) | The thin CLI. It parses arguments, calls `@spatz/core` and formats the output. |
+| `packages/claude-hooks` | Claude Code `spatz` plugin (hooks). |
+| `packages/claude-mod` | Claude Code `spatz-mod` plugin (mod). |
+| `packages/codex-hooks` | Codex `spatz` plugin (hooks). |
+| `scripts/` | Release, npm package and plugin build scripts, with their tests. |
+| `skills/routing` | Source of the routing skill. |
+| `catalog/harness-models.json` | Generated model catalog. `scripts/harness-catalog.ts` and the daily workflow write it. |
+
+Plugin skill copies and `packages/*/bin/spatz` are generated. Edit `skills/routing/SKILL.md` and `scripts/plugin-assets.ts`, then run `bun scripts/plugin-assets.ts`.
 
 Put new logic in `packages/core`. The CLI contains no domain logic. Each module keeps its tests next to its code.
 
@@ -76,7 +84,7 @@ Put new logic in `packages/core`. The CLI contains no domain logic. Each module 
 Use [Conventional Commits](https://www.conventionalcommits.org/), as in the Git log:
 
 ```text
-feat: add spatz PoC core library and thin CLI
+feat: add the recommendation report to the CLI
 fix: <what the fix changes>
 docs: <what the docs change>
 ```
