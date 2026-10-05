@@ -1,25 +1,25 @@
 # Agent Instructions
 
 ## Package Manager
-- Use **Bun 1.4**: `bun install`. Never npm, pnpm, yarn or Node tooling.
+- Use **Bun 1.4**: `bun install`. Never npm, pnpm or yarn for dependencies and development commands (release workflows use npm on purpose).
 - Prefer Bun APIs: `bun:sqlite`, `Bun.file`, `Bun.$`, `Bun.semver`. Add no dependency for what Bun covers.
 
 ## Commands
 | Task | Command |
 |------|---------|
-| Test one file | `HOME=$(mktemp -d) bun test path/to/file.test.ts` |
-| All tests | `bun test` |
+| Test one file | `SPATZ_DUCKDB_EXTENSION_DIR=~/.spatz/duckdb-extensions HOME=$(mktemp -d) bun test path/to/file.test.ts` |
+| All tests | `SPATZ_DUCKDB_EXTENSION_DIR=~/.spatz/duckdb-extensions HOME=$(mktemp -d) bun test` |
 | Typecheck | `bun run typecheck` |
 | Lint / fix | `bun run lint` / `bun run format` |
-| Run the CLI | `bun packages/cli/src/cli.ts "<task>" --dry-run --json` |
+| Run the CLI | `HOME=$(mktemp -d) SPATZ_NO_JEV=1 bun packages/cli/src/cli.ts "<task>" --dry-run --json` |
 | Validate plugins | `claude plugin validate .` |
 | Mod tests | `claude plugin test packages/claude-mod` |
 | Regenerate plugin skills + launchers | `bun scripts/plugin-assets.ts` |
 | Update harness catalog | `bun scripts/harness-catalog.ts` |
 
 ## Safety
-- Never read or write the real `~/.spatz` from tests or ad-hoc runs: set `HOME` to a temp dir.
-- End-to-end and report tests need the DuckDB extension: copy `~/.spatz/duckdb-extensions` into the temp `HOME/.spatz/` (read-only use).
+- Never write to the real `~/.spatz` from tests or ad-hoc runs (even `--dry-run` stores a suggestion): set `HOME` to a temp dir.
+- Exception: tests may read the DuckDB extension from `~/.spatz/duckdb-extensions` via `SPATZ_DUCKDB_EXTENSION_DIR`. First-time setup is in `CONTRIBUTING.md`.
 - Set `SPATZ_NO_JEV=1` and `SPATZ_NO_NETWORK=1` for offline runs.
 - Never touch `~/.claude` or `~/.codex`; use a temp `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
 
@@ -34,7 +34,7 @@
 - `catalog/harness-models.json`: produced by `scripts/harness-catalog.ts` and the daily workflow.
 
 ## Key Conventions
-- Schema changes: append to `MIGRATIONS` in `packages/core/src/store/index.ts`, one SQL statement per entry (`bun:sqlite` `run()` skips errors in multi-statement strings).
+- Schema changes: add one `MIGRATIONS` entry per schema version in `packages/core/src/store/index.ts`, as an array of single SQL statements (`bun:sqlite` `run()` skips errors in multi-statement strings).
 - Every user-visible change updates `docs/*.md` (keep the frontmatter: `title`, `description`, `tags`, `keywords`) and `README.md` when it affects the quickstart.
 - Workflows: pin actions to full SHAs, no `${{ }}` inside `run:`, least-privilege `permissions`.
 - Feature PRs carry no version bump; releases follow `RELEASING.md`.
