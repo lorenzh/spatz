@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="title">
+  <title id="title">spatz</title>
+  <rect width="64" height="64" rx="14" fill="#271B32"/>
+  <g shape-rendering="crispEdges">
+    <path fill="#F2EEEC" d="M30 10h12v4H30zM26 14h20v4H26zM26 18h8v4h-8zM38 18h8v4h-8zM22 22h24v4H22zM18 26h28v4H18zM14 30h32v4H14zM10 34h36v4H10zM6 38h8v4H6zM18 38h24v4H18zM6 42h4v4H6zM22 42h16v4H22zM26 46h4v4h-4zM34 46h4v4h-4z"/>
+    <path fill="#C29BD3" d="M46 18h4v4h-4zM6 50h52v4H6z"/>
+  </g>
+</svg>
