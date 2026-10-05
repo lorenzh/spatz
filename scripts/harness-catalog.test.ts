@@ -173,7 +173,11 @@ test("workflow isolates extraction and validates only the catalog before publish
 			await Bun.write(output, "original");
 			await Bun.write(
 				artifact,
-				JSON.stringify(valid ? BUNDLED_HARNESS_CATALOG : { schema: 1 }),
+				JSON.stringify(
+					valid
+						? { ...BUNDLED_HARNESS_CATALOG, injected: "dropped" }
+						: { schema: 1 },
+				),
 			);
 			const result = Bun.spawnSync(["bash", "-eu", "-c", validate], {
 				cwd: temp,
@@ -182,8 +186,11 @@ test("workflow isolates extraction and validates only the catalog before publish
 				stderr: "pipe",
 			});
 			expect(result.exitCode === 0).toBe(valid);
+			// Publish writes only the known fields, formatted like the extractor.
 			expect(await Bun.file(output).text()).toBe(
-				valid ? await Bun.file(artifact).text() : "original",
+				valid
+					? `${JSON.stringify(BUNDLED_HARNESS_CATALOG, null, "\t")}\n`
+					: "original",
 			);
 			expect(await Bun.file(join(temp, "catalog/untrusted.ts")).exists()).toBe(
 				false,

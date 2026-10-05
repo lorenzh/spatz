@@ -57,13 +57,21 @@ jobs:
       - name: Validate and copy the catalog
         id: validate
         run: |
+          # Writes only the known fields, so the artifact cannot add anything else to main.
           bun -e '
             import { parseHarnessCatalog } from "./packages/core/src/catalog/harness.ts";
             const file = Bun.file(process.env.RUNNER_TEMP + "/harness-catalog/harness-models.json");
-            if (file.size > 256 * 1024 || !parseHarnessCatalog(await file.json()))
-              throw new Error("Invalid harness catalog artifact");
+            const catalog = file.size <= 256 * 1024 ? parseHarnessCatalog(await file.json()) : null;
+            if (!catalog) throw new Error("Invalid harness catalog artifact");
+            const harnesses = Object.fromEntries(
+              ["claude-code", "codex"].map((h) => [h, {
+                version: catalog.harnesses[h].version,
+                models: catalog.harnesses[h].models.map(({ id, efforts }) => ({ id, efforts })),
+              }]),
+            );
+            const out = { schema: 1, updated: catalog.updated, harnesses };
+            await Bun.write("catalog/harness-models.json", JSON.stringify(out, null, "\t") + "\n");
           '
-          cp "$RUNNER_TEMP/harness-catalog/harness-models.json" catalog/harness-models.json
       - name: Commit through a pull request
         env:
           GH_TOKEN: ${{ github.token }}
