@@ -154,15 +154,17 @@ The mod has five routing scopes: `step`, `turn`, `subagent` (default), `session`
 
 ## Commands
 
-The suggestion, report, and stats commands accept `--json` for machine-readable output.
+The suggestion, report, usage, link and stats commands accept `--json` for machine-readable output.
 
 | Command | Purpose |
 | --- | --- |
 | `spatz --version` | Print the CLI version. |
-| `spatz "<task>" --models <list> [--dry-run]` | Rank the candidate pairs for a task. Prints `suggestion_id: <id>` first. |
-| `spatz report <suggestion_id> --model <m> --effort <e> --result pass\|partial\|fail [--rounds <n>] [--note <t>]` | Record the pair that you used and the result. |
-| `spatz hook <event>` | Read a Claude Code hook event from stdin. Prints nothing and always exits 0. |
-| `spatz stats [--type <t>]` | Show results per task type: n, success rate per pair, adoption, tokens, coverage. |
+| `spatz "<task>" --models <list> [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--dry-run]` | Rank candidate pairs and optionally store routing attribution. |
+| `spatz report <suggestion_id> --model <m> --effort <e> --result pass\|partial\|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod]` | Record the pair that you used and the result. |
+| `spatz usage <suggestion_id> ... --turn <id> --source claude-code-mod` | Record direct model usage and token counts. |
+| `spatz link <suggestion_id> --agent-id <id> --session <id>` | Link a subagent suggestion after its id is known. |
+| `spatz hook <event> [--agent codex]` | Read a Claude Code or Codex hook event from stdin. Prints nothing and always exits 0. |
+| `spatz stats [--type <t>] [--by scope]` | Show results per task type or routing scope. |
 
 Exit codes: 0 for success, 1 for a runtime error (for example an unknown `suggestion_id`), 2 for a usage error. [docs/cli.md](docs/cli.md) is the full reference.
 

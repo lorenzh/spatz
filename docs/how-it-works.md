@@ -18,7 +18,7 @@ For the decision rule, read [recommendation.md](recommendation.md). For data tha
 | Candidate | One pair of model and effort, for example `anthropic/claude-opus-5.5:high`. |
 | Catalog | All candidates from the `--models` argument of one call, sorted by cost. spatz recommends only candidates from this list. |
 | Suggestion | The result of one `spatz "<task>"` call: an id, a ranking of 1 to 3 candidates, a reason and the classification. |
-| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz report` or from Claude Code and Codex CLI transcripts. | | Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz usage`, `spatz report` or Claude Code transcripts. |
+| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz usage`, `spatz report` or Claude Code and Codex CLI transcripts. |
 | Signal | One observed result for a suggestion: a report value, a test run or a build run. |
 | Outcome | The quality of one suggestion (0 to 1), computed from its signals, plus the pair that was actually used. |
 | Cell | The pair (task type, difficulty). spatz learns success rates per cell. |
@@ -31,7 +31,7 @@ The CLI and core are separate packages. `packages/core` (`@spatz/core`) holds al
 
 | Core module | Task |
 |---|---|
-| `api` | Use cases `suggest`, `usage`, `report`, `handleHook` and `stats`. It connects the other modules. The CLI calls only this module. |
+| `api` | Use cases `suggest`, `usage`, `link`, `report`, `handleHook` and `stats`. It connects the other modules. The CLI calls only this module. |
 | `catalog` | Parses `--models`, maps ids to OpenRouter ids, loads prices from OpenRouter with a 24 h cache and sorts the candidates by cost. |
 | `classify` | Asks Jev the four questions. If Jev is not available, it uses keyword rules. It also holds the secret filter. |
 | `recommend` | Computes the estimates per cell and picks the candidate. It is pure: no network, no files. |
@@ -190,7 +190,7 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 
 ### Migrations
 
-`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz report` and `spatz hook` open the store. `spatz stats` reads the file through DuckDB and does not migrate. Each migration runs in its own `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
+`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz link`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through DuckDB. Each migration runs in its own `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
 
 | Version | Change |
 |---|---|
@@ -239,7 +239,7 @@ Hooks select the sequence from the event's agent id.
 If that agent has no linked suggestions, hooks use the main sequence for legacy attribution.
 If that agent has any linked suggestion, hooks use only its sequence, even after closure.
 `Stop` reads the main sequence. `SubagentStop` reads the subagent sequence.
-See [hooks.md](hooks.md) for the planned split between routing and recording.
+See [hooks.md](hooks.md) for how routing and recording work together.
 
 
 ### Usage scopes and the atomic rewrite

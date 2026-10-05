@@ -11,11 +11,11 @@ import type {
 	Suggestion,
 	TaskType,
 } from "@spatz/core";
+import { AGENTS, SCOPES, TASK_TYPES } from "@spatz/core";
 import pkg from "../package.json";
 
 declare const SPATZ_VERSION: string | undefined;
 const VERSION = typeof SPATZ_VERSION === "string" ? SPATZ_VERSION : pkg.version;
-import { AGENTS, SCOPES, TASK_TYPES } from "@spatz/core";
 
 export interface CliIO {
 	stdout(text: string): void;

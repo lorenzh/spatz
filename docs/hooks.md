@@ -171,11 +171,7 @@ It does not exclude them by provenance. This supports separate routing and recor
 The mod routes through the CLI. Hooks can record signals and transcript usage for those suggestions.
 Direct `spatz usage` records tokens without a transcript.
 
-The planned `spatz-hooks` plugin packages these command hooks.
-The planned `record: auto` setting disables direct mod recording while that plugin is enabled.
-That setting prevents the two recorders from counting the same usage twice.
-These plugin controls are follow-up work. Task 3 supplies the CLI and storage contract only.
-The CLI does not detect installed plugins or select a recorder.
+The mod can record usage directly, use the hooks, or select a recorder automatically when the hooks plugin is enabled. This avoids counting the same usage twice.
 
 Do not send both transcript usage and direct mod usage for the same run.
 The sources have different uniqueness keys, so the database keeps both.
@@ -183,7 +179,7 @@ When you install the hooks plugin, remove equivalent hand-written entries from `
 
 ## Limits
 
-- Only Claude Code. Other agents can still use `spatz "<task>"` and `spatz report`.
+- Signal collection supports Claude Code and Codex CLI. Other agents can still use `spatz "<task>"` and `spatz report`.
 - A hook cannot set the model or the effort. spatz only recommends.
 - Test and build detection is a set of keyword patterns. It misses tools that are not in the list, and it skips commands with an unclear status.
 - `Stop` fires once per turn, not once per task.
