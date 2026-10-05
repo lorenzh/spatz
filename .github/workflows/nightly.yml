@@ -43,9 +43,11 @@ jobs:
           date="$(date -u +%Y%m%d)"
           base="$(bun -p 'require("./packages/cli/package.json").version')"
           bun scripts/release-version.ts "v${base%%+*}-nightly.$date+${sha:0:7}"
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "date=$date" >> "$GITHUB_OUTPUT"
+          {
+            echo 'changed=true'
+            echo "sha=$sha"
+            echo "date=$date"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -86,6 +88,7 @@ jobs:
           if [[ -n "$tag" ]]; then gh api --method DELETE "repos/$GH_REPO/git/refs/tags/nightly"; fi
           printf 'Unstable nightly build: %s (UTC).\n\nCommit: %s\nVersion: %s\n' \
             "$RELEASE_DATE" "$RELEASE_SHA" "$RELEASE_VERSION" > notes.md
-          gh release create nightly ./*.tar.gz ./*.sha256 SHA256SUMS \
+          mapfile -t assets < <(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -print | sort)
+          gh release create nightly "${assets[@]}" SHA256SUMS \
             --target "$RELEASE_SHA" --prerelease --latest=false \
             --title "Nightly $RELEASE_DATE" --notes-file notes.md

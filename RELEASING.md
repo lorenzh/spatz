@@ -32,7 +32,8 @@ The workflow replaces any existing build metadata.
 After all builds pass, it replaces the fixed `nightly` tag and prerelease.
 The release body records the UTC date and full commit SHA.
 
-Both workflows use Linux x64/arm64 and macOS x64/arm64 native runners.
+Both workflows use Linux x64/arm64 and macOS x64/arm64 native runners. They also produce an experimental Windows x64 ZIP archive. A Windows build failure does not block the other release assets. Windows hooks are untested.
+On a `v*` tag, a failed experimental Windows job ships the release without the Windows asset.
 The Intel macOS runner is `macos-15-intel` because GitHub retired `macos-13`.
 
 To build and test an archive locally after the setup in [CONTRIBUTING.md](CONTRIBUTING.md):
@@ -42,7 +43,7 @@ bun scripts/build-release.ts 0.2.0
 bun scripts/smoke-release.ts dist/spatz-cli-0.2.0-linux-x64.tar.gz 0.2.0
 ```
 
-Use your host's OS and architecture in the archive name. The build script supports native builds only.
+Use your host's OS and architecture in the archive name. The build script supports native builds only, including experimental Windows x64.
 The smoke test checks the checksum, version, dry-run suggestion, and DuckDB statistics outside the checkout.
 It uses the preinstalled DuckDB SQLite extension and sets dead HTTP proxies.
 See [README.md](README.md#releases) for download and installation instructions.

@@ -54,7 +54,7 @@ spatz works without a key. Without a key, spatz uses the keyword rules. These ru
 ## Releases
 
 Download an archive and its matching `.sha256` file from [GitHub Releases](https://github.com/lorenzh/spatz/releases).
-Choose `linux` or `darwin` (macOS), then `x64` (Intel/AMD) or `arm64` (including Apple Silicon).
+Choose `linux` or `darwin` (macOS), then `x64` (Intel/AMD) or `arm64` (including Apple Silicon). Windows x64 archives are experimental.
 Linux builds need glibc. They do not support Alpine Linux.
 
 Check the checksum before you extract the archive. This Linux x64 example uses version `0.1.0`. Use your downloaded version:
@@ -67,6 +67,7 @@ sha256sum --check "$archive.sha256"
 
 On macOS, use `shasum -a 256 --check "$archive.sha256"` and a `darwin` archive.
 The release also contains `SHA256SUMS` with checksums for all archives.
+On Windows, download the `win32-x64.zip` archive and its `.sha256` file. Windows support is experimental; hooks are untested on Windows.
 
 Keep the archive contents together. Put a symlink to the executable on your `PATH`:
 
@@ -81,6 +82,7 @@ spatz --version
 If needed, add the `PATH` line to your shell profile.
 Each archive includes `spatz`, `LICENSE`, `README.md`, the DuckDB binding, and the DuckDB shared library.
 `spatz stats` needs the binding and shared library beside the executable.
+The Windows archive contains `spatz.exe` and the DuckDB Windows binding and DLL beside it.
 On first use, it downloads DuckDB's SQLite extension into `~/.spatz/duckdb-extensions`.
 Later runs can use that extension offline.
 

@@ -59,5 +59,6 @@ jobs:
           sha256sum --check SHA256SUMS
           flags=()
           if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" ./*.tar.gz ./*.sha256 SHA256SUMS \
+          mapfile -t assets < <(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -print | sort)
+          gh release create "$RELEASE_TAG" "${assets[@]}" SHA256SUMS \
             --verify-tag --generate-notes --title "$RELEASE_TAG" "${flags[@]}"
