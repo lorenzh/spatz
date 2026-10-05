@@ -1,6 +1,6 @@
 {
 	"name": "spatz",
-	"version": "0.1.4",
+	"version": "0.1.5",
 	"description": "Record test and build outcomes and token usage with the spatz CLI on PATH.",
 	"author": { "name": "spatz" }
 }

@@ -1,6 +1,6 @@
 {
 	"name": "spatz-mod",
-	"version": "0.1.4",
+	"version": "0.1.5",
 	"description": "Recommends Claude models and effort with spatz and can apply them to subagents and the main session.",
 	"author": { "name": "spatz" },
 	"userConfig": {
