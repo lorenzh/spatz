@@ -1,6 +1,6 @@
 {
 	"name": "spatz",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"skills": "./skills/",
 	"description": "Record test and build outcomes and token usage with the spatz CLI launcher."
 }
