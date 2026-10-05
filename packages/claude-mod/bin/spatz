@@ -4,9 +4,9 @@ if [ -z "$SPATZ_LAUNCHER" ] && command -v spatz >/dev/null 2>&1; then
     export SPATZ_LAUNCHER=1
     exec spatz "$@"
 elif command -v bunx >/dev/null 2>&1; then
-    exec bunx @spatz/cli@0.1.1 "$@"
+    exec bunx @spatz/cli@0.1.2 "$@"
 elif command -v npx >/dev/null 2>&1; then
-    exec npx -y @spatz/cli@0.1.1 "$@"
+    exec npx -y @spatz/cli@0.1.2 "$@"
 fi
 echo "install the spatz CLI: npm i -g @spatz/cli" >&2
 exit 1
