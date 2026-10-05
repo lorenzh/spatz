@@ -17,7 +17,7 @@ test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 				"packages/claude-hooks",
 				"packages/codex-hooks",
 				"packages/cli/package.json",
-				"skills/spatz/SKILL.md",
+				"skills/routing/SKILL.md",
 			])
 				await cp(resolve(import.meta.dir, "..", path), join(root, path), {
 					recursive: true,
@@ -60,8 +60,8 @@ test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 						`@spatz/cli@${version}`,
 					);
 					expect(
-						await Bun.file(join(extract, "skills/spatz/SKILL.md")).text(),
-					).toBe(await Bun.file(join(root, "skills/spatz/SKILL.md")).text());
+						await Bun.file(join(extract, "skills/routing/SKILL.md")).text(),
+					).toBe(await Bun.file(join(root, "skills/routing/SKILL.md")).text());
 					const manifest = await Bun.file(
 						join(extract, ".claude-plugin/plugin.json"),
 					).json();
@@ -100,8 +100,8 @@ test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 					(await stat(join(codexExtract, "bin/spatz"))).mode & 0o111,
 				).not.toBe(0);
 				expect(
-					await Bun.file(join(codexExtract, "skills/spatz/SKILL.md")).text(),
-				).toBe(await Bun.file(join(root, "skills/spatz/SKILL.md")).text());
+					await Bun.file(join(codexExtract, "skills/routing/SKILL.md")).text(),
+				).toBe(await Bun.file(join(root, "skills/routing/SKILL.md")).text());
 				const sha256 = createHash("sha256")
 					.update(await Bun.file(file).bytes())
 					.digest("hex");

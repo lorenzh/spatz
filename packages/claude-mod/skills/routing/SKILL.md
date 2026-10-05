@@ -1,5 +1,5 @@
 ---
-name: spatz
+name: routing
 description: Spatz model and effort selection. Use when an agent is about to dispatch a subagent, delegate a task, run codex exec, choose a model or effort, or verify or review another agent's work. Applies to Claude Code subagents, Codex, and other coding harnesses.
 ---
 
@@ -7,7 +7,7 @@ description: Spatz model and effort selection. Use when an agent is about to dis
 
 **Before every dispatch you route yourself, get a fresh ranking and use its first pair.** Task size, urgency, and a previous ranking do not replace this call.
 
-When the spatz Claude Code mod is installed (the `/spatz-mod:spatz` skill is available), do not call spatz for Claude Code subagents; the mod routes them. Still use spatz for other dispatches, such as Codex runs or other harnesses, and report outcomes as usual.
+When the spatz Claude Code mod is installed (the `/spatz-mod:routing` skill is available), do not call spatz for Claude Code subagents; the mod routes them. `/spatz` is the mod's command for checking status and changing mode or scope. Still use this skill for other dispatches, such as Codex runs or other harnesses, and report outcomes as usual.
 
 ## Run the CLI
 
