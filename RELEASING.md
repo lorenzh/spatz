@@ -36,7 +36,7 @@ The workflow replaces any existing build metadata.
 After all builds pass, it replaces the fixed `nightly` tag and prerelease.
 The release body records the UTC date and full commit SHA.
 
-Both workflows use Linux x64/arm64 and macOS x64/arm64 native runners. They also produce an experimental Windows x64 ZIP archive. A Windows build failure does not block the other release assets. Windows hooks are untested.
+Both workflows use Linux x64/arm64 and macOS x64/arm64 native runners. They also produce an experimental Windows x64 ZIP archive. A Windows build failure does not block the other release assets. The Windows job runs no test suite, only a smoke test of the built `spatz.exe`. Windows hooks are untested.
 On a `v*` tag, a failed experimental Windows job ships the release without the Windows asset.
 The Intel macOS runner is `macos-15-intel` because GitHub retired `macos-13`.
 
