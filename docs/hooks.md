@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod]
+keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, plugin, marketplace, spatz-hooks]
 ---
 
 # Claude Code hooks for spatz
@@ -14,6 +14,27 @@ The hooks never block a session. `spatz hook` always exits with code 0, prints n
 spatz supports Claude Code and Codex CLI. For the command reference see [cli.md](cli.md).
 
 ## Install the hooks
+
+### Marketplace plugin
+
+Install the CLI through the [installation guide](installation.md), then run these commands in Claude Code:
+
+```text
+/plugin marketplace add lorenzh/spatz
+/plugin install spatz-hooks@spatz
+```
+
+The plugin runs the four commands below with the same matchers and `async: true`.
+It resolves plain `spatz` through Claude Code's `PATH`. It has no executable setting.
+Remove hand-written `spatz hook` entries from `~/.claude/settings.json` and project settings to avoid duplicate calls.
+Keep unrelated hooks.
+With the `spatz` mod, leave `record: auto` so the hooks plugin handles recording.
+
+### Manual settings
+
+If you do not install the hooks plugin, use these settings instead.
+With the mod and manual hooks, set the mod's `record: off`.
+Automatic detection checks installed plugins only.
 
 1. Make sure that `spatz` is on the `PATH` of a non-interactive shell. A shell alias is not enough. The [README](../README.md) shows a small wrapper script.
 2. Select the settings file:

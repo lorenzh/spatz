@@ -7,7 +7,20 @@ keywords: [mod, plugin, scope, step, turn, subagent, session, escalate, apply, s
 
 # The spatz Claude Code mod
 
-The mod is a Claude Code plugin in `packages/claude-mod`. It asks the `spatz` CLI for a recommendation. In `show` mode it displays the recommendation. In `apply` mode it also changes the model and effort of the request. The mod needs Claude Code 2.1.287 or newer and the `spatz` CLI on your `PATH`. Load it with `claude --plugin-dir packages/claude-mod`.
+The `spatz` plugin is the Claude Code mod in `packages/claude-mod`.
+It asks the `spatz` CLI for a recommendation.
+In `show` mode it shows the recommendation. In `apply` mode it also changes model and effort.
+The mod needs Claude Code 2.1.287 or newer and the `spatz` CLI on your `PATH`.
+
+Install the CLI through the [installation guide](installation.md), then run these commands in Claude Code:
+
+```text
+/plugin marketplace add lorenzh/spatz
+/plugin install spatz@spatz
+```
+
+For local development, use `claude --plugin-dir packages/claude-mod`.
+The plugin name is `spatz`. The workspace package remains `@spatz/claude-mod`.
 
 The mod never edits a prompt. It stores no task text. [hooks.md](hooks.md) describes the other way to feed spatz: the settings hooks, which only observe.
 
@@ -90,7 +103,12 @@ After each request and at the end of each turn, the mod can call `spatz usage` w
 - `off`: never record.
 - `auto` (default): do not record when the `spatz-hooks` plugin is enabled, otherwise record.
 
-For `auto`, the mod runs `claude plugin list --json` once. When it finds an enabled `spatz-hooks` plugin, it shows one notice that recording is off. If the lookup fails, the mod records. The mod records no outcomes: it records usage only.
+For `auto`, the mod runs `claude plugin list --json` once per session.
+It checks for an enabled plugin whose id starts with `spatz-hooks@`.
+The mod's own id, `spatz@spatz`, does not turn recording off.
+When the hooks plugin is enabled, the mod shows one notice that recording is off.
+If the lookup fails, the mod records. The mod records usage only, without outcomes.
+Hand-written hooks and `--plugin-dir` hooks are not installed plugins. With those hooks, set `record: off` yourself.
 
 ## Fail-open behaviour
 

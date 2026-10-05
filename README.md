@@ -51,6 +51,17 @@ flowchart LR
 
 spatz works without a key. Without a key, spatz uses the keyword rules. These rules set only the criticality. The task type is always `other`.
 
+## Install
+
+```bash
+npm i -g @spatz/cli
+```
+
+For nightlies, use `npm i -g @spatz/cli@nightly`.
+In Claude Code, add `/plugin marketplace add lorenzh/spatz`.
+Install `spatz-hooks@spatz` for recording, `spatz@spatz` for routing, or both.
+See [installation](docs/installation.md) for the commands, API key, binary downloads and recorder settings.
+
 ## Releases
 
 Download an archive and its matching `.sha256` file from [GitHub Releases](https://github.com/lorenzh/spatz/releases).
@@ -168,7 +179,7 @@ To install from source instead:
 
 You can connect spatz to Claude Code in three ways. They can run alone or together.
 
-- **Hooks only.** The hooks in your Claude Code settings watch Bash calls and record test and build results, models and tokens. See [docs/hooks.md](docs/hooks.md).
+- **Hooks only.** The `spatz-hooks` plugin watches Bash calls and records test and build results, models and tokens. See [docs/hooks.md](docs/hooks.md).
 - **Mod only.** The `spatz` mod in `packages/claude-mod` asks spatz for each decision. In `apply` mode it sets model and effort for subagents or for the main session. It records usage itself. See [docs/claude-mod.md](docs/claude-mod.md).
 - **Both.** The mod routes and the hooks record. With `record: auto` the mod stops recording when the `spatz-hooks` plugin is enabled, so nothing is counted twice.
 
