@@ -48,7 +48,7 @@ Linux needs glibc. spatz does not support Alpine Linux.
 Windows x64 support is experimental. Some releases omit it.
 
 For installation without Node.js, use a [release archive](#releases).
-For the unstable nightly version, use `npm install -g @spatz/cli@nightly`.
+For the unstable nightly version, use `npm install -g @spatz/cli@nightly`. To test a release candidate, use `npm install -g @spatz/cli@next`.
 
 ### 2. Ask for a recommendation
 

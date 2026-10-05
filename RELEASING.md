@@ -1,22 +1,83 @@
 ---
 title: Releasing spatz
-description: How to publish CLI and Claude Code plugin archives and npm packages, and control nightly builds and daily harness catalog updates.
+description: The release strategy (main, nightly, release branches and candidates) and how to publish CLI and Claude Code plugin archives and npm packages, and control nightly builds and daily harness catalog updates.
 tags: [spatz, cli, releases]
-keywords: [release, nightly, catalog, harness, workflow, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
+keywords: [release, release branch, release candidate, rc, cherry-pick, strategy, nightly, catalog, harness, workflow, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
 ---
 
 # Releasing spatz
 
-1. Run `bun scripts/release-version.ts v0.2.0` with the next SemVer version. Include all five manifests in the version bump.
-2. Run the gates in [CONTRIBUTING.md](CONTRIBUTING.md). Commit the bump and merge it into `main` through a pull request.
-3. Tag the merged commit and push the tag:
+## Release strategy
+
+spatz uses trunk-based development with a nightly build and one release branch per minor version.
+
+```
+main ──●──●──●──●──●──●──●──►        nightly: npm @nightly, daily
+            \
+             release/0.2 ──●──●──►   v0.2.0-rc.1 → v0.2.0-rc.2 → v0.2.0 → v0.2.1
+```
+
+- `main` is the development branch. All changes reach `main` through pull requests. The nightly workflow builds `main` when code changed.
+- A release starts when a set of features is ready, not on a fixed date. As a guide, plan one minor release every two to four weeks.
+- spatz is still on 0.x: new features raise the minor version (`0.2.0`), fixes raise the patch version (`0.2.1`).
+- Each minor version gets a release branch `release/<major>.<minor>`, for example `release/0.2`. Release candidates, the final release and later patches of that minor version come from this branch.
+- Release candidates use the tag `v<version>-rc.<n>`. They are GitHub prereleases and go to npm under the dist-tag `next`, never `latest`.
+- Fix first on `main`, then cherry-pick the fix onto the release branch. A fix that only applies to the release branch is the exception; say so in its pull request.
+- Only fixes go onto a release branch. New features wait for the next minor version.
+- If no new features land on `main` during the candidate phase, you can tag the candidates on `main` and skip the release branch.
+
+### Version on `main`
+
+`main` keeps the version of the last stable release.
+The Git plugin marketplace reads `main`, and each plugin launcher pins `@spatz/cli` to its plugin version. A version on `main` that is not on npm would break the launcher for plugin users.
+Nightly builds therefore carry the last released version plus the date, for example `0.2.0-nightly.20261020+abc1234`. The npm dist-tag `nightly` keeps them apart from releases, so their SemVer order does not matter.
+
+## Cutting a release
+
+1. Create the release branch from `main` and set the candidate version:
 
    ```bash
    git switch main
    git pull --ff-only
+   git switch -c release/0.2
+   bun scripts/release-version.ts v0.2.0-rc.1
+   ```
+
+   Run the gates in [CONTRIBUTING.md](CONTRIBUTING.md), commit the bump and push the branch. Protect `release/*` like `main`: changes only through pull requests.
+2. Tag the first candidate on the release branch:
+
+   ```bash
+   git tag v0.2.0-rc.1
+   git push origin release/0.2 v0.2.0-rc.1
+   ```
+
+3. Test the candidate:
+   - CLI: `npm i -g @spatz/cli@next`.
+   - Claude Code plugins from the branch: `/plugin marketplace add lorenzh/spatz@release/0.2`, then install the plugins as usual.
+   - Codex plugins from the branch: `codex plugin marketplace add lorenzh/spatz --ref release/0.2`.
+   - The plugin ZIP files and `marketplace.json` of the GitHub prerelease also work.
+4. For each fix: merge it into `main`, cherry-pick it onto `release/0.2` through a pull request, set the next candidate version with `bun scripts/release-version.ts v0.2.0-rc.2`, and tag `v0.2.0-rc.2`.
+5. When a candidate passes, set the final version on the release branch and tag it:
+
+   ```bash
+   bun scripts/release-version.ts v0.2.0
+   # commit the bump through a pull request into release/0.2
    git tag v0.2.0
    git push origin v0.2.0
    ```
+
+6. Merge the release branch back into `main` through a pull request. This brings the version bump to `main`, so the Git marketplace and the plugin launchers use `0.2.0`. Do not merge release candidate bumps into `main`: the launchers would pin a version that is only on `next`.
+7. Keep the release branch. Patch releases (`v0.2.1`) follow steps 4 to 6 on the same branch, without a candidate when the fix is small.
+
+### Release checklist
+
+- [ ] CI is green on the release branch, and the release workflow passed for the last candidate.
+- [ ] `npm i -g @spatz/cli@next` installs and `spatz --version` prints the candidate.
+- [ ] The plugins from `release/<minor>` load in Claude Code and Codex, and `/spatz status` works.
+- [ ] Docs describe every user-visible change of the release.
+- [ ] The final tag published to npm `latest`, and the release branch is merged back into `main`.
+
+## Release and nightly workflows
 
 The release workflow rejects tags that do not contain a valid SemVer version.
 It sets the CLI version, all three plugin manifest versions and both Claude Code marketplace entry versions from the tag.

@@ -22,7 +22,7 @@ npm i -g @spatz/cli
 spatz --version
 ```
 
-For the unstable nightly version, use `npm i -g @spatz/cli@nightly`.
+For the unstable nightly version, use `npm i -g @spatz/cli@nightly`. To test a release candidate, use `npm i -g @spatz/cli@next`. See [RELEASING.md](../RELEASING.md#release-strategy) for how releases are cut.
 The npm packages include the Bun runtime. You do not need to install Bun separately.
 
 You can also download a binary archive from [GitHub Releases](https://github.com/lorenzh/spatz/releases).
