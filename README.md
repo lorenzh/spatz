@@ -1,4 +1,7 @@
-<img src="docs/assets/logo.svg" alt="spatz logo" width="96" height="96">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img src="docs/assets/banner-light.svg" alt="spatz" width="340" height="84">
+</picture>
 
 # spatz
 
