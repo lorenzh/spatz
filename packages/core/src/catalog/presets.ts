@@ -29,8 +29,9 @@ export function resolveModels(
 	env: Env,
 	config: Pick<Config, "models">,
 ): { value: string; source: ModelsSource } {
-	if (flag !== undefined) return { value: flag, source: "flag" };
-	if (env.SPATZ_MODELS !== undefined)
+	// Empty or blank values count as unset, so the next source applies.
+	if (flag?.trim()) return { value: flag, source: "flag" };
+	if (env.SPATZ_MODELS?.trim())
 		return { value: env.SPATZ_MODELS, source: "env" };
 	if (config.models !== undefined) {
 		const { value, source } = config.models;
@@ -38,7 +39,7 @@ export function resolveModels(
 			throw new ModelsUsageError(
 				`${source} config: models must be a string using --models syntax`,
 			);
-		return { value, source };
+		if (value.trim()) return { value, source };
 	}
 	const harness = detectHarness(env);
 	if (harness)
@@ -46,6 +47,23 @@ export function resolveModels(
 	throw new ModelsUsageError(
 		"No candidate models found. Use --models, SPATZ_MODELS, or models in .spatz.json or ~/.spatz/config.json.",
 	);
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+	env: "SPATZ_MODELS",
+	project: ".spatz.json models",
+	user: "~/.spatz/config.json models",
+};
+
+/** Names the real source in a `--models:` parse error when the list did not come from the flag. */
+export function labelModelsError(
+	error: unknown,
+	source: ModelsSource,
+): unknown {
+	const label = SOURCE_LABELS[source];
+	if (label && error instanceof Error && error.message.startsWith("--models:"))
+		error.message = `${label}:${error.message.slice("--models:".length)}`;
+	return error;
 }
 
 export function filterFamily(

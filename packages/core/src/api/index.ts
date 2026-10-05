@@ -6,7 +6,11 @@ import {
 	toCanonicalId,
 } from "../catalog/index.ts";
 import { loadOpenRouterModels } from "../catalog/openrouter.ts";
-import { filterFamily, resolveModels } from "../catalog/presets.ts";
+import {
+	filterFamily,
+	labelModelsError,
+	resolveModels,
+} from "../catalog/presets.ts";
 import { classify } from "../classify/index.ts";
 import type { CoreDeps, SpatzApi, Store } from "../contracts/deps.ts";
 import type {
@@ -414,11 +418,13 @@ export function createApi(
 				);
 			const cfg = await getConfig();
 			const resolved = resolveModels(models, deps.env, cfg);
-			const requested = filterFamily(
-				parseModelsArg(resolved.value),
-				family,
-				cfg.aliases,
-			);
+			let parsed: ReturnType<typeof parseModelsArg>;
+			try {
+				parsed = parseModelsArg(resolved.value);
+			} catch (error) {
+				throw labelModelsError(error, resolved.source);
+			}
+			const requested = filterFamily(parsed, family, cfg.aliases);
 			const openRouter = await loadOpenRouterModels({
 				fetch: deps.fetch,
 				env: deps.env,

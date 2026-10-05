@@ -6,6 +6,7 @@ import {
 	detectHarness,
 	filterFamily,
 	HARNESS_PRESETS,
+	labelModelsError,
 	ModelsUsageError,
 	resolveModels,
 } from "./presets.ts";
@@ -100,15 +101,38 @@ describe("candidate defaults", () => {
 		).toEqual({ value: "user-model", source: "user" });
 	});
 
-	test("empty values do not silently fall through", () => {
-		expect(resolveModels("", { SPATZ_MODELS: "fallback" }, {}).value).toBe("");
+	test("blank values count as unset and fall through", () => {
+		expect(resolveModels(" ", { SPATZ_MODELS: "fallback" }, {})).toEqual({
+			value: "fallback",
+			source: "env",
+		});
 		expect(
-			resolveModels(undefined, { SPATZ_MODELS: "", CLAUDECODE: "1" }, {}).value,
-		).toBe("");
+			resolveModels(undefined, { SPATZ_MODELS: "", CLAUDECODE: "1" }, {})
+				.source,
+		).toBe("preset:claude-code");
 		expect(
-			resolveModels(undefined, {}, { models: { value: "", source: "user" } })
-				.value,
-		).toBe("");
+			resolveModels(
+				undefined,
+				{ CLAUDECODE: "1" },
+				{ models: { value: "", source: "user" } },
+			).source,
+		).toBe("preset:claude-code");
+	});
+
+	test("parse errors name the source of the bad value", () => {
+		const fail = (source: "env" | "project" | "user" | "flag") => {
+			try {
+				parseModelsArg("claude-opus-5-5:turbo");
+			} catch (error) {
+				return (labelModelsError(error, source) as Error).message;
+			}
+		};
+		expect(fail("env")).toStartWith("SPATZ_MODELS: unknown effort");
+		expect(fail("project")).toStartWith(".spatz.json models: unknown effort");
+		expect(fail("user")).toStartWith(
+			"~/.spatz/config.json models: unknown effort",
+		);
+		expect(fail("flag")).toStartWith("--models: unknown effort");
 	});
 
 	test("missing defaults name every configuration option", () => {

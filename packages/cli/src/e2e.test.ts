@@ -628,9 +628,14 @@ describe("candidate resolution CLI", () => {
 			"--family must be",
 		],
 		[[], { CODEX_COMPANION_SESSION_ID: "plugin" }, 2, "--models"],
-		[[], { SPATZ_MODELS: "", CLAUDECODE: "1" }, 1, "empty model list"],
-		[[], { SPATZ_MODELS: "gpt-6-luna:turbo" }, 1, "unknown effort"],
-		[["--models", ""], { CLAUDECODE: "1" }, 1, "empty model list"],
+		[[], { SPATZ_MODELS: "" }, 2, "No candidate models found"],
+		[
+			[],
+			{ SPATZ_MODELS: "gpt-6-luna:turbo" },
+			1,
+			"SPATZ_MODELS: unknown effort",
+		],
+		[["--models", " "], {}, 2, "No candidate models found"],
 	] as [string[], Record<string, string>, number, string][])(
 		"rejects %j with %j",
 		async (args, env, code, message) => {

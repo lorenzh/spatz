@@ -65,7 +65,7 @@ spatz uses the first available source:
 4. `models` in `~/.spatz/config.json`
 5. A preset for the detected harness
 
-All sources use the grammar below. An invalid selected value fails instead of falling through.
+All sources use the grammar below. An empty or blank value counts as unset, so the next source applies. An invalid selected value fails instead of falling through, and the error names its source (for example `SPATZ_MODELS:`).
 Without a source, spatz exits 2 and names the flag and configuration options.
 JSON reports the selected source as `models_source`. A family filter does not change that source.
 
