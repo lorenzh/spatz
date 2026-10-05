@@ -1,16 +1,9 @@
----
-title: spatz
-description: Install spatz, choose model and effort pairs for coding tasks, and report results to improve future recommendations.
-tags: [spatz, cli, recommendation]
-keywords: [getting started, quickstart, install, models, effort, usage, report, open source]
----
-
 # spatz
 
 **Choose a model and effort for your coding task. Learn from the result.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Status: proof of concept](https://img.shields.io/badge/status-proof_of_concept-orange.svg)](#project-status)
+[![Version](https://img.shields.io/github/v/release/lorenzh/spatz)](https://github.com/lorenzh/spatz/releases/latest)
 
 Do not use a cannon to shoot sparrows.
 
@@ -206,13 +199,6 @@ See [Contributing](CONTRIBUTING.md) for the full development setup.
 | [Claude Code mod](docs/claude-mod.md) | Modes, routing scopes, and `/spatz` commands. |
 | [Configuration](docs/configuration.md) | Environment variables and local files. |
 | [Privacy](docs/privacy.md) | Network requests, stored data, and deletion. |
-
-## Project status
-
-spatz is a proof of concept. Commands and output formats can change.
-The database schema can also change.
-Automatic signal collection supports Claude Code and Codex CLI hooks.
-Other agents must report outcomes through the CLI. There is no MCP server.
 
 ## Contributing
 
