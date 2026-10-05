@@ -20,6 +20,29 @@ const parsed = (i: number) =>
 	parseHookInput(JSON.stringify(inputs[i]?.input)) as HookInput;
 
 describe("parseCodexRollout", () => {
+	test("reads completed command events once, within their turn, without legacy mirrors", async () => {
+		const rollout = await Bun.file(
+			`${import.meta.dir}/fixtures/codex-command-events.jsonl`,
+		).text();
+		expect(parseCodexRollout(rollout, "todo-turn")).toEqual({
+			model: "gpt-6-luna",
+			effort: "low",
+			usage: {
+				input_tokens: 174968,
+				cache_read_input_tokens: 149504,
+				cache_creation_input_tokens: 0,
+				output_tokens: 674,
+			},
+			calls: [
+				{ command: "rtk proxy bun test", exit_code: 1 },
+				{ command: "rtk proxy bun build app.js --outdir dist", exit_code: 0 },
+			],
+		});
+		// Legacy records also stay in their own turn.
+		expect(parseCodexRollout(rollout, "later")?.calls).toEqual([
+			{ command: "bun test", exit_code: 0 },
+		]);
+	});
 	test("reads the matching turn, token usage and each shell exit code", async () => {
 		const rollout = await Bun.file(
 			`${import.meta.dir}/fixtures/codex-rollout.jsonl`,

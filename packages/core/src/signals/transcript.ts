@@ -41,6 +41,12 @@ type RolloutRecord = {
 		input?: string;
 		output?: { text?: string }[];
 		metadata?: { exit_code?: number };
+		item?: {
+			type?: string;
+			id?: string;
+			command?: string[];
+			exit_code?: number;
+		};
 	};
 };
 
@@ -68,7 +74,30 @@ export function parseCodexRollout(
 	const usage = usageRow?.turn_token_usage ?? {};
 	const calls = new Map<string, string>();
 	const exits = new Map<string, number>();
+	const completed = new Map<string, CodexRollout["calls"][number]>();
+	let currentTurn: string | undefined;
 	for (const { type, payload: p } of rows) {
+		if (type === "turn_context") currentTurn = p?.turn_id;
+		if (!p || (p.turn_id ?? currentTurn) !== turnId) continue;
+		if (type === "event_msg" && p.type === "item_completed") {
+			const item = p.item;
+			const argv = item?.command;
+			if (
+				item?.type === "CommandExecution" &&
+				typeof item.id === "string" &&
+				Number.isInteger(item.exit_code) &&
+				Array.isArray(argv) &&
+				argv.length === 3 &&
+				typeof argv[0] === "string" &&
+				/(?:^|\/)(?:bash|sh|zsh|dash|ksh)$/.test(argv[0]) &&
+				(argv[1] === "-lc" || argv[1] === "-c") &&
+				typeof argv[2] === "string"
+			)
+				completed.set(item.id, {
+					command: argv[2],
+					exit_code: item.exit_code as number,
+				});
+		}
 		if (type !== "response_item" || !p) continue;
 		if (p.type === "custom_tool_call" && typeof p.call_id === "string") {
 			try {
@@ -108,10 +137,13 @@ export function parseCodexRollout(
 			cache_creation_input_tokens: usage.cache_write_input_tokens ?? 0,
 			output_tokens: usage.output_tokens ?? 0,
 		},
-		calls: [...calls].flatMap(([id, command]) => {
-			const code = exits.get(id);
-			return code === undefined ? [] : [{ command, exit_code: code }];
-		}),
+		// CommandExecution is authoritative when available; do not count its legacy mirror twice.
+		calls: completed.size
+			? [...completed.values()]
+			: [...calls].flatMap(([id, command]) => {
+					const code = exits.get(id);
+					return code === undefined ? [] : [{ command, exit_code: code }];
+				}),
 	};
 }
 

@@ -2,14 +2,16 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz]
+keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
 ---
 
 # Claude Code hooks for spatz
 
 spatz learns which pair of model and effort succeeds. It needs results for that. Claude Code hooks give spatz these results without extra work from the agent: test and build results, and the models and tokens the session used. `spatz report` gives an explicit result. A report wins over all hook signals.
 
-The hooks never block a session. `spatz hook` always exits with code 0, prints nothing and ignores all errors. The snippet below also runs each hook with `"async": true`, so Claude Code does not wait for it.
+The hooks never block a session. `spatz hook` always exits with code 0 and prints nothing by default.
+With `SPATZ_DEBUG=1`, the hook writes diagnostics to stderr. It still ignores all errors.
+The snippet below also runs each hook with `"async": true`, so Claude Code does not wait for it.
 
 spatz supports Claude Code and Codex CLI. For the command reference see [cli.md](cli.md).
 
@@ -257,4 +259,23 @@ The plugin's `packages/codex-hooks/hooks/hooks.json` contains:
 
 Review and trust the hook with `/hooks` in Codex. `codex exec` also enforces hook trust.
 
-Codex hook input has no exit code. spatz reads the rollout at turn end and matches shell calls to their outputs by call id. Signals are available only when the rollout records an exit code; activity refreshes the open window when the hook runs. Codex has no `SubagentStop` or `PostToolUseFailure` hook.
+Codex hook input has no exit code. At turn end, spatz reads completed `CommandExecution` events from the rollout.
+It reads the command from supported POSIX shell wrappers such as `/bin/bash -lc`.
+Older rollouts use shell calls matched to outputs by call id.
+Each result stays within its turn. Commands without an exit code give no signal.
+The latest test and build results for that turn replace earlier results when Stop runs again.
+These signals use source `Stop` and the turn ID. Replayed events do not add duplicate signals.
+Codex has no `SubagentStop` or `PostToolUseFailure` hook.
+
+### Hook diagnostics
+
+Set `SPATZ_DEBUG=1` in the environment that starts Codex or Claude Code.
+The hooks write fixed messages to stderr for recording errors or missing Codex rollout fields.
+They also report when a linked Codex turn has no readable shell exit codes.
+An empty turn can produce that message too.
+Diagnostics contain no prompt text, command text or tool output.
+
+For a database access error, check write access to `~/.spatz`.
+SQLite also needs access to its WAL and shared-memory files.
+In a sandboxed `codex exec` run, use `--add-dir ~/.spatz` to allow database writes.
+Diagnostics do not change hook exit codes.

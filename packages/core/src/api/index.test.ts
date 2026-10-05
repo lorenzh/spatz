@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -553,6 +553,98 @@ const assistant = (
 	});
 
 describe("handleHook", () => {
+	test("Codex command events create outcomes without a report and replay without duplicate signals", async () => {
+		const dbPath = join(dir, "recording.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const id = await linked(s);
+		const rollout = await Bun.file(
+			`${import.meta.dir}/../signals/fixtures/codex-command-events.jsonl`,
+		).text();
+		const path = join(dir, "commands.jsonl");
+		await Bun.write(path, rollout);
+		const stop = JSON.stringify({
+			session_id: SESSION,
+			turn_id: "todo-turn",
+			transcript_path: path,
+			hook_event_name: "Stop",
+		});
+		await s.api.handleHook("codex:Stop", stop);
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query("SELECT quality FROM outcomes WHERE suggestion_id = ?")
+					.get(id),
+			).toEqual({ quality: 0.8 / 1.8 });
+			// A later check succeeds. Replaying the updated snapshot replaces this turn's result.
+			await Bun.write(path, rollout.replace('"exit_code":1', '"exit_code":0'));
+			s.setNow(T0 + 1000);
+			await s.api.handleHook("codex:Stop", stop);
+			await s.api.handleHook("codex:Stop", stop);
+			expect(
+				db
+					.query("SELECT kind, value, turn_id FROM signals ORDER BY kind")
+					.all(),
+			).toEqual([
+				{ kind: "build", value: 1, turn_id: "todo-turn" },
+				{ kind: "test", value: 1, turn_id: "todo-turn" },
+			]);
+			expect(
+				db.query("SELECT * FROM outcomes WHERE suggestion_id = ?").get(id),
+			).toEqual({
+				suggestion_id: id,
+				quality: 1,
+				model: "openai/gpt-6-luna",
+				effort: "low",
+			});
+			expect(db.query("SELECT output_tokens FROM usages").all()).toEqual([
+				{ output_tokens: 674 },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+	test("hook diagnostics are opt-in and do not expose input or errors", async () => {
+		const stderr = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const openStore = () => {
+				throw new Error("private database path and secret");
+			};
+			await setup({ openStore }).api.handleHook(
+				"codex:Stop",
+				'{"hook_event_name":"Stop"}',
+			);
+			expect(stderr).not.toHaveBeenCalled();
+			await setup({ openStore, env: { SPATZ_DEBUG: "1" } }).api.handleHook(
+				"codex:Stop",
+				'{"hook_event_name":"Stop"}',
+			);
+			expect(stderr.mock.calls).toEqual([
+				[
+					"spatz hook: Recording failed; check hook input, transcript access and database permissions.",
+				],
+			]);
+			stderr.mockClear();
+			const path = join(dir, "unknown.jsonl");
+			await Bun.write(path, '{"type":"future_rollout_format"}');
+			await setup({ env: { SPATZ_DEBUG: "1" } }).api.handleHook(
+				"codex:Stop",
+				JSON.stringify({
+					session_id: SESSION,
+					turn_id: "missing",
+					transcript_path: path,
+					hook_event_name: "Stop",
+				}),
+			);
+			expect(stderr.mock.calls).toEqual([
+				[
+					"spatz hook: Codex rollout has no matching turn context; check the rollout format.",
+				],
+			]);
+		} finally {
+			stderr.mockRestore();
+		}
+	});
 	test("Codex PostToolUse links suggestion with turn_id as prompt id", async () => {
 		const s = setup();
 		const id = (await s.api.suggest(suggestInput())).suggestion_id;
@@ -595,7 +687,8 @@ describe("handleHook", () => {
 				kind: "test",
 				value: 0,
 				weight: 1,
-				source: "PostToolUseFailure",
+				source: "Stop",
+				turn_id: "11111111-1111-1111-1111-111111111111",
 				observed_at: T0,
 			},
 		]);

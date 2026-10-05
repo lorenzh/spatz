@@ -65,6 +65,9 @@ export function createApi(
 	let config: Promise<Config> | undefined;
 	const getConfig = () =>
 		(config ??= deps.config ? Promise.resolve(deps.config) : loadConfig(deps));
+	const debugHook = (message: string) => {
+		if (deps.env.SPATZ_DEBUG === "1") console.error(`spatz hook: ${message}`);
+	};
 
 	/** One store handle per use case; each spatz call is its own process. */
 	async function withStore<T>(
@@ -334,11 +337,16 @@ export function createApi(
 			}
 			if (input.hook_event_name !== "Stop" || !input.turn_id) return;
 			const turnId = input.turn_id;
-			const text = await Bun.file(input.transcript_path)
-				.text()
-				.catch(() => "");
+			const text = await Bun.file(input.transcript_path).text();
 			const rollout = parseCodexRollout(text, turnId);
-			if (!rollout) return;
+			if (!rollout) {
+				debugHook(
+					"Codex rollout has no matching turn context; check the rollout format.",
+				);
+				return;
+			}
+			if (open && rollout.calls.length === 0)
+				debugHook("No completed shell exit codes found for this turn.");
 			if (open)
 				for (const call of rollout.calls) {
 					const kind = detectCommandKind(call.command);
@@ -348,7 +356,8 @@ export function createApi(
 						kind,
 						value: call.exit_code === 0 ? 1 : 0,
 						weight: SIGNAL_WEIGHTS[kind],
-						source: call.exit_code === 0 ? "PostToolUse" : "PostToolUseFailure",
+						source: "Stop",
+						turn_id: turnId,
 						observed_at: now,
 					});
 				}
@@ -610,7 +619,11 @@ export function createApi(
 					const input = parseHookInput(stdin);
 					if (input) await onHook(input, await getConfig());
 				}
-			} catch {}
+			} catch {
+				debugHook(
+					"Recording failed; check hook input, transcript access and database permissions.",
+				);
+			}
 		},
 
 		async stats({ type, by }) {
