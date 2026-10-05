@@ -56,8 +56,9 @@ jobs:
         run: |
           cd dist
           cat ./*.sha256 > SHA256SUMS
-          sha256sum --check SHA256SUMS
+          bun -e 'const { createHash } = require("node:crypto"); for (const line of (await Bun.file("SHA256SUMS").text()).trim().split("\n")) { const [expected, file] = line.split(/\s+/, 2); const actual = createHash("sha256").update(await Bun.file(file).bytes()).digest("hex"); if (actual !== expected) throw new Error(`Checksum failed: ${file}`); }'
           flags=()
           if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" ./*.tar.gz ./*.sha256 SHA256SUMS \
+          mapfile -t assets < <(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -print | sort)
+          gh release create "$RELEASE_TAG" "${assets[@]}" SHA256SUMS \
             --verify-tag --generate-notes --title "$RELEASE_TAG" "${flags[@]}"

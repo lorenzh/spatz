@@ -11,13 +11,20 @@ export async function buildRelease(version = pkg.version, outDir = "dist") {
 	releaseVersion(`v${version}`);
 	const target = `${process.platform}-${process.arch}`;
 	if (
-		!["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target)
+		![
+			"linux-x64",
+			"linux-arm64",
+			"darwin-x64",
+			"darwin-arm64",
+			"win32-x64",
+		].includes(target)
 	)
 		throw new Error(`Unsupported release target: ${target}`);
 	const out = resolve(outDir);
 	await mkdir(out, { recursive: true });
 	const stage = await mkdtemp(join(out, ".stage-"));
-	const name = `spatz-cli-${version}-${target}`;
+	const safeVersion = version.replaceAll("+", "-");
+	const name = `spatz-cli-${safeVersion}-${target}`;
 	const dir = join(stage, name);
 	await mkdir(dir);
 	try {
@@ -31,15 +38,24 @@ export async function buildRelease(version = pkg.version, outDir = "dist") {
 			dirname(bindings),
 		);
 		const library =
-			process.platform === "darwin" ? "libduckdb.dylib" : "libduckdb.so";
+			process.platform === "darwin"
+				? "libduckdb.dylib"
+				: process.platform === "win32"
+					? "duckdb.dll"
+					: "libduckdb.so";
 		for (const file of ["duckdb.node", library])
 			await copyFile(join(dirname(native), file), join(dir, file));
 		for (const file of ["LICENSE", "README.md"])
 			await copyFile(join(root, file), join(dir, file));
 		const result = await Bun.build({
 			entrypoints: [join(root, "packages/cli/src/cli.ts")],
+			target: "bun",
 			compile: {
-				outfile: join(dir, "spatz"),
+				...(process.platform === "win32" && { target: "bun-windows-x64" }),
+				outfile: join(
+					dir,
+					process.platform === "win32" ? "spatz.exe" : "spatz",
+				),
 				autoloadDotenv: false,
 				autoloadBunfig: false,
 			},
@@ -63,12 +79,22 @@ export async function buildRelease(version = pkg.version, outDir = "dist") {
 		});
 		if (!result.success)
 			throw new AggregateError(result.logs, "Release build failed");
-		const archive = join(out, `${name}.tar.gz`);
-		const tar = Bun.spawn(["tar", "-czf", archive, "-C", stage, name], {
-			stdout: "inherit",
-			stderr: "inherit",
-		});
-		if (await tar.exited) throw new Error("Release archive failed");
+		const archive = join(
+			out,
+			`${name}.${process.platform === "win32" ? "zip" : "tar.gz"}`,
+		);
+		const pack = Bun.spawn(
+			process.platform === "win32"
+				? [
+						"powershell",
+						"-NoProfile",
+						"-Command",
+						`Compress-Archive -Path '${dir}' -DestinationPath '${archive}'`,
+					]
+				: ["tar", "-czf", archive, "-C", stage, name],
+			{ stdout: "inherit", stderr: "inherit" },
+		);
+		if (await pack.exited) throw new Error("Release archive failed");
 		const sha = createHash("sha256")
 			.update(await Bun.file(archive).bytes())
 			.digest("hex");

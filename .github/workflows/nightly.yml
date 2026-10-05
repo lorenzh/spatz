@@ -76,7 +76,7 @@ jobs:
         run: |
           cd dist
           cat ./*.sha256 > SHA256SUMS
-          sha256sum --check SHA256SUMS
+          bun -e 'const { createHash } = require("node:crypto"); for (const line of (await Bun.file("SHA256SUMS").text()).trim().split("\n")) { const [expected, file] = line.split(/\s+/, 2); const actual = createHash("sha256").update(await Bun.file(file).bytes()).digest("hex"); if (actual !== expected) throw new Error(`Checksum failed: ${file}`); }'
           existing="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == "nightly") | .id')"
           if [[ -n "$existing" ]]; then
             gh release delete nightly --yes --cleanup-tag
@@ -86,6 +86,7 @@ jobs:
           if [[ -n "$tag" ]]; then gh api --method DELETE "repos/$GH_REPO/git/refs/tags/nightly"; fi
           printf 'Unstable nightly build: %s (UTC).\n\nCommit: %s\nVersion: %s\n' \
             "$RELEASE_DATE" "$RELEASE_SHA" "$RELEASE_VERSION" > notes.md
-          gh release create nightly ./*.tar.gz ./*.sha256 SHA256SUMS \
+          mapfile -t assets < <(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -print | sort)
+          gh release create nightly "${assets[@]}" SHA256SUMS \
             --target "$RELEASE_SHA" --prerelease --latest=false \
             --title "Nightly $RELEASE_DATE" --notes-file notes.md
