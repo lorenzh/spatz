@@ -25,7 +25,7 @@ Run these commands in Claude Code. See the [installation guide](installation.md)
 ```
 
 The plugin runs the four commands below with the same matchers and `async: true`.
-It calls `"${CLAUDE_PLUGIN_ROOT}/bin/spatz"` using [Claude Code's plugin-root variable](https://code.claude.com/docs/en/hooks#reference-scripts-by-path).
+It calls `sh "${CLAUDE_PLUGIN_ROOT}/bin/spatz"` using [Claude Code's plugin-root variable](https://code.claude.com/docs/en/hooks#reference-scripts-by-path).
 The launcher prefers an installed `spatz` on `PATH`, then Bun, then Node's npx.
 No separate CLI install is needed when either package runner is available.
 The first run downloads about 60 MB. Package runners use the plugin's version.
@@ -224,21 +224,32 @@ codex plugin add spatz-hooks@spatz
 ```
 
 The plugin runs these hooks synchronously with a 10-second timeout. Codex skips plugin hooks until you review and trust them through `/hooks`.
-[Codex supplies `PLUGIN_ROOT`](https://learn.chatgpt.com/docs/hooks#plugin-bundled-hooks), which points to the installed plugin directory.
-The launcher uses the same PATH, Bun, then npx order as the Claude hooks.
-Before the first hook, run `npx -y @spatz/cli --version` once.
-The first download can exceed the timeout. If the plugin version differs, also warm that exact `@<version>`.
-If Bun is available, warm `bunx @spatz/cli@<version> --version` because the launcher prefers Bun.
+[Codex supplies `PLUGIN_ROOT`](https://learn.chatgpt.com/docs/hooks#plugin-bundled-hooks), which points to the installed plugin directory. Remove hand-written `spatz hook … --agent codex` entries from `~/.codex/hooks.json` when installing the plugin, or events are recorded twice.
+The plugin's `packages/codex-hooks/hooks/hooks.json` calls `sh "${PLUGIN_ROOT}/bin/spatz"`. Warm the pinned CLI once with `"<plugin root>/bin/spatz" --version`. Codex installs it at `~/.codex/plugins/cache/spatz/spatz-hooks/<version>`; confirm the path from Codex's plugin listing. Claude Code's installed plugin path is shown by `/plugin` and is usually `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`.
+Direct `npx -y @spatz/cli --version` warms `@latest`, while Bun uses a separate cache. A cold plugin download can exceed Codex's 10-second hook timeout.
+
+Without the plugin, use a hand-written `~/.codex/hooks.json` with plain `spatz` on `PATH`:
+
+```json
+{
+	"hooks": {
+		"PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "spatz hook PostToolUse --agent codex", "timeout": 10 }] }],
+		"Stop": [{ "hooks": [{ "type": "command", "command": "spatz hook Stop --agent codex", "timeout": 10 }] }]
+	}
+}
+```
+
+The plugin's `packages/codex-hooks/hooks/hooks.json` contains:
 
 ```json
 {
 	"hooks": {
 		"PostToolUse": [{
 			"matcher": "Bash",
-			"hooks": [{ "type": "command", "command": "\"${PLUGIN_ROOT}/bin/spatz\" hook PostToolUse --agent codex", "timeout": 10 }]
+			"hooks": [{ "type": "command", "command": "sh \"${PLUGIN_ROOT}/bin/spatz\" hook PostToolUse --agent codex", "timeout": 10 }]
 		}],
 		"Stop": [{
-			"hooks": [{ "type": "command", "command": "\"${PLUGIN_ROOT}/bin/spatz\" hook Stop --agent codex", "timeout": 10 }]
+			"hooks": [{ "type": "command", "command": "sh \"${PLUGIN_ROOT}/bin/spatz\" hook Stop --agent codex", "timeout": 10 }]
 		}]
 	}
 }

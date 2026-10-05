@@ -11,7 +11,7 @@ The plugins include a `bin/spatz` launcher and the `spatz` routing skill.
 Hooks and skills work without a separate CLI install when Node.js (npx) or Bun is available.
 The launcher uses an installed `spatz` on `PATH` first, then `bunx`, then `npx -y`.
 Both package runners use the plugin's exact version. The first run downloads about 60 MB.
-The POSIX launcher needs a Unix shell. Windows hooks remain untested.
+The plugin hooks and launcher need a POSIX shell. Native Windows (Claude Code and Codex) is not supported by the plugins yet.
 
 ## Install the CLI
 
@@ -72,6 +72,7 @@ With both plugins enabled, keep `record: auto`.
 The mod checks for an enabled `spatz-hooks@…` plugin once per session.
 It then turns off its own usage recording. If that check fails, the mod records usage.
 Use `/spatz status` to check the recorder. To force hooks-only recording, use `/spatz record off`.
+The shared skill skips CLI recommendations for Claude Code subagents because the mod routes them. It still uses spatz for Codex runs and other harnesses.
 
 When you install `spatz-hooks`, remove hand-written `spatz hook` entries from `~/.claude/settings.json`.
 Check project settings for the same entries. Keep unrelated hooks.
@@ -126,17 +127,37 @@ codex plugin marketplace add lorenzh/spatz
 codex plugin add spatz-hooks@spatz
 ```
 
-Review and trust the new hooks with `/hooks` before they run. Codex stores plugin hooks separately from manually configured hooks.
-Codex supplies `PLUGIN_ROOT` to plugin hooks, so the hooks call `"${PLUGIN_ROOT}/bin/spatz"`.
-Before the first hook, warm the npm cache:
+Review and trust the new hooks with `/hooks` before they run. Codex stores plugin hooks separately from manually configured hooks. Remove hand-written `spatz hook … --agent codex` entries from `~/.codex/hooks.json` when installing the plugin, or events are recorded twice.
+Codex supplies `PLUGIN_ROOT` to plugin hooks. The plugin's `packages/codex-hooks/hooks/hooks.json` invokes `sh "${PLUGIN_ROOT}/bin/spatz"`.
+Before the first hook, warm the pinned CLI through the plugin launcher:
 
 ```bash
-npx -y @spatz/cli --version
+"<plugin root>/bin/spatz" --version
 ```
 
-Codex hooks have a 10-second timeout. A cold download can exceed it.
-If the plugin pins a different release, also run `npx -y @spatz/cli@<version> --version` for that version.
-If Bun is installed, warm `bunx @spatz/cli@<version> --version` instead: the launcher prefers Bun over npx.
+For Codex marketplace installs, the root is `~/.codex/plugins/cache/spatz/spatz-hooks/<version>`; confirm it from Codex's plugin listing. Claude Code's installed plugin path is shown by `/plugin` and is usually `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`. Direct npx warms `@latest`, and Bun has a separate cache. Codex hooks have a 10-second timeout, so warm-up avoids a cold download during a hook.
+
+Without the plugin, add manual hooks to `~/.codex/hooks.json` using plain `spatz` on `PATH`:
+
+```json
+{
+	"hooks": {
+		"PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "spatz hook PostToolUse --agent codex", "timeout": 10 }] }],
+		"Stop": [{ "hooks": [{ "type": "command", "command": "spatz hook Stop --agent codex", "timeout": 10 }] }]
+	}
+}
+```
+
+The plugin's `packages/codex-hooks/hooks/hooks.json` contains:
+
+```json
+{
+	"hooks": {
+		"PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "sh \"${PLUGIN_ROOT}/bin/spatz\" hook PostToolUse --agent codex", "timeout": 10 }] }],
+		"Stop": [{ "hooks": [{ "type": "command", "command": "sh \"${PLUGIN_ROOT}/bin/spatz\" hook Stop --agent codex", "timeout": 10 }] }]
+	}
+}
+```
 See [Codex hooks](hooks.md#codex-cli) for the events and limits.
 
 ## Routing skill

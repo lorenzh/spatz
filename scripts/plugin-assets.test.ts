@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pluginNames } from "./plugin-assets.ts";
+import { pluginNames, syncPluginAssets } from "./plugin-assets.ts";
 
 test("shipped skills equal the source and launchers pin their plugin version", async () => {
 	const cli = await Bun.file("packages/cli/package.json").json();
@@ -80,3 +80,56 @@ test.skipIf(process.platform === "win32")(
 		}
 	},
 );
+
+test.skipIf(process.platform === "win32")(
+	"launcher falls through launcher-only PATH entries without recursion",
+	async () => {
+		const root = await mkdtemp(join(tmpdir(), "spatz-launcher-path-"));
+		try {
+			const first = join(root, "first");
+			const second = join(root, "second");
+			const tools = join(root, "tools");
+			for (const dir of [first, second, tools])
+				await mkdir(dir, { recursive: true });
+			for (const dir of [first, second])
+				await Bun.$`cp packages/claude-hooks/bin/spatz ${join(dir, "spatz")}`;
+			await Bun.write(
+				join(tools, "npx"),
+				"#!/bin/sh\nprintf 'npx %s\\n' \"$*\"\n",
+			);
+			await chmod(join(tools, "npx"), 0o755);
+			const proc = Bun.spawn([join(first, "spatz"), "--version"], {
+				env: { PATH: [first, second, tools].join(":"), SPATZ_LAUNCHER: "" },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(await new Response(proc.stdout).text()).toMatch(
+				/^npx -y @spatz\/cli@/,
+			);
+			expect(await proc.exited).toBe(0);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
+test("plugin asset sync rejects invalid versions before writing launchers", async () => {
+	const root = await mkdtemp(join(tmpdir(), "spatz-plugin-version-"));
+	try {
+		await Bun.write(join(root, "skills/spatz/SKILL.md"), "skill\n");
+		const manifest = join(
+			root,
+			"packages/claude-mod/.claude-plugin/plugin.json",
+		);
+		await mkdir(join(root, "packages/claude-mod/.claude-plugin"), {
+			recursive: true,
+		});
+		await Bun.write(manifest, '{"version":"latest"}');
+		await expect(syncPluginAssets(root)).rejects.toThrow("Invalid release tag");
+		expect(
+			await Bun.file(join(root, "packages/claude-mod/bin/spatz")).exists(),
+		).toBe(false);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});

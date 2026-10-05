@@ -5,13 +5,15 @@ description: Spatz model and effort selection. Use when an agent is about to dis
 
 # Spatz
 
-**Before every dispatch, get a fresh ranking and use its first pair.** Task size, urgency, and a previous ranking do not replace this call.
+**Before every dispatch you route yourself, get a fresh ranking and use its first pair.** Task size, urgency, and a previous ranking do not replace this call.
+
+When the spatz Claude Code mod is installed (the `spatz:spatz` skill is available or the `/spatz` command exists), do not call spatz for Claude Code subagents; the mod routes them. Still use spatz for other dispatches, such as Codex runs or other harnesses, and report outcomes as usual.
 
 ## Run the CLI
 
 Use `spatz` when it is on PATH. Otherwise use this plugin's `bin/spatz`, resolved from the installed skill directory as `../../bin/spatz`. Quote the absolute launcher path. It tries PATH, then Bun, then npx.
 
-If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<version>` from the plugin's `.claude-plugin/plugin.json` or `.codex-plugin/plugin.json`. Use the same executable for suggestions and reports. The first download is about 60 MB. Before using Codex hooks, run `npx -y @spatz/cli --version` once to warm the cache. For a different plugin version, also warm that exact version. Codex hooks time out after 10 seconds.
+If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<version>` from the plugin's `.claude-plugin/plugin.json` or `.codex-plugin/plugin.json`. Use the same executable for suggestions and reports. The first download is about 60 MB. Warm the plugin's pinned CLI by running `"<plugin root>/bin/spatz" --version` once. Codex stores plugins under `~/.codex/plugins/cache/`; Claude's plugin path is shown by `/plugin` and is usually under `~/.claude/plugins/`. Codex hooks time out after 10 seconds.
 
 ## Select and dispatch
 

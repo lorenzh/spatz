@@ -6,7 +6,7 @@ import { basename, join, resolve } from "node:path";
 import { buildPlugins } from "./build-plugins.ts";
 import { setReleaseVersion } from "./release-version.ts";
 
-test.skipIf(process.platform === "win32")(
+test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 	"plugin archives carry matching versions, hooks and verified release sources",
 	async () => {
 		const root = await mkdtemp(join(tmpdir(), "spatz-plugins-"));

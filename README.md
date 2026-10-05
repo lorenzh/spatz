@@ -74,8 +74,8 @@ In Claude Code, run `/plugin marketplace add lorenzh/spatz`, then install:
 - Install both to route and record together; keep `record: auto`.
 
 In Codex, run `codex plugin marketplace add lorenzh/spatz`, then `codex plugin add spatz-hooks@spatz`. Review and trust the hooks with `/hooks` before they run.
-Codex hooks have a 10-second timeout: run `npx -y @spatz/cli --version` once beforehand.
-For another plugin version or Bun's cache, follow the [warm-up instructions](docs/installation.md#use-with-codex).
+Codex hooks have a 10-second timeout: run `"<plugin root>/bin/spatz" --version` once to warm the plugin's pinned version. Codex caches plugins under `~/.codex/plugins/cache/`; see [installation](docs/installation.md#use-with-codex) for details.
+The plugins need a POSIX shell; native Windows Claude Code and Codex are not supported yet.
 
 For TypeSafe AI task classification, set `TYPESAFE_AI_API_KEY` in the CLI environment:
 

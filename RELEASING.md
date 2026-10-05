@@ -54,7 +54,7 @@ See [README.md](README.md#releases) for download and installation instructions.
 
 ## Claude Code plugins
 
-The shared build workflow packs both plugin directories once on Linux for releases and nightlies:
+The shared build workflow packs all three plugin directories once on Linux for releases and nightlies:
 
 - `spatz-claude-plugin-<version>.zip`: the `spatz` mod.
 - `spatz-claude-hooks-<version>.zip`: the `spatz-hooks` command hooks.
@@ -64,7 +64,7 @@ The shared build workflow packs both plugin directories once on Linux for releas
 Each file has a `.sha256` companion and an entry in `SHA256SUMS`.
 Asset filenames replace `+` with `-`. Versions inside manifests keep the original SemVer string.
 The build excludes generated mod types, local `tsconfig.json` and `node_modules` from ZIPs.
-Users install the CLI separately.
+Plugin launchers download the pinned CLI when needed.
 
 The repository marketplace keeps relative sources for installation from Git.
 The build generates the archive-source marketplace in `dist`. The repository marketplace keeps its sources.

@@ -15,7 +15,7 @@ test("the Codex plugin runs the two spatz hooks with a 10-second timeout", () =>
 				hooks: [
 					{
 						type: "command",
-						command: `"\${PLUGIN_ROOT}/bin/spatz" hook ${event} --agent codex`,
+						command: `sh "\${PLUGIN_ROOT}/bin/spatz" hook ${event} --agent codex`,
 						timeout: 10,
 					},
 				],
