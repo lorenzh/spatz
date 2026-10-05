@@ -1,4 +1,5 @@
 import { appendFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 // SemVer 2.0: numeric identifiers cannot have leading zeroes.
 const numeric = "(?:0|[1-9][0-9]*)";
@@ -15,13 +16,32 @@ export function releaseVersion(tag: string) {
 	return { version, prerelease: match[2] !== undefined };
 }
 
+export async function setReleaseVersion(
+	tag: string,
+	root = resolve(import.meta.dir, ".."),
+) {
+	const release = releaseVersion(tag);
+	for (const path of [
+		"packages/cli/package.json",
+		"packages/claude-mod/.claude-plugin/plugin.json",
+		"packages/claude-hooks/.claude-plugin/plugin.json",
+		".claude-plugin/marketplace.json",
+	]) {
+		const file = Bun.file(join(root, path));
+		// Preserve formatting: release builds run Biome after stamping these files.
+		const text = await file.text();
+		await Bun.write(
+			file,
+			text.replace(/("version"\s*:\s*)"[^"]*"/g, `$1"${release.version}"`),
+		);
+	}
+	return release;
+}
+
 if (import.meta.main) {
-	const { version, prerelease } = releaseVersion(process.argv[2] ?? "");
-	const file = Bun.file(
-		new URL("../packages/cli/package.json", import.meta.url),
+	const { version, prerelease } = await setReleaseVersion(
+		process.argv[2] ?? "",
 	);
-	const pkg = await file.json();
-	await Bun.write(file, `${JSON.stringify({ ...pkg, version }, null, "\t")}\n`);
 	if (process.env.GITHUB_OUTPUT)
 		await appendFile(
 			process.env.GITHUB_OUTPUT,
