@@ -28,6 +28,8 @@ export interface Decision {
 	effort: Effort;
 	scope: Scope;
 	escalated?: boolean;
+	/** An exploration pick on a hard or critical task. */
+	exploredRisky?: boolean;
 	candidates?: { model: string; effort: Effort }[];
 }
 
@@ -143,8 +145,13 @@ export async function suggest(
 					},
 				)
 			: undefined;
+		const c = result.classification;
+		const exploredRisky =
+			result.explored === true &&
+			(c?.difficulty === "hard" || (c?.criticality ?? "none") !== "none");
 		return {
 			...(candidates && { candidates }),
+			...(exploredRisky && { exploredRisky }),
 			suggestionId: result.suggestion_id,
 			model,
 			effort: first.effort,

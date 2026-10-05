@@ -40,6 +40,18 @@
 			"default": 2,
 			"description": "escalate moves to the next stronger pair after this many failing test or build results"
 		},
+		"respectPinned": {
+			"type": "boolean",
+			"title": "Respect pinned choices",
+			"default": true,
+			"description": "Do not route a spawn that names a model or an agent type other than general-purpose, nor its steps"
+		},
+		"exploreHard": {
+			"type": "boolean",
+			"title": "Explore on hard tasks",
+			"default": false,
+			"description": "Allow exploration picks on hard or critical tasks"
+		},
 		"spatz": {
 			"type": "string",
 			"title": "spatz executable",

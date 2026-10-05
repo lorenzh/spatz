@@ -68,6 +68,8 @@ How the pieces work:
 
 The Agent tool accepts only the aliases `sonnet`, `opus`, `haiku` and `fable` as model. At spawn the mod passes the alias that resolves to the chosen model. The table is fixed in the code. If the chosen model has no alias, the spawn stays unchanged. The model and effort are then set on each request of the agent. Requests accept full model ids.
 
+The mod rewrites only agents it routed. Step and escalation changes apply to an agent only when the mod decided for it at spawn (or, in the `step` scope, did not skip it as pinned). A spawn with an explicit `model` or a named agent type stays as the caller chose ([`respectPinned`](#config-keys)).
+
 Switching the model drops the prompt cache. This is why the main session needs its own setting.
 
 ## /spatz commands
@@ -94,6 +96,8 @@ Set them as plugin options (`userConfig`). The `/spatz` commands override the fi
 | `record` | `auto` | Usage recording, see below. |
 | `minPromptChars` | `20` | Shortest prompt that gets a new decision in `turn` and `escalate`. |
 | `escalateAfter` | `2` | Failing test or build results before `escalate` switches. |
+| `respectPinned` | `true` | Do not route a subagent spawn that sets a `model` or names an agent type other than `general-purpose`, and leave all its requests alone. The hook cannot see whether an agent definition pins a model, so every named type counts as pinned. Set `false` to route those spawns too. |
+| `exploreHard` | `false` | Allow [exploration](recommendation.md#exploration) picks on `hard` or critical tasks. By default the mod ignores such a pick and leaves the request unchanged. |
 | `spatz` | `spatz` | The CLI executable. The default runs the plugin's launcher (`sh <plugin root>/bin/spatz`); any other value is used as is. |
 | `models` | Empty | Use CLI defaults. A non-empty list overrides them, strongest model first. |
 
