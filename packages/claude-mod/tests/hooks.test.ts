@@ -323,6 +323,9 @@ describe("subagent scope (default)", () => {
 		expect(first.result.model).toBe("inherited");
 		expect(second.result.model).toBe("inherited");
 		expect(spawn.logs).toHaveLength(1);
+		expect(spawn.toasts).toEqual([
+			"spatz: CLI call failed, routing unchanged (details: claude --debug)",
+		]);
 
 		const step = session(
 			{ ...apply, scope: "step", main: true },
@@ -334,6 +337,7 @@ describe("subagent scope (default)", () => {
 				"inherited",
 			);
 		expect(step.logs).toHaveLength(1);
+		expect(step.toasts).toHaveLength(1);
 	});
 
 	test("a model without an alias leaves the spawn alone and still applies it on steps", async () => {

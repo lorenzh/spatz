@@ -85,6 +85,9 @@ export function register(on: On, options: PluginOptions = {}) {
 		logged = true;
 		try {
 			io.log(`spatz: decision failed, routing unchanged: ${error}`);
+			io.toast(
+				"spatz: CLI call failed, routing unchanged (details: claude --debug)",
+			);
 		} catch {}
 	};
 

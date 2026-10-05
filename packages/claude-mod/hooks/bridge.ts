@@ -100,7 +100,11 @@ export async function suggest(
 			{ timeoutMs: SUGGEST_TIMEOUT_MS },
 		);
 		if (exitCode !== 0) {
-			fail(new Error(`CLI exited ${exitCode}${stderr ? `: ${stderr}` : ""}`));
+			fail(
+				new Error(
+					`CLI exited ${exitCode}${stderr ? `: ${stderr.slice(0, 200)}` : ""}`,
+				),
+			);
 			return null;
 		}
 		const result = JSON.parse(stdout);
