@@ -1,5 +1,5 @@
 {
-	"name": "poc-model-suggestion",
+	"name": "spatz",
 	"type": "module",
 	"private": true,
 	"workspaces": [
@@ -14,10 +14,8 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",
-		"@types/bun": "latest",
-		"lefthook": "^2.1.16"
-	},
-	"peerDependencies": {
+		"@types/bun": "1.4.2",
+		"lefthook": "^2.1.16",
 		"typescript": "^7"
 	}
 }

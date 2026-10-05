@@ -45,7 +45,7 @@ spatz --version
 
 The npm package includes the Bun runtime. Keep optional dependencies enabled.
 Linux needs glibc. spatz does not support Alpine Linux.
-Windows x64 support is experimental. Some releases omit it.
+For Windows, see [Platform support](docs/installation.md#platform-support).
 
 For installation without Node.js, use a [release archive](#releases).
 For the unstable nightly version, use `npm install -g @spatz/cli@nightly`. To test a release candidate, use `npm install -g @spatz/cli@next`.
@@ -113,15 +113,14 @@ See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recomme
 | Claude Code `spatz` plugin | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
 | Codex `spatz` plugin | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
 | Claude Code `spatz-mod` plugin (mod) | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
-| Other agents | Request recommendations and report outcomes through the CLI. | [Installation](docs/installation.md) | CLI and plugin setup, runtime requirements, and release-specific installs. |
-| [CLI reference](docs/cli.md) |
+| Other agents | Request recommendations and report outcomes through the CLI. | [CLI reference](docs/cli.md) |
 
 The Claude Code mod supports `step`, `turn`, `subagent`, `session`, and `escalate` routing scopes.
 Hooks and the mod can run together. The mod's `record: auto` avoids duplicate usage recording with the `spatz` hooks plugin.
 
 ### Install for Claude Code
 
-Use macOS or Linux with a POSIX shell. The plugins do not support native Windows.
+Use macOS or Linux with a POSIX shell (see [Platform support](docs/installation.md#platform-support)).
 The plugins run the CLI through a bundled launcher: an installed `spatz` on `PATH` wins, otherwise it uses Bun or npx from the `PATH` Claude Code starts with.
 The mod needs Claude Code 2.1.287 or newer.
 
@@ -224,7 +223,7 @@ Archives include the runtime. You do not need Node.js or Bun installed.
 
 Choose `linux` or `darwin` (macOS), then `x64` or `arm64`.
 Apple Silicon uses `darwin-arm64`. Linux builds need glibc.
-Windows x64 ZIP archives are experimental. The agent plugins do not support native Windows.
+For Windows archives, see [Platform support](docs/installation.md#platform-support).
 
 Check the checksum before extraction. This Linux x64 example uses version `0.1.0`:
 
