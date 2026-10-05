@@ -190,7 +190,8 @@ export interface CoreDeps {
 export interface SuggestInput {
 	task: string;
 	/** Raw --models value, e.g. "claude-opus-5-5:low+medium+high,gpt-6-sol:medium". */
-	models: string;
+	models?: string;
+	family?: string;
 	dryRun: boolean;
 	scope?: RoutingScope;
 	source?: Agent;

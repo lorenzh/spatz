@@ -197,6 +197,7 @@ describe("suggest", () => {
 		const out = await s.api.suggest(suggestInput(task));
 
 		expect(out).toEqual({
+			models_source: "flag",
 			suggestion_id: ID1,
 			ranking: [
 				{ model: "openai/gpt-6-luna", effort: "low", estimate: 0.5, n: 0 },
@@ -1681,4 +1682,44 @@ test("transcript rewrites keep main and two agent windows separate", async () =>
 	} finally {
 		db.close();
 	}
+});
+
+describe("resolved candidates", () => {
+	test("family constrains Jev input, stored ranking and returned ranking", async () => {
+		const jev = fakeJev();
+		const { api, store } = setup({ jev, env: { SPATZ_MODELS: MODELS } });
+		const result = await api.suggest({
+			task: "Fix a bug",
+			dryRun: true,
+			family: "openai",
+		});
+		expect(result.models_source).toBe("env");
+		expect(
+			Object.keys(jev.requests[0]?.questions.best_candidate.criteria ?? {}),
+		).toEqual(["openai/gpt-6-luna:low"]);
+		expect(result.ranking.every((c) => c.model.startsWith("openai/"))).toBe(
+			true,
+		);
+		expect(store.getSuggestion(result.suggestion_id)?.ranking).toEqual(
+			result.ranking,
+		);
+	});
+	test("resolution and family failures do not fetch, classify or write", async () => {
+		const jev = fakeJev();
+		const { api, fetched, writes } = setup({ jev });
+		await expect(
+			api.suggest({ task: "Fix a bug", dryRun: true }),
+		).rejects.toThrow("No candidate models");
+		await expect(
+			api.suggest({
+				task: "Fix a bug",
+				models: "gpt-6-luna",
+				family: "claude",
+				dryRun: true,
+			}),
+		).rejects.toThrow("no matching candidates");
+		expect(fetched).toEqual([]);
+		expect(jev.requests).toEqual([]);
+		expect(writes()).toEqual([]);
+	});
 });

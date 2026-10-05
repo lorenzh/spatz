@@ -190,7 +190,16 @@ export interface Decision {
 	control: boolean;
 }
 
+export type ModelsSource =
+	| "flag"
+	| "env"
+	| "project"
+	| "user"
+	| "preset:claude-code"
+	| "preset:codex";
+
 export interface Suggestion {
+	models_source: ModelsSource;
 	suggestion_id: string;
 	ranking: RankingEntry[];
 	reason: string;
@@ -368,6 +377,8 @@ export interface StatsReport {
 // ---------- Config ----------
 
 export interface Config {
+	/** Selected file default. Validate only when suggestions use it. */
+	models?: { value: unknown; source: "project" | "user" };
 	/** false when opted out via env SPATZ_NO_JEV=1 or project file .spatz.json {"jev": false}. */
 	jevEnabled: boolean;
 	tuning: Tuning;

@@ -11,7 +11,7 @@ import type {
 	Suggestion,
 	TaskType,
 } from "@spatz/core";
-import { AGENTS, SCOPES, TASK_TYPES } from "@spatz/core";
+import { AGENTS, ModelsUsageError, SCOPES, TASK_TYPES } from "@spatz/core";
 import pkg from "../package.json";
 
 declare const SPATZ_VERSION: string | undefined;
@@ -25,7 +25,7 @@ export interface CliIO {
 
 const USAGE = `usage:
   spatz --version
-  spatz "<task>" --models <list> [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
+  spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
   spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
   spatz hook <event> [--agent codex]
@@ -90,6 +90,7 @@ function parse(argv: string[]) {
 				version: { type: "boolean" },
 				json: { type: "boolean" },
 				models: { type: "string" },
+				family: { type: "string" },
 				"dry-run": { type: "boolean" },
 				model: { type: "string" },
 				effort: { type: "string" },
@@ -236,7 +237,6 @@ export async function main(
 			};
 		} else {
 			const task = required(cmd, '"<task>"');
-			const models = required(v.models, "--models");
 			if (
 				v.scope !== undefined &&
 				!(SCOPES as readonly string[]).includes(v.scope)
@@ -249,7 +249,8 @@ export async function main(
 				throw new UsageError(`--source must be one of ${AGENTS.join(", ")}`);
 			const input = {
 				task,
-				models,
+				...(v.models !== undefined && { models: v.models }),
+				...(v.family !== undefined && { family: v.family }),
 				dryRun: v["dry-run"] ?? false,
 				...(v.scope !== undefined && { scope: v.scope as RoutingScope }),
 				...(v.source !== undefined && { source: v.source as Agent }),
@@ -277,6 +278,10 @@ export async function main(
 		io.stdout(json ? JSON.stringify(result) : text());
 		return 0;
 	} catch (e) {
+		if (e instanceof ModelsUsageError) {
+			io.stderr(`spatz: ${e.message}\n${USAGE}`);
+			return 2;
+		}
 		io.stderr(`spatz: ${e instanceof Error ? e.message : String(e)}`);
 		return 1;
 	}

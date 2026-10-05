@@ -105,3 +105,36 @@ describe("defaultDeps", () => {
 		s.dispose();
 	});
 });
+
+test("project models override user models without changing Jev opt-out", async () => {
+	await Bun.write(
+		join(home, ".spatz/config.json"),
+		JSON.stringify({ models: "gpt-6-luna" }),
+	);
+	expect((await loadConfig({ env: {}, homeDir: home, cwd })).models).toEqual({
+		value: "gpt-6-luna",
+		source: "user",
+	});
+	await Bun.write(
+		join(cwd, ".spatz.json"),
+		JSON.stringify({ jev: false, models: "claude-opus-5-5" }),
+	);
+	const cfg = await loadConfig({ env: {}, homeDir: home, cwd });
+	expect(cfg.models).toEqual({ value: "claude-opus-5-5", source: "project" });
+	expect(cfg.jevEnabled).toBe(false);
+	await Bun.write(join(cwd, ".spatz.json"), JSON.stringify({ jev: false }));
+	expect(
+		(await loadConfig({ env: {}, homeDir: home, cwd })).models?.source,
+	).toBe("user");
+});
+
+test.each(["{bad", "[]", "null"])(
+	"ignores malformed optional config %s",
+	async (text) => {
+		await Bun.write(join(cwd, ".spatz.json"), text);
+		await Bun.write(join(home, ".spatz/config.json"), text);
+		expect(
+			(await loadConfig({ env: {}, homeDir: home, cwd })).models,
+		).toBeUndefined();
+	},
+);

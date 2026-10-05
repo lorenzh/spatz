@@ -15,6 +15,7 @@ import { type CliIO, main } from "./main.ts";
 
 const suggestion: Suggestion = {
 	suggestion_id: "abc-123",
+	models_source: "flag",
 	ranking: [
 		{ model: "openai/gpt-6-sol", effort: "medium", estimate: 0.85, n: 7 },
 		{
@@ -148,13 +149,16 @@ describe("suggest", () => {
 		});
 	});
 
-	test("missing --models prints to stderr and exits 2", async () => {
-		const { io, err } = fakeIO();
+	test("omitted models and family pass through to core resolution", async () => {
+		const { io } = fakeIO();
 		const { api, calls } = fakeApi();
-		const code = await main(["fix bug"], io, api);
-		expect(code).toBe(2);
-		expect(err.join("\n")).toContain("--models");
-		expect(calls).toEqual([]);
+		expect(await main(["fix bug", "--family", "gpt"], io, api)).toBe(0);
+		expect(calls).toEqual([
+			{
+				method: "suggest",
+				args: [{ task: "fix bug", family: "gpt", dryRun: false }],
+			},
+		]);
 	});
 
 	test("missing task exits 2", async () => {
