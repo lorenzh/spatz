@@ -108,6 +108,8 @@ describe("isIgnoredHookInput", () => {
 describe("detectCommandKind", () => {
 	test.each([
 		"make clean",
+		"make clean -j4",
+		"make test --help",
 		"make install",
 		"make -j4 clean",
 		"pytest --collect-only",

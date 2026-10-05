@@ -26,14 +26,27 @@ const PREFIX = String.raw`^(?:\w+=\S*\s+)*(?:(?:rtk(?:\s+proxy)?|time|npx|bunx|p
 const TEST_OR_BUILD = new RegExp(
 	String.raw`${PREFIX}(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:test|build)|pytest|(?:go|cargo)\s+(?:test|build)|vitest|jest|tsc|make(?:\s+-\S+)*(?:\s+(?:build|all|test|check))?(?:\s+-\S+)*\s*$)(?:\s|$)`,
 );
+const SETUP = /^(?:cd|pushd|export)(?:\s|$)/;
+// Failure text of a run that never reached the runner, as in packages/core/src/signals.
+const NOT_RUN =
+	/No such file or directory|[Pp]ermission denied|command not found/;
 function isTestOrBuild(command: string): boolean {
 	const plain = command.trim().replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, "''");
 	if (/[|;&\n`]|\$\(/.test(plain.replaceAll("&&", " "))) return false;
-	const last = plain.split("&&").pop()?.trim() ?? "";
+	const segs = plain.split("&&").map((x) => x.trim());
+	const last = segs.pop() ?? "";
+	if (!segs.every((x) => SETUP.test(x))) return false;
 	return (
 		TEST_OR_BUILD.test(last) &&
 		!/\s(?:--collect-only|--co|--help|-h|--version)(?:\s|$)/.test(last)
 	);
+}
+
+/** An interrupted run, or an error text of a run that never started, is no failure of the tests. */
+function neverRan(result: unknown): boolean {
+	if (typeof result === "string") return NOT_RUN.test(result);
+	const r = result as { interrupted?: boolean; stderr?: string } | null;
+	return !!r && (r.interrupted === true || NOT_RUN.test(r.stderr ?? ""));
 }
 
 /** What the hooks use of `$`; a hooks module may pass `$` only to a top-level function, so helpers take this. */
@@ -343,7 +356,8 @@ export function register(on: On, options: PluginOptions = {}) {
 				ESCALATING.includes(s.scope) &&
 				e.tool === "Bash" &&
 				result.isError &&
-				isTestOrBuild(e.command)
+				isTestOrBuild(e.command) &&
+				!neverRan(result.result)
 			)
 				escalate(io, e.agentId);
 		} catch {}

@@ -192,6 +192,7 @@ function session(
 		command: string,
 		agentId: string | undefined,
 		isError: boolean,
+		result: unknown = "failed",
 	) =>
 		hook<
 			(
@@ -204,7 +205,7 @@ function session(
 			{ tool: "Bash", command, tool_use_id: "t", agentId } as ToolCallInput,
 			async () =>
 				(isError
-					? { isError: true, result: "failed" }
+					? { isError: true, result }
 					: { result: { stdout: "" } }) as ToolCallResult,
 		);
 
@@ -702,6 +703,22 @@ describe("escalate scope", () => {
 		await shown.bash("bun test", "a1", true);
 		expect((await shown.step({ turnId: "t1", agentId: "a1" })).seen.model).toBe(
 			"inherited",
+		);
+	});
+
+	test("excluded commands and runs that never ran do not escalate", async () => {
+		const s = sessionWith({ escalateAfter: 1 });
+		await s.spawn({});
+		for (const c of [
+			"make clean -j4",
+			"make test --help",
+			"cd x && ls && bun test",
+		])
+			await s.bash(c, "a1", true);
+		await s.bash("bun test", "a1", true, "sh: bun: command not found");
+		await s.bash("bun test", "a1", true, { interrupted: true });
+		expect((await s.step({ turnId: "t1", agentId: "a1" })).seen.effort).toBe(
+			"high",
 		);
 	});
 
