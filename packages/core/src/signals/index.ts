@@ -37,7 +37,7 @@ export function isIgnoredHookInput(input: HookInput): boolean {
 // A command segment starts at the beginning or after ;, &, |.
 const START = String.raw`(?:^|[;&|]\s*)`;
 const SPATZ_SUGGEST = new RegExp(
-	String.raw`${START}(?:\S*/)?spatz\s+(?!(?:report|hook|stats|usage)\b)\S`,
+	String.raw`${START}(?:rtk(?:\s+proxy)?\s+)?(?:(?:[^\s;&|]*/)?spatz|(?:npx(?:\s+-y)?|bunx)\s+@spatz/cli(?:@[0-9A-Za-z.+_-]+)?)\s+(?!(?:report|hook|stats|usage|link)(?:\s|$)|-)\S`,
 );
 // ponytail: keyword regexes, not a shell parser; extend the lists when a tool is missed.
 // Each matches only at the command position of a segment: after env assignments and runner prefixes.
@@ -65,7 +65,15 @@ const SETUP = /^(?:cd|pushd|export)(?:\s|$)/;
  */
 export function detectCommandKind(command: string): CommandKind {
 	const plain = unquote(command.trim());
-	if (SPATZ_SUGGEST.test(plain)) return "spatz-suggest";
+	// Preserve quoted executable paths and subcommands without exposing quoted shell syntax.
+	const suggestion = command
+		.trim()
+		.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (quoted) => {
+			const value = quoted.slice(1, -1);
+			if (/^(?:report|hook|stats|usage|link)$/.test(value)) return value;
+			return /^[^"'`;|&\n()]+\/spatz$/.test(value) ? "spatz" : "''";
+		});
+	if (SPATZ_SUGGEST.test(suggestion)) return "spatz-suggest";
 	if (/[|;&\n`]|\$\(/.test(plain.replaceAll("&&", " "))) return null;
 	const segs = plain.split("&&").map((s) => s.trim());
 	const last = segs.pop() ?? "";
