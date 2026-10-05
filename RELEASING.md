@@ -66,7 +66,7 @@ The extractor uses these sources and selection rules:
   The extractor reads `surfaces.cc.model_selector_config` for `id: cc` without executing the embedded JavaScript.
   It selects the newest main-picker Opus and Sonnet offered on `first_party`. It excludes disabled and overflow entries.
   Efforts must appear in both `thinking.effort_options` and `runtime.effort_levels`.
-- **Codex:** the installed CLI returns its built-in picker metadata through `codex debug models` without login.
+- **Codex:** the installed CLI returns its built-in picker metadata through `codex debug models --bundled` without login.
   The extractor selects `visibility: list` entries from the newest GPT major generation.
   This excludes hidden entries and older generations. Efforts come from `supported_reasoning_levels`.
 
@@ -75,15 +75,26 @@ If a harness or selected Claude family disappears, the script fails.
 It also rejects empty effort lists.
 It validates the complete schema before writing `catalog/harness-models.json`.
 The file sorts models by ID and efforts by spatz's effort order.
-When model data or harness versions change, `updated` records the UTC date.
-Otherwise it keeps its previous value.
+When model IDs or efforts change, `updated` records the UTC date.
+Version-only changes do not rewrite the file. Stored harness versions describe the last model update.
 Account entitlements can differ from these package defaults.
 
 When the file changes, the workflow commits it on `catalog/update-<YYYYMMDD>` using `github-actions[bot]`.
 It creates a PR to `main`, then runs `gh pr merge --merge --delete-branch`.
 A repeated run updates today's open branch with a force-with-lease push and reuses its PR.
 If the file has no changes, the workflow exits without a commit.
-The job has `contents: write` and `pull-requests: write`. Other jobs keep read-only permissions.
+The workflow uses two jobs, each with a timeout:
+
+- `extract` has `contents: read` and a 15-minute timeout. Its checkout stores no credentials.
+  It runs the extractor and uploads only `catalog/harness-models.json` with the pinned artifact action.
+- `publish` needs `extract` and has a 10-minute timeout. It checks out `main` again without stored credentials.
+  The pinned download action puts the artifact in a temporary directory.
+  The repository parser checks the JSON and its size before the job copies that one file.
+  This job never installs or executes downloaded harness packages or artifact code.
+  Only this job has `contents: write` and `pull-requests: write`.
+
+Before checking for changes, `publish` closes older open `catalog/update-<YYYYMMDD>` PRs from `github-actions[bot]`.
+It uses the bot token and only closes branches in this repository. It keeps today's PR for retries.
 
 `catalog/` is deliberately absent from the nightly workflow's change filter.
 Catalog-only commits need no build because installed CLIs fetch the file from `main`.

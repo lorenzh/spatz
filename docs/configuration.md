@@ -127,10 +127,13 @@ Codex wins when both markers exist. This selects the inner harness when Codex ru
 Environment markers cannot establish arbitrary nesting order. For Claude launched inside Codex, set a model default or pass `--models`.
 
 Codex [injects `CODEX_THREAD_ID` into command environments](https://github.com/openai/codex/blob/main/codex-rs/core/src/exec_env.rs).
-Its [effort definitions](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs) include `low`, `medium` and `high`.
+Presets use every effort listed for each model in the harness catalog.
 The implementation environment confirmed `CLAUDECODE=1` and `CLAUDE_CODE_ENTRYPOINT=cli` in Claude Code.
 
 The presets come from the [harness catalog](#harness-catalog) and keep `models_source` as `preset:<harness>`.
+Defaults include `xhigh` and `max` where listed.
+Critical tasks and cold start select the most expensive candidate pair, now at `max`.
+To narrow candidates, set `models` in config or `SPATZ_MODELS`, for example `claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high`.
 They describe harness defaults, not account entitlements. If a preset does not match your dispatch tools, use `--models` or a configured default.
 Without a detected harness or model default, spatz exits 2 with configuration instructions.
 
@@ -142,10 +145,14 @@ The catalog URL is [`https://raw.githubusercontent.com/lorenzh/spatz/main/catalo
 
 spatz stores the validated document under `catalog` in `~/.spatz/harness-models.json`, with `fetched_at` in epoch milliseconds.
 It uses the same 24-hour lifetime and 3-second timeout as the OpenRouter cache.
-A fresh cache skips the request. An expired cache triggers a request.
+A fresh cache skips the request. An expired cache or future `fetched_at` triggers a request.
+The harness catalog and OpenRouter requests run in parallel.
 If the request fails, spatz uses the last valid cache.
 If no valid cache exists, spatz uses the JSON bundled into the executable at build time.
-Unknown schema versions and malformed documents count as failures. A failed request never replaces a valid cache.
+Unknown schema versions and malformed known harnesses count as failures. A failed request never replaces a valid cache.
+The parser ignores unknown harnesses and extra fields. Only breaking changes need a schema bump.
+Known harnesses allow up to 50 models, IDs up to 64 characters, and valid spatz efforts.
+Downloads stop above 256 KiB.
 
 `SPATZ_NO_NETWORK=1` skips both catalog requests and Jev classification for suggestions.
 It uses stale caches and keyword classification.

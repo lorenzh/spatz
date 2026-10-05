@@ -347,7 +347,17 @@ export function register(on: On, options: PluginOptions = {}) {
 		if (count < s.escalateAfter) return;
 		const map = agentId ? agents : turns;
 		const current = map.get(key);
-		const up = current && stronger(s.models, current);
+		const pairs = current?.candidates ?? [];
+		const at = pairs.findIndex(
+			(p) => p.model === current?.model && p.effort === current?.effort,
+		);
+		const up =
+			current &&
+			(s.models.length
+				? stronger(s.models, current)
+				: at >= 0
+					? pairs[at + 1]
+					: undefined);
 		if (!current || !up) return;
 		const d = { ...current, ...up, escalated: true };
 		map.set(key, d);

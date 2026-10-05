@@ -307,6 +307,17 @@ describe("subagent scope (default)", () => {
 		]);
 	});
 
+	test("empty models omit the flag; explicit models override CLI defaults", async () => {
+		for (const models of [undefined, "", " , ", "claude-opus-5-5:high"]) {
+			const s = session({ ...apply, ...(models !== undefined && { models }) });
+			await s.spawn({});
+			const argv = s.suggests()[0] as string[];
+			expect(argv.includes("--models")).toBe(models === "claude-opus-5-5:high");
+			if (argv.includes("--models"))
+				expect(s.flag(argv, "--models")).toBe(models);
+		}
+	});
+
 	test("a custom executable passes through unchanged", async () => {
 		const s = session({ ...apply, spatz: "/opt/bin/spatz-custom" });
 		await s.spawn({});
@@ -621,7 +632,14 @@ describe("session scope", () => {
 describe("escalate scope", () => {
 	const sessionWith = (extra: Options = {}) =>
 		session(
-			{ ...apply, scope: "escalate", main: true, ...extra },
+			{
+				...apply,
+				scope: "escalate",
+				main: true,
+				models:
+					"claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high",
+				...extra,
+			},
 			{
 				suggestion: (n) => ({
 					exitCode: 0,
@@ -876,4 +894,36 @@ describe("/spatz command", () => {
 			expect(await s.command(args)).toContain("usage: /spatz");
 		expect(await s.command("status")).toContain("mode: show");
 	});
+});
+
+test("default candidates accept and escalate through catalog xhigh and max", async () => {
+	const s = session(
+		{ ...apply, scope: "escalate", escalateAfter: 1 },
+		{
+			suggestion: () => ({
+				exitCode: 0,
+				stderr: "",
+				stdout: JSON.stringify({
+					suggestion_id: "s1",
+					ranking: [{ model: "anthropic/claude-sonnet-5.5", effort: "xhigh" }],
+					candidates: [
+						{ model: "anthropic/claude-sonnet-5.5", effort: "xhigh" },
+						{ model: "anthropic/claude-sonnet-5.5", effort: "max" },
+					],
+				}),
+			}),
+		},
+	);
+	await s.spawn({});
+	expect((await s.step({ turnId: "t1", agentId: "a1" })).seen.effort).toBe(
+		"xhigh",
+	);
+	await s.bash("bun test", "a1", true);
+	expect((await s.step({ turnId: "t1", agentId: "a1" })).seen.effort).toBe(
+		"max",
+	);
+	await s.bash("bun test", "a1", true);
+	expect((await s.step({ turnId: "t1", agentId: "a1" })).seen.effort).toBe(
+		"max",
+	);
 });

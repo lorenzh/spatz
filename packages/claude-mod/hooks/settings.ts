@@ -23,9 +23,6 @@ export interface Settings {
 	models: string[];
 }
 
-export const DEFAULT_MODELS =
-	"claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high";
-
 type Options = Readonly<Record<string, unknown>>;
 
 const oneOf = <T extends string>(
@@ -52,7 +49,7 @@ export function readSettings(options: Options): Settings {
 		minPromptChars: count(options.minPromptChars, 20),
 		escalateAfter: Math.max(1, count(options.escalateAfter, 2)),
 		spatz: text("spatz", "spatz"),
-		models: text("models", DEFAULT_MODELS)
+		models: text("models", "")
 			.split(",")
 			.map((model) => model.trim())
 			.filter(Boolean),

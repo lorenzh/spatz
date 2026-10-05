@@ -1,8 +1,8 @@
 # spatz
 
-Harness model defaults refresh from a [daily catalog](docs/configuration.md#harness-catalog), without a CLI release.
-
 **Choose a model and effort for your coding task. Learn from the result.**
+
+Harness model defaults refresh from a [daily catalog](docs/configuration.md#harness-catalog), without a CLI release.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/lorenzh/spatz)](https://github.com/lorenzh/spatz/releases/latest)

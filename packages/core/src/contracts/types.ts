@@ -199,6 +199,8 @@ export type ModelsSource =
 	| "preset:codex";
 
 export interface Suggestion {
+	/** Resolved cost-ordered ladder for the Claude mod. */
+	candidates?: { model: string; effort: Effort }[];
 	models_source: ModelsSource;
 	suggestion_id: string;
 	ranking: RankingEntry[];

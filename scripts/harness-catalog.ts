@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import {
+	HARNESSES,
 	type HarnessCatalog,
 	type HarnessModel,
 	parseHarnessCatalog,
@@ -164,7 +165,7 @@ async function install(pkg: string, dir: string): Promise<string> {
 
 async function extractClaude(dir: string) {
 	const version = await install("@anthropic-ai/claude-code@latest", dir);
-	const platform = process.platform === "darwin" ? "darwin" : process.platform;
+	const platform = process.platform;
 	const arch = process.arch === "arm64" ? "arm64" : "x64";
 	const binary = join(
 		dir,
@@ -179,18 +180,43 @@ async function extractCodex(dir: string) {
 	const version = await install("@openai/codex@latest", dir);
 	await mkdir(join(dir, ".codex"));
 	const binary = join(dir, "node_modules/@openai/codex/bin/codex.js");
-	const output = run(process.execPath, [binary, "debug", "models"], dir);
-	const models = parseCodexModelCatalog(JSON.parse(output));
-	if (!models.length)
-		throw new Error("Codex picker extraction returned no current models");
-	return { version, models };
+	const output = run(
+		process.execPath,
+		[binary, "debug", "models", "--bundled"],
+		dir,
+	);
+	return { version, models: parseCodexModelCatalog(JSON.parse(output)) };
 }
 
-function sameData(
-	a: HarnessCatalog["harnesses"],
-	b: HarnessCatalog["harnesses"],
-): boolean {
-	return JSON.stringify(a) === JSON.stringify(b);
+/** Keep the file and source versions unchanged until the model data changes. */
+export async function writeHarnessCatalog(
+	outputPath: string,
+	harnesses: HarnessCatalog["harnesses"],
+): Promise<HarnessCatalog> {
+	const catalog: HarnessCatalog = {
+		schema: 1,
+		updated: new Date().toISOString().slice(0, 10),
+		harnesses,
+	};
+	if (!parseHarnessCatalog(catalog))
+		throw new Error("Extracted harness catalog failed schema validation");
+	const old = parseHarnessCatalog(
+		await Bun.file(outputPath)
+			.json()
+			.catch(() => null),
+	);
+	if (
+		old &&
+		HARNESSES.every(
+			(h) =>
+				JSON.stringify(old.harnesses[h].models) ===
+				JSON.stringify(harnesses[h].models),
+		)
+	)
+		return old;
+	await mkdir(resolve(outputPath, ".."), { recursive: true });
+	await writeFile(outputPath, `${JSON.stringify(catalog, null, "\t")}\n`);
+	return catalog;
 }
 
 export async function extractHarnessCatalog(
@@ -206,22 +232,10 @@ export async function extractHarnessCatalog(
 			extractClaude(join(temp, "claude")),
 			extractCodex(join(temp, "codex")),
 		]);
-		const harnesses = { "claude-code": claude, codex };
-		const old = parseHarnessCatalog(
-			await Bun.file(outputPath)
-				.json()
-				.catch(() => null),
-		);
-		const updated =
-			old && sameData(old.harnesses, harnesses)
-				? old.updated
-				: new Date().toISOString().slice(0, 10);
-		const catalog: HarnessCatalog = { schema: 1, updated, harnesses };
-		if (!parseHarnessCatalog(catalog))
-			throw new Error("Extracted harness catalog failed schema validation");
-		await mkdir(resolve(outputPath, ".."), { recursive: true });
-		await writeFile(outputPath, `${JSON.stringify(catalog, null, "\t")}\n`);
-		return catalog;
+		return await writeHarnessCatalog(outputPath, {
+			"claude-code": claude,
+			codex,
+		});
 	} finally {
 		await rm(temp, { recursive: true, force: true });
 	}

@@ -18,40 +18,36 @@ export interface HarnessCatalog {
 
 const object = (v: unknown): v is Record<string, unknown> =>
 	v !== null && typeof v === "object" && !Array.isArray(v);
-const keys = (v: Record<string, unknown>, names: readonly string[]) =>
-	Object.keys(v).length === names.length && names.every((name) => name in v);
 
-/** Strict schema 1 check. Reject the whole document if any harness is invalid. */
+/** Validate known harnesses; additive fields and harnesses do not need a schema bump. */
 export function parseHarnessCatalog(value: unknown): HarnessCatalog | null {
 	if (
 		!object(value) ||
-		!keys(value, ["schema", "updated", "harnesses"]) ||
 		value.schema !== 1 ||
 		typeof value.updated !== "string" ||
 		!/^\d{4}-\d{2}-\d{2}$/.test(value.updated) ||
 		!Number.isFinite(Date.parse(value.updated)) ||
 		new Date(value.updated).toISOString().slice(0, 10) !== value.updated ||
-		!object(value.harnesses) ||
-		!keys(value.harnesses, HARNESSES)
+		!object(value.harnesses)
 	)
 		return null;
 	for (const harness of HARNESSES) {
 		const entry = value.harnesses[harness];
 		if (
 			!object(entry) ||
-			!keys(entry, ["version", "models"]) ||
 			typeof entry.version !== "string" ||
 			!/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(entry.version) ||
 			!Array.isArray(entry.models) ||
-			entry.models.length === 0
+			entry.models.length === 0 ||
+			entry.models.length > 50
 		)
 			return null;
 		const ids = new Set<string>();
 		for (const model of entry.models) {
 			if (
 				!object(model) ||
-				!keys(model, ["id", "efforts"]) ||
 				typeof model.id !== "string" ||
+				model.id.length > 64 ||
 				!/^[a-z0-9][a-z0-9._-]*$/.test(model.id) ||
 				ids.has(model.id) ||
 				!Array.isArray(model.efforts) ||
@@ -91,7 +87,10 @@ export async function loadHarnessCatalog(
 	}
 	const fallback = cache ?? BUNDLED_HARNESS_CATALOG;
 	const now = clock.now();
-	if (env.SPATZ_NO_NETWORK === "1" || (cache && now - fetchedAt < ttlMs))
+	if (
+		env.SPATZ_NO_NETWORK === "1" ||
+		(cache && fetchedAt <= now && now - fetchedAt < ttlMs)
+	)
 		return fallback;
 	const abort = new AbortController();
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -108,8 +107,23 @@ export async function loadHarnessCatalog(
 			timeout,
 		]);
 		if (!response.ok) return fallback;
+		if (!response.body) return fallback;
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let size = 0;
+		try {
+			while (true) {
+				const { done, value } = await Promise.race([reader.read(), timeout]);
+				if (done) break;
+				size += value.byteLength;
+				if (size > 256 * 1024) return fallback;
+				chunks.push(value);
+			}
+		} finally {
+			void reader.cancel().catch(() => {});
+		}
 		const parsed = parseHarnessCatalog(
-			await Promise.race([response.json(), timeout]),
+			JSON.parse(Buffer.concat(chunks).toString()),
 		);
 		if (!parsed) return fallback;
 		catalog = parsed;

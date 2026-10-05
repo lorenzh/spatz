@@ -48,7 +48,7 @@ const load = (fetch: FetchFn, env = {}, timeoutMs = 20) =>
 		timeoutMs,
 	});
 
-test("strict schema rejects unknown fields, versions, missing harnesses and malformed models", () => {
+test("schema rejects breaking versions, missing harnesses and malformed known values", () => {
 	expect(parseHarnessCatalog(catalog)).toEqual(catalog);
 	expect(BUNDLED_HARNESS_CATALOG).not.toBeNull();
 	const bad: unknown[] = [
@@ -56,19 +56,20 @@ test("strict schema rejects unknown fields, versions, missing harnesses and malf
 		[],
 		{},
 		{ ...catalog, schema: 2 },
-		{ ...catalog, extra: true },
 		{ ...catalog, updated: "2026-02-30" },
 		{ ...catalog, updated: "yesterday" },
 		{ ...catalog, harnesses: { codex: catalog.harnesses.codex } },
-		{
-			...catalog,
-			harnesses: { ...catalog.harnesses, other: catalog.harnesses.codex },
-		},
 	];
 	for (const entry of [
 		{ version: "latest", models: catalog.harnesses.codex.models },
 		{ version: "1.0.0", models: [] },
-		{ ...catalog.harnesses.codex, unknown: 1 },
+		{
+			version: "1.0.0",
+			models: Array.from({ length: 51 }, (_, i) => ({
+				id: `gpt-${i}`,
+				efforts: ["high"],
+			})),
+		},
 		{
 			...catalog.harnesses.codex,
 			models: [
@@ -82,7 +83,7 @@ test("strict schema rejects unknown fields, versions, missing harnesses and malf
 			{ id: "gpt-test", efforts: ["high", "high"] },
 			{ id: "gpt-test", efforts: ["turbo"] },
 			{ id: "gpt-test", efforts: [1] },
-			{ id: "gpt-test", efforts: ["high"], extra: true },
+			{ id: "g".repeat(65), efforts: ["high"] },
 		].map((model) => ({ version: "1.0.0", models: [model] })),
 	])
 		bad.push({ ...catalog, harnesses: { ...catalog.harnesses, codex: entry } });
@@ -173,4 +174,65 @@ test("timeout bounds both fetch and response body, even when fetch ignores abort
 test("cache write failure does not discard a valid download", async () => {
 	cachePath = dir;
 	expect(await load(async () => Response.json(catalog))).toEqual(catalog);
+});
+
+test("schema 1 accepts additive fields and ignores unknown harnesses", () => {
+	const future = {
+		...catalog,
+		extra: true,
+		harnesses: {
+			...catalog.harnesses,
+			future: { unrecognized: true },
+			codex: {
+				...catalog.harnesses.codex,
+				extra: true,
+				models: Array.from({ length: 50 }, (_, i) => ({
+					id: `g${i}`.padEnd(64, "a"),
+					efforts: ["max"],
+					extra: true,
+				})),
+			},
+		},
+	};
+	expect(parseHarnessCatalog(future)).not.toBeNull();
+});
+
+test("future cache timestamps are stale", async () => {
+	await cache(NOW + DAY);
+	let called = false;
+	expect(
+		await load(async () => {
+			called = true;
+			return Response.json(BUNDLED_HARNESS_CATALOG);
+		}),
+	).toEqual(BUNDLED_HARNESS_CATALOG);
+	expect(called).toBe(true);
+});
+
+test("body cap stops oversized streams and preserves stale cache", async () => {
+	await cache(NOW - DAY);
+	let cancelled = false;
+	const bytes = new TextEncoder().encode(
+		`${JSON.stringify(catalog)}${" ".repeat(256 * 1024)}`,
+	);
+	expect(
+		await load(
+			async () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(bytes);
+						},
+						cancel() {
+							cancelled = true;
+						},
+					}),
+				),
+		),
+	).toEqual(catalog);
+	expect(cancelled).toBe(true);
+	expect((await Bun.file(cachePath).json()).fetched_at).toBe(NOW - DAY);
+	const atLimit = `${JSON.stringify(catalog)}`.padEnd(256 * 1024, " ");
+	expect(await load(async () => new Response(atLimit))).toEqual(catalog);
+	expect((await Bun.file(cachePath).json()).fetched_at).toBe(NOW);
 });

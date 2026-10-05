@@ -58,7 +58,10 @@ How the pieces work:
 - `turn` and `escalate` skip a prompt shorter than `minPromptChars` (20 characters). The turn then uses the last decision.
 - `session` decides at the first turn that has text. Later turns of the main session reuse that decision. The mod does not rewrite subagent requests in this scope.
 - `escalate` counts failing Bash results of test or build commands in the same turn or agent run. A failure is a Bash result that reports an error. After `escalateAfter` failures (2), the pair moves one step up. The mod keeps the new pair for the rest of that turn or run. The counter starts again after each switch.
-- The ladder comes from `models`. The list names the strongest model first. Inside a model the efforts go from low to high. If the current pair is already the top, or is not on the list, nothing changes.
+- With explicit `models`, the ladder names the strongest model first. Efforts ascend through `max`.
+  With empty `models`, the CLI supplies the resolved candidates in cost order.
+  If the current pair is at the top or absent from the ladder, nothing changes.
+  Older CLIs without a candidate ladder need explicit `models` for escalation.
 - For a subagent, the agent id exists only after the spawn. The mod asks spatz without session or agent id. After the spawn it calls `spatz link` with the real agent id and the session ([cli.md](cli.md)). Until then the suggestion is in no session window. If the link fails, the mod still routes, but the suggestion has no agent id. Step and escalation use the real agent id from the start.
 
 ## What the mod rewrites
@@ -92,9 +95,16 @@ Set them as plugin options (`userConfig`). The `/spatz` commands override the fi
 | `minPromptChars` | `20` | Shortest prompt that gets a new decision in `turn` and `escalate`. |
 | `escalateAfter` | `2` | Failing test or build results before `escalate` switches. |
 | `spatz` | `spatz` | The CLI executable. The default runs the plugin's launcher (`sh <plugin root>/bin/spatz`); any other value is used as is. |
-| `models` | `claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high` | Candidate pairs, strongest model first. |
+| `models` | Empty | Use CLI defaults. A non-empty list overrides them, strongest model first. |
 
 An unknown value falls back to its default.
+
+Empty `models` omits `--models`. The CLI checks `SPATZ_MODELS`, then project and user config, then the Claude Code catalog preset.
+The preset uses every catalog effort, including `xhigh` and `max`.
+Critical tasks and cold start choose the most expensive pair, now at `max`.
+To narrow candidates, set the mod option, config `models`, or `SPATZ_MODELS`.
+For example: `claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high`.
+See [model defaults](configuration.md#harness-catalog) for cache and offline behavior.
 
 ## Recording usage
 

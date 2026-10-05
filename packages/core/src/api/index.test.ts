@@ -1873,3 +1873,33 @@ test("SPATZ_NO_NETWORK skips both catalogs and Jev, including injected config", 
 	expect(fetched).toEqual([]);
 	expect(jev.requests).toEqual([]);
 });
+
+test("preset catalogs start in parallel and the mod receives the full resolved ladder", async () => {
+	const started: string[] = [];
+	const releases: (() => void)[] = [];
+	const { api } = setup({
+		env: { CLAUDECODE: "1" },
+		fetch: async (url) => {
+			started.push(url);
+			await new Promise<void>((resolve) => {
+				releases.push(resolve);
+				if (releases.length === 2) for (const release of releases) release();
+			});
+			return new Response("offline", { status: 503 });
+		},
+	});
+	const start = performance.now();
+	const result = await api.suggest({
+		task: "test",
+		dryRun: true,
+		source: "claude-code-mod",
+	});
+	expect(performance.now() - start).toBeLessThan(1000);
+	expect(started).toHaveLength(2);
+	expect(result.models_source).toBe("preset:claude-code");
+	expect(result.candidates?.length).toBeGreaterThan(3);
+	expect(result.candidates?.some((c) => c.effort === "max")).toBe(true);
+	expect(
+		result.candidates?.every((c) => c.model.startsWith("anthropic/")),
+	).toBe(true);
+});

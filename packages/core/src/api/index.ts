@@ -433,33 +433,45 @@ export function createApi(
 				);
 			const cfg = await getConfig();
 			const resolved = resolveModels(models, deps.env, cfg);
-			if (resolved.source.startsWith("preset:")) {
-				const harness = resolved.source.slice("preset:".length) as Harness;
-				const catalog = await loadHarnessCatalog({
-					fetch: deps.fetch,
-					env: deps.env,
-					cachePath: join(deps.homeDir, ".spatz", "harness-models.json"),
-					clock: deps.clock,
-					ttlMs: cfg.tuning.openRouterCacheMs,
-					timeoutMs: cfg.tuning.openRouterTimeoutMs,
-				});
-				resolved.value = formatHarnessModels(catalog.harnesses[harness].models);
-			}
-			let parsed: ReturnType<typeof parseModelsArg>;
-			try {
-				parsed = parseModelsArg(resolved.value);
-			} catch (error) {
-				throw labelModelsError(error, resolved.source);
-			}
-			const requested = filterFamily(parsed, family, cfg.aliases);
-			const openRouter = await loadOpenRouterModels({
+			const parseRequested = () => {
+				try {
+					return filterFamily(
+						parseModelsArg(resolved.value),
+						family,
+						cfg.aliases,
+					);
+				} catch (error) {
+					throw labelModelsError(error, resolved.source);
+				}
+			};
+			// Reject invalid explicit candidates before starting either request.
+			let requested = parseRequested();
+			const options = {
 				fetch: deps.fetch,
 				env: deps.env,
-				cachePath: deps.openRouterCachePath,
 				clock: deps.clock,
 				ttlMs: cfg.tuning.openRouterCacheMs,
 				timeoutMs: cfg.tuning.openRouterTimeoutMs,
-			});
+			};
+			const [harnessCatalog, openRouter] = await Promise.all([
+				resolved.source.startsWith("preset:")
+					? loadHarnessCatalog({
+							...options,
+							cachePath: join(deps.homeDir, ".spatz", "harness-models.json"),
+						})
+					: null,
+				loadOpenRouterModels({
+					...options,
+					cachePath: deps.openRouterCachePath,
+				}),
+			]);
+			if (harnessCatalog) {
+				const harness = resolved.source.slice("preset:".length) as Harness;
+				resolved.value = formatHarnessModels(
+					harnessCatalog.harnesses[harness].models,
+				);
+				requested = parseRequested();
+			}
 			const catalog = buildCatalog(requested, openRouter, cfg);
 			if (catalog.length === 0)
 				throw new Error("--models: no usable candidate");
@@ -506,6 +518,9 @@ export function createApi(
 				return {
 					suggestion_id: id,
 					models_source: resolved.source,
+					...(source === "claude-code-mod" && {
+						candidates: catalog.map(({ model, effort }) => ({ model, effort })),
+					}),
 					ranking: d.ranking,
 					reason: d.reason,
 					classification: {
