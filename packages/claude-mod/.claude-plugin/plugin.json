@@ -49,8 +49,8 @@
 		"models": {
 			"type": "string",
 			"title": "Models",
-			"default": "claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high",
-			"description": "Claude model candidates, strongest model first"
+			"default": "",
+			"description": "Empty uses CLI defaults: SPATZ_MODELS, config, then the Claude Code catalog preset. Otherwise, Claude candidates, strongest model first."
 		}
 	}
 }

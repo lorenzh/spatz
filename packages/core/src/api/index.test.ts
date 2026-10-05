@@ -1816,3 +1816,90 @@ describe("resolved candidates", () => {
 		expect(writes()).toEqual([]);
 	});
 });
+
+test("harness catalog is used only at preset precedence", async () => {
+	const remote = {
+		schema: 1,
+		updated: "2026-10-05",
+		harnesses: {
+			"claude-code": {
+				version: "2.1.0",
+				models: [{ id: "claude-new", efforts: ["high"] }],
+			},
+			codex: {
+				version: "0.100.0",
+				models: [{ id: "gpt-new", efforts: ["low"] }],
+			},
+		},
+	};
+	const urls: string[] = [];
+	const { api } = setup({
+		env: { CODEX_THREAD_ID: "t" },
+		fetch: async (url) => {
+			urls.push(url);
+			return Response.json(
+				url.includes("raw.githubusercontent.com") ? remote : { data: [] },
+			);
+		},
+	});
+	const result = await api.suggest({ task: "test", dryRun: true });
+	expect(result.models_source).toBe("preset:codex");
+	expect(result.ranking.map((m) => [m.model, m.effort])).toEqual([
+		["openai/gpt-new", "low"],
+	]);
+	expect(urls.some((url) => url.includes("raw.githubusercontent.com"))).toBe(
+		true,
+	);
+	urls.length = 0;
+	await api.suggest({
+		task: "test",
+		models: "gpt-explicit:high",
+		dryRun: true,
+	});
+	expect(urls.some((url) => url.includes("raw.githubusercontent.com"))).toBe(
+		false,
+	);
+});
+
+test("SPATZ_NO_NETWORK skips both catalogs and Jev, including injected config", async () => {
+	const jev = fakeJev();
+	const { api, fetched } = setup({
+		env: { SPATZ_NO_NETWORK: "1", CODEX_THREAD_ID: "t" },
+		jev,
+	});
+	const result = await api.suggest({ task: "test", dryRun: true });
+	expect(result.models_source).toBe("preset:codex");
+	expect(result.ranking.length).toBeGreaterThan(0);
+	expect(fetched).toEqual([]);
+	expect(jev.requests).toEqual([]);
+});
+
+test("preset catalogs start in parallel and the mod receives the full resolved ladder", async () => {
+	const started: string[] = [];
+	const releases: (() => void)[] = [];
+	const { api } = setup({
+		env: { CLAUDECODE: "1" },
+		fetch: async (url) => {
+			started.push(url);
+			await new Promise<void>((resolve) => {
+				releases.push(resolve);
+				if (releases.length === 2) for (const release of releases) release();
+			});
+			return new Response("offline", { status: 503 });
+		},
+	});
+	const start = performance.now();
+	const result = await api.suggest({
+		task: "test",
+		dryRun: true,
+		source: "claude-code-mod",
+	});
+	expect(performance.now() - start).toBeLessThan(1000);
+	expect(started).toHaveLength(2);
+	expect(result.models_source).toBe("preset:claude-code");
+	expect(result.candidates?.length).toBeGreaterThan(3);
+	expect(result.candidates?.some((c) => c.effort === "max")).toBe(true);
+	expect(
+		result.candidates?.every((c) => c.model.startsWith("anthropic/")),
+	).toBe(true);
+});

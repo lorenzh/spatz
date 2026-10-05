@@ -134,3 +134,17 @@ test("ladder runs from the weakest pair to the strongest model at its highest ef
 	).toBeNull();
 	expect(stronger(models, { model: "other", effort: "low" })).toBeNull();
 });
+
+test("bridge accepts max effort from CLI defaults", async () => {
+	const result = await suggest(
+		async () => ({
+			exitCode: 0,
+			stderr: "",
+			stdout: good.replace('"high"', '"max"'),
+		}),
+		"task",
+		[],
+		{ scope: "turn" },
+	);
+	expect(result?.effort).toBe("max");
+});

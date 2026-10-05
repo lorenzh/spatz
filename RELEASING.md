@@ -1,8 +1,8 @@
 ---
 title: Releasing spatz
-description: How to publish CLI and Claude Code plugin archives and npm packages, and control nightly builds.
+description: How to publish CLI and Claude Code plugin archives and npm packages, and control nightly builds and daily harness catalog updates.
 tags: [spatz, cli, releases]
-keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
+keywords: [release, nightly, catalog, harness, workflow, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
 ---
 
 # Releasing spatz
@@ -51,6 +51,55 @@ Use your host's OS and architecture in the archive name. The build script suppor
 The smoke test checks the checksum, version, dry-run suggestion, and DuckDB statistics outside the checkout.
 It uses the preinstalled DuckDB SQLite extension and sets dead HTTP proxies.
 See [README.md](README.md#releases) for download and installation instructions.
+
+## Daily harness catalog
+
+`.github/workflows/harness-catalog.yml` runs on `main` daily at 04:00 UTC and supports `workflow_dispatch`.
+Run `bun scripts/harness-catalog.ts` to update the catalog locally.
+The script installs the latest published harness packages into temporary directories and deletes them afterward.
+Installs disable package lifecycle scripts. Harness commands use temporary home directories without credentials or user configuration.
+The script needs no login or API key.
+
+The extractor uses these sources and selection rules:
+
+- **Claude Code:** the native package embeds a structured catalog marked by `https://downloads.claude.ai/model-catalog/v1/schema.json`.
+  The extractor reads `surfaces.cc.model_selector_config` for `id: cc` without executing the embedded JavaScript.
+  It selects the newest main-picker Opus and Sonnet offered on `first_party`. It excludes disabled and overflow entries.
+  Efforts must appear in both `thinking.effort_options` and `runtime.effort_levels`.
+- **Codex:** the installed CLI returns its built-in picker metadata through `codex debug models --bundled` without login.
+  The extractor selects `visibility: list` entries from the newest GPT major generation.
+  This excludes hidden entries and older generations. Efforts come from `supported_reasoning_levels`.
+
+The script keeps only these spatz efforts: `low`, `medium`, `high`, `xhigh`, `max`.
+If a harness or selected Claude family disappears, the script fails.
+It also rejects empty effort lists.
+It validates the complete schema before writing `catalog/harness-models.json`.
+The file sorts models by ID and efforts by spatz's effort order.
+When model IDs or efforts change, `updated` records the UTC date.
+Version-only changes do not rewrite the file. Stored harness versions describe the last model update.
+Account entitlements can differ from these package defaults.
+
+When the file changes, the workflow commits it on `catalog/update-<YYYYMMDD>` using `github-actions[bot]`.
+It creates a PR to `main`, then runs `gh pr merge --merge --delete-branch`.
+A repeated run updates today's open branch with a force-with-lease push and reuses its PR.
+If the file has no changes, the workflow exits without a commit.
+The workflow uses two jobs, each with a timeout:
+
+- `extract` has `contents: read` and a 15-minute timeout. Its checkout stores no credentials.
+  It runs the extractor and uploads only `catalog/harness-models.json` with the pinned artifact action.
+- `publish` needs `extract` and has a 10-minute timeout. It checks out `main` again without stored credentials.
+  The pinned download action puts the artifact in a temporary directory.
+  The repository parser checks the JSON and its size before the job copies that one file.
+  This job never installs or executes downloaded harness packages or artifact code.
+  Only this job has `contents: write` and `pull-requests: write`.
+
+Before checking for changes, `publish` closes older open `catalog/update-<YYYYMMDD>` PRs from `github-actions[bot]`.
+It uses the bot token and only closes branches in this repository. It keeps today's PR for retries.
+
+`catalog/` is deliberately absent from the nightly workflow's change filter.
+Catalog-only commits need no build because installed CLIs fetch the file from `main`.
+The next regular release or nightly build embeds the latest copy for offline use.
+See [configuration](docs/configuration.md#harness-catalog) for cache and offline behavior.
 
 ## Claude Code plugins
 

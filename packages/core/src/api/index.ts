@@ -1,5 +1,11 @@
 // api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
+import { join } from "node:path";
+import {
+	formatHarnessModels,
+	type Harness,
+	loadHarnessCatalog,
+} from "../catalog/harness.ts";
 import {
 	buildCatalog,
 	parseModelsArg,
@@ -427,26 +433,55 @@ export function createApi(
 				);
 			const cfg = await getConfig();
 			const resolved = resolveModels(models, deps.env, cfg);
-			let parsed: ReturnType<typeof parseModelsArg>;
-			try {
-				parsed = parseModelsArg(resolved.value);
-			} catch (error) {
-				throw labelModelsError(error, resolved.source);
-			}
-			const requested = filterFamily(parsed, family, cfg.aliases);
-			const openRouter = await loadOpenRouterModels({
+			const parseRequested = () => {
+				try {
+					return filterFamily(
+						parseModelsArg(resolved.value),
+						family,
+						cfg.aliases,
+					);
+				} catch (error) {
+					throw labelModelsError(error, resolved.source);
+				}
+			};
+			// Reject invalid explicit candidates before starting either request.
+			let requested = parseRequested();
+			const options = {
 				fetch: deps.fetch,
 				env: deps.env,
-				cachePath: deps.openRouterCachePath,
 				clock: deps.clock,
 				ttlMs: cfg.tuning.openRouterCacheMs,
 				timeoutMs: cfg.tuning.openRouterTimeoutMs,
-			});
+			};
+			const [harnessCatalog, openRouter] = await Promise.all([
+				resolved.source.startsWith("preset:")
+					? loadHarnessCatalog({
+							...options,
+							cachePath: join(deps.homeDir, ".spatz", "harness-models.json"),
+						})
+					: null,
+				loadOpenRouterModels({
+					...options,
+					cachePath: deps.openRouterCachePath,
+				}),
+			]);
+			if (harnessCatalog) {
+				const harness = resolved.source.slice("preset:".length) as Harness;
+				resolved.value = formatHarnessModels(
+					harnessCatalog.harnesses[harness].models,
+				);
+				requested = parseRequested();
+			}
 			const catalog = buildCatalog(requested, openRouter, cfg);
 			if (catalog.length === 0)
 				throw new Error("--models: no usable candidate");
 			// The task text goes to classify (and maybe Jev) only; it is never stored.
-			const c = await classify(task, catalog, deps.jev, cfg);
+			const c = await classify(
+				task,
+				catalog,
+				deps.env.SPATZ_NO_NETWORK === "1" ? null : deps.jev,
+				cfg,
+			);
 			return withStore((store) => {
 				const d = recommend(
 					{ classification: c, random: deps.random(), tuning: cfg.tuning },
@@ -483,6 +518,9 @@ export function createApi(
 				return {
 					suggestion_id: id,
 					models_source: resolved.source,
+					...(source === "claude-code-mod" && {
+						candidates: catalog.map(({ model, effort }) => ({ model, effort })),
+					}),
 					ranking: d.ranking,
 					reason: d.reason,
 					classification: {

@@ -64,7 +64,10 @@ export async function loadConfig(
 			: user?.models !== undefined
 				? { models: { value: user.models, source: "user" as const } }
 				: {}),
-		jevEnabled: deps.env.SPATZ_NO_JEV !== "1" && project?.jev !== false,
+		jevEnabled:
+			deps.env.SPATZ_NO_NETWORK !== "1" &&
+			deps.env.SPATZ_NO_JEV !== "1" &&
+			project?.jev !== false,
 		tuning: DEFAULT_TUNING,
 		aliases: strings(aliases),
 		descriptions: strings(descriptions),

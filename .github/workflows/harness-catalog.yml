@@ -1,0 +1,108 @@
+name: Harness catalog
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-catalog
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.0'
+      - name: Extract published harness catalogs
+        run: bun scripts/harness-catalog.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-catalog
+          path: catalog/harness-models.json
+          if-no-files-found: error
+
+  publish:
+    needs: extract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.0'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: harness-catalog
+          path: ${{ runner.temp }}/harness-catalog
+      - name: Validate and copy the catalog
+        id: validate
+        run: |
+          # Writes only the known fields, so the artifact cannot add anything else to main.
+          bun -e '
+            import { parseHarnessCatalog } from "./packages/core/src/catalog/harness.ts";
+            const file = Bun.file(process.env.RUNNER_TEMP + "/harness-catalog/harness-models.json");
+            const catalog = file.size <= 256 * 1024 ? parseHarnessCatalog(await file.json()) : null;
+            if (!catalog) throw new Error("Invalid harness catalog artifact");
+            const harnesses = Object.fromEntries(
+              ["claude-code", "codex"].map((h) => [h, {
+                version: catalog.harnesses[h].version,
+                models: catalog.harnesses[h].models.map(({ id, efforts }) => ({ id, efforts })),
+              }]),
+            );
+            const out = { schema: 1, updated: catalog.updated, harnesses };
+            await Bun.write("catalog/harness-models.json", JSON.stringify(out, null, "\t") + "\n");
+          '
+      - name: Commit through a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          today="$(date -u +%Y%m%d)"
+          branch="catalog/update-$today"
+          stale="$(gh pr list --base main --state open --author 'github-actions[bot]' --limit 1000 \
+            --json number,headRefName,isCrossRepository \
+            --jq '.[] | select(.isCrossRepository == false) | [.number, .headRefName] | @tsv')"
+          while IFS=$'\t' read -r number head; do
+            if [[ "$head" =~ ^catalog/update-([0-9]{8})$ ]] && [[ "${BASH_REMATCH[1]}" < "$today" ]]; then
+              gh pr close "$number" --delete-branch
+            fi
+          done <<< "$stale"
+          if git diff --quiet -- catalog/harness-models.json; then exit 0; fi
+          gh auth setup-git
+          # Fetch the remote tip before using a lease when today's branch exists.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git fetch origin "$branch:refs/remotes/origin/$branch"
+          fi
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add catalog/harness-models.json
+          git commit -m 'chore(catalog): update harness models'
+          git push --force-with-lease origin "$branch"
+          pr="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr" ]]; then
+            pr="$(gh pr create --base main --head "$branch" \
+              --title 'chore(catalog): update harness models' \
+              --body 'Refresh the model catalog from the latest published Claude Code and Codex versions. The extractor validates both harnesses before writing this file.')"
+          fi
+          gh pr merge "$pr" --merge --delete-branch

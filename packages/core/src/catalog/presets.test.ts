@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_MODELS } from "../../../claude-mod/hooks/settings.ts";
 import type { Env } from "../contracts/deps.ts";
+import { BUNDLED_HARNESS_CATALOG } from "./harness.ts";
 import { buildCatalog, parseModelsArg } from "./index.ts";
 import {
 	detectHarness,
@@ -43,25 +43,20 @@ describe("harness presets", () => {
 		},
 	);
 
-	test("release presets contain only their harness family at low, medium, high", () => {
-		expect(HARNESS_PRESETS["claude-code"]).toBe(DEFAULT_MODELS);
-		for (const [harness, ids] of [
-			[
-				"claude-code",
-				["anthropic/claude-opus-5.5", "anthropic/claude-sonnet-5.5"],
-			],
-			["codex", ["openai/gpt-6-astra", "openai/gpt-6-luna"]],
-		] as const) {
+	test("bundled presets contain each catalog model and its supported efforts", () => {
+		for (const harness of ["claude-code", "codex"] as const) {
 			const catalog = buildCatalog(
 				parseModelsArg(HARNESS_PRESETS[harness]),
 				[],
 				{ aliases: {}, descriptions: {} },
 			);
-			expect(catalog).toHaveLength(6);
-			for (const model of ids)
-				expect(
-					catalog.filter((c) => c.model === model).map((c) => c.effort),
-				).toEqual(["low", "medium", "high"]);
+			const models = BUNDLED_HARNESS_CATALOG.harnesses[harness].models;
+			expect(catalog).toHaveLength(
+				models.reduce((n, model) => n + model.efforts.length, 0),
+			);
+			expect(
+				parseModelsArg(HARNESS_PRESETS[harness]).map((m) => m.requested_id),
+			).toEqual(models.map((m) => m.id));
 		}
 	});
 });

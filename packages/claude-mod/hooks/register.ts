@@ -49,7 +49,9 @@ function bind($: EngineInterface, spatz: string): Io {
 		run: (argv, init) =>
 			$.process.run(
 				argv[0] === spatz ? [...executable, ...argv.slice(1)] : [...argv],
-				init,
+				// The mod always runs inside Claude Code; this keeps the CLI's harness preset working
+				// even when the engine environment lacks the markers Bash children get.
+				{ ...init, env: { CLAUDECODE: "1", ...init?.env } },
 			),
 		sessionId: () => $.session.id().catch(() => undefined),
 		status: (text) => $.ui.status(text),
@@ -347,7 +349,17 @@ export function register(on: On, options: PluginOptions = {}) {
 		if (count < s.escalateAfter) return;
 		const map = agentId ? agents : turns;
 		const current = map.get(key);
-		const up = current && stronger(s.models, current);
+		const pairs = current?.candidates ?? [];
+		const at = pairs.findIndex(
+			(p) => p.model === current?.model && p.effort === current?.effort,
+		);
+		const up =
+			current &&
+			(s.models.length
+				? stronger(s.models, current)
+				: at >= 0
+					? pairs[at + 1]
+					: undefined);
 		if (!current || !up) return;
 		const d = { ...current, ...up, escalated: true };
 		map.set(key, d);

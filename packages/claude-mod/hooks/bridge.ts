@@ -8,7 +8,7 @@ export const SCOPES = [
 export type Scope = (typeof SCOPES)[number];
 export const MODES = ["off", "show", "apply"] as const;
 export type Mode = (typeof MODES)[number];
-export const EFFORTS = ["low", "medium", "high"] as const;
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
 export interface Decision {
@@ -17,6 +17,7 @@ export interface Decision {
 	effort: Effort;
 	scope: Scope;
 	escalated?: boolean;
+	candidates?: { model: string; effort: Effort }[];
 }
 
 /** What links a suggestion to the session: passed to the CLI as flags. */
@@ -86,8 +87,7 @@ export async function suggest(
 			[
 				spatz,
 				task,
-				"--models",
-				models.join(","),
+				...(models.length ? ["--models", models.join(",")] : []),
 				"--json",
 				"--scope",
 				link.scope,
@@ -118,7 +118,19 @@ export async function suggest(
 			fail(new Error("invalid suggestion response"));
 			return null;
 		}
+		const candidates = Array.isArray(result.candidates)
+			? result.candidates.flatMap(
+					(pair: { model?: unknown; effort?: unknown }) => {
+						const model = claudeModel(pair?.model);
+						return model &&
+							(EFFORTS as readonly unknown[]).includes(pair?.effort)
+							? [{ model, effort: pair.effort as Effort }]
+							: [];
+					},
+				)
+			: undefined;
 		return {
+			...(candidates && { candidates }),
 			suggestionId: result.suggestion_id,
 			model,
 			effort: first.effort,

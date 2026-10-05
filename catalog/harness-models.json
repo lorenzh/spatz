@@ -1,0 +1,76 @@
+{
+	"schema": 1,
+	"updated": "2026-10-05",
+	"harnesses": {
+		"claude-code": {
+			"version": "2.1.289",
+			"models": [
+				{
+					"id": "claude-opus-5-5",
+					"efforts": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					]
+				},
+				{
+					"id": "claude-sonnet-5-5",
+					"efforts": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					]
+				}
+			]
+		},
+		"codex": {
+			"version": "0.160.0",
+			"models": [
+				{
+					"id": "gpt-6-astra",
+					"efforts": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					]
+				},
+				{
+					"id": "gpt-6-luna",
+					"efforts": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					]
+				},
+				{
+					"id": "gpt-6-sol",
+					"efforts": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					]
+				},
+				{
+					"id": "gpt-6.1-sol",
+					"efforts": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					]
+				}
+			]
+		}
+	}
+}
