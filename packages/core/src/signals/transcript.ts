@@ -41,7 +41,6 @@ type RolloutRecord = {
 		input?: string;
 		output?: { text?: string }[];
 		metadata?: { exit_code?: number };
-		item?: { type?: string; id?: string; exit_code?: number };
 	};
 };
 
@@ -100,16 +99,6 @@ export function parseCodexRollout(
 		)
 			exits.set(p.call_id, p.metadata?.exit_code ?? 0);
 	}
-	const itemExits = new Map<string, number>();
-	for (const { type, payload: p } of rows)
-		if (
-			type === "event_msg" &&
-			p?.type === "item_completed" &&
-			p.item?.type === "CommandExecution" &&
-			typeof p.item.id === "string" &&
-			Number.isInteger(p.item.exit_code)
-		)
-			itemExits.set(p.item.id, p.item.exit_code ?? 0);
 	return {
 		model: turn.model,
 		effort: typeof turn.effort === "string" ? turn.effort : null,
@@ -120,7 +109,7 @@ export function parseCodexRollout(
 			output_tokens: usage.output_tokens ?? 0,
 		},
 		calls: [...calls].flatMap(([id, command]) => {
-			const code = exits.get(id) ?? itemExits.get(id);
+			const code = exits.get(id);
 			return code === undefined ? [] : [{ command, exit_code: code }];
 		}),
 	};
