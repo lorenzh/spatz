@@ -1,0 +1,141 @@
+name: Publish npm packages
+
+on:
+  workflow_run:
+    workflows: [Release, Nightly]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub release tag (v0.2.0 or nightly)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      dist_tag: ${{ steps.release.outputs.dist_tag }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      ready: ${{ steps.release.outputs.ready }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.0'
+      - name: Resolve the release from the completed run or manual tag
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || (github.event.workflow_run.name == 'Nightly' && 'nightly') || github.event.workflow_run.head_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          bun -e 'import { releaseVersion } from "./scripts/release-version.ts"; const tag = process.env.RELEASE_TAG; if (tag !== "nightly") releaseVersion(tag ?? "");'
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            # The release job is skipped when Nightly finds no relevant changes.
+            published="$(gh api --paginate "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "release" and .conclusion == "success") | .id')"
+            if [[ -z "$published" ]]; then
+              echo 'Release job did not publish; skipping npm.'
+              exit 0
+            fi
+          fi
+          gh release view "$RELEASE_TAG" --json tagName,targetCommitish,body,isDraft,databaseId > release.json
+          if [[ "$EVENT_NAME" == workflow_run && "$RELEASE_TAG" == nightly ]] &&
+             [[ "$(jq -r .targetCommitish release.json)" != "$RUN_SHA" ]]; then
+            echo 'Nightly now points at a different run; skipping npm.'
+            exit 0
+          fi
+          bun -e '
+            import { appendFileSync } from "node:fs";
+            import { npmVersion, npmDistTag } from "./scripts/npm-packages.ts";
+            import { releaseVersion } from "./scripts/release-version.ts";
+            const release = await Bun.file("release.json").json();
+            if (release.isDraft || release.tagName !== process.env.RELEASE_TAG) throw new Error("Release is not published");
+            const version = release.tagName === "nightly" ? /^Version: (.+)$/m.exec(release.body)?.[1] : releaseVersion(release.tagName).version;
+            if (!version) throw new Error("Release version is missing");
+            npmVersion(version);
+            const dist = npmDistTag(version);
+            if (release.tagName === "nightly" && (dist !== "nightly" || !release.targetCommitish.startsWith(version.split("+")[1]))) throw new Error("Nightly version does not match its commit");
+            appendFileSync(process.env.GITHUB_OUTPUT, `tag=${release.tagName}\nversion=${version}\ndist_tag=${dist}\nrelease_id=${release.databaseId}\nready=true\n`);
+          '
+
+  publish:
+    needs: resolve
+    if: needs.resolve.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: npm-publish-${{ needs.resolve.outputs.tag }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
+      DIST_TAG: ${{ needs.resolve.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.0'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Check npm supports trusted publishing
+        run: |
+          npm --version
+          if [[ "$(printf '%s\n' 11.5.1 "$(npm --version)" | sort -V | head -n1)" != 11.5.1 ]]; then
+            npm install --global npm@11.5.1
+          fi
+      - name: Download and verify release assets
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId)" = "$RELEASE_ID"
+          gh release download "$RELEASE_TAG" --dir archives --pattern '*.tar.gz' --pattern '*.zip' --pattern '*.sha256' --pattern SHA256SUMS
+          test "$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId)" = "$RELEASE_ID"
+          cd archives
+          sha256sum --check SHA256SUMS
+          # Require every downloaded archive to appear in the verified manifest.
+          for archive in *.tar.gz *.zip; do
+            [[ -f "$archive" ]] || continue
+            awk -v file="$archive" '$2 == file { found=1 } END { exit !found }' SHA256SUMS
+          done
+      - name: Assemble npm packages
+        run: bun scripts/npm-packages.ts archives "$RELEASE_VERSION" npm-packages
+      - name: Publish platform packages before the launcher
+        run: |
+          for dir in npm-packages/cli-* npm-packages/cli; do
+            name="$(jq -r .name "$dir/package.json")"
+            version="$(jq -r .version "$dir/package.json")"
+            if npm view "$name@$version" version --json > view.json 2> view.err; then
+              echo "Skipping existing $name@$version"
+              continue
+            fi
+            # Authentication and network errors must fail, not masquerade as absence.
+            if ! jq -e '.error.code == "E404"' view.json > /dev/null; then
+              cat view.err >&2
+              exit 1
+            fi
+            (cd "$dir" && npm publish --access public --provenance --tag "$DIST_TAG")
+          done
