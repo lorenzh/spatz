@@ -18,7 +18,7 @@ For the decision rule, read [recommendation.md](recommendation.md). For data tha
 | Candidate | One pair of model and effort, for example `anthropic/claude-opus-5.5:high`. |
 | Catalog | All candidates from the `--models` argument of one call, sorted by cost. spatz recommends only candidates from this list. |
 | Suggestion | The result of one `spatz "<task>"` call: an id, a ranking of 1 to 3 candidates, a reason and the classification. |
-| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz report` or from the Claude Code transcripts. |
+| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz report` or from Claude Code and Codex CLI transcripts. |
 | Signal | One observed result for a suggestion: a report value, a test run or a build run. |
 | Outcome | The quality of one suggestion (0 to 1), computed from its signals, plus the pair that was actually used. |
 | Cell | The pair (task type, difficulty). spatz learns success rates per cell. |
@@ -35,7 +35,7 @@ spatz has two packages. `packages/core` (`@spatz/core`) holds all logic. `packag
 | `catalog` | Parses `--models`, maps ids to OpenRouter ids, loads prices from OpenRouter with a 24 h cache and sorts the candidates by cost. |
 | `classify` | Asks Jev the four questions. If Jev is not available, it uses keyword rules. It also holds the secret filter. |
 | `recommend` | Computes the estimates per cell and picks the candidate. It is pure: no network, no files. |
-| `signals` | Reads hook input: test and build commands, the suggestion id in `spatz` output, and token usage in transcripts. It is pure. |
+| `signals` | Reads hook input: test and build commands, the suggestion id in `spatz` output, and token usage in Claude Code and Codex transcripts. It is pure. |
 | `store` | The SQLite database through `bun:sqlite`: schema, migrations, writes and the `outcomes` view. |
 | `report` | The `spatz stats` evaluation. DuckDB reads the SQLite file in read-only mode. spatz loads DuckDB only for this command. |
 | `contracts` | Shared types and start values. No logic. |

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { Outcome, StatsReport, Suggestion } from "@spatz/core";
 import openRouterFixture from "../../core/src/catalog/fixtures/openrouter-models.json";
 import { parseOpenRouterModels } from "../../core/src/catalog/openrouter.ts";
+import codexHooks from "../../core/src/signals/fixtures/codex-hook-inputs.json";
 import hookEvents from "./fixtures/hook-events.json";
 
 const CLI = join(import.meta.dir, "cli.ts");
@@ -104,7 +105,6 @@ function hookJson(event: object, stdout = "") {
 
 const hook = (event: { hook_event_name: string }, stdout?: string) =>
 	spatz(["hook", event.hook_event_name], hookJson(event, stdout));
-
 function db() {
 	return new Database(dbPath, { readonly: true });
 }
@@ -187,6 +187,16 @@ describe("suggest", () => {
 });
 
 describe("hook", () => {
+	test("Codex hook flag routes the real Codex input quietly", async () => {
+		const event = codexHooks.calls[0];
+		if (!event) throw new Error("missing Codex fixture call");
+		expect(
+			await spatz(
+				["hook", event.hook_event_name, "--agent", "codex"],
+				JSON.stringify(event),
+			),
+		).toEqual({ stdout: "", stderr: "", code: 0 });
+	});
 	test("a spatz call in Bash links the session to the suggestion", async () => {
 		const s = await spatz([TASK, "--models", MODELS, "--json"]);
 		linkedStdout = s.stdout;

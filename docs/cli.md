@@ -12,11 +12,11 @@ spatz has four commands. Each command calls the `@spatz/core` API and formats th
 ```text
 spatz "<task>" --models <list> [--json] [--dry-run]
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--json]
-spatz hook <event>
+spatz hook <event> [--agent codex]
 spatz stats [--type <t>] [--json]
 ```
 
-Related docs: [hooks.md](hooks.md) for the Claude Code integration, [configuration.md](configuration.md) for environment variables and files.
+Related docs: [hooks.md](hooks.md) for Claude Code and Codex integrations, [configuration.md](configuration.md) for environment variables and files.
 
 ## spatz "\<task\>"
 
@@ -152,7 +152,7 @@ $ spatz report 3b257996-110b-48c4-b61d-79761ad7400b --model claude-sonnet-5-5 --
 
 ## spatz hook
 
-This command is the entry point for Claude Code hooks. It reads the hook JSON from stdin and records signals and token usage. See [hooks.md](hooks.md).
+This command is the entry point for Claude Code and Codex hooks. It reads the hook JSON from stdin and records signals and token usage. With `--agent codex`, spatz reads shell exit codes from the Codex rollout at turn end and matches calls to outputs by call id. See [hooks.md](hooks.md).
 
 | Argument | Type | Default | Effect |
 | --- | --- | --- | --- |
@@ -167,6 +167,8 @@ $ echo '{"hook_event_name":"Stop"}' | spatz hook Stop
 $ echo $?
 0
 ```
+
+For Codex, pass `--agent codex`, for example `spatz hook Stop --agent codex`.
 
 ## spatz stats
 

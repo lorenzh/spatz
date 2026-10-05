@@ -13,10 +13,41 @@ import {
 	parseHookInput,
 	signalFromBashEvent,
 } from "./index.ts";
+import { parseCodexRollout } from "./transcript.ts";
 
 const inputs = fixtures as { _event: string; input: Record<string, unknown> }[];
 const parsed = (i: number) =>
 	parseHookInput(JSON.stringify(inputs[i]?.input)) as HookInput;
+
+describe("parseCodexRollout", () => {
+	test("reads the matching turn, token usage and each shell exit code", async () => {
+		const rollout = await Bun.file(
+			`${import.meta.dir}/fixtures/codex-rollout.jsonl`,
+		).text();
+		const result = parseCodexRollout(
+			rollout,
+			"11111111-1111-1111-1111-111111111111",
+		);
+		expect(result).toEqual({
+			model: "gpt-6-luna",
+			effort: "low",
+			usage: {
+				input_tokens: 61711,
+				cache_read_input_tokens: 48128,
+				cache_creation_input_tokens: 0,
+				output_tokens: 124,
+			},
+			calls: [
+				{ command: "false", exit_code: 1 },
+				{ command: "sh -c 'echo boom >&2; exit 3'", exit_code: 3 },
+				{ command: "echo ok", exit_code: 0 },
+			],
+		});
+	});
+	test("skips partial and unknown records without throwing", () => {
+		expect(parseCodexRollout('{"type":"future_record"}\n{bad', "x")).toBeNull();
+	});
+});
 
 describe("parseHookInput", () => {
 	test("parses every fixture event", () => {

@@ -1,0 +1,60 @@
+{
+	"calls": [
+		{
+			"session_id": "00000000-0000-0000-0000-000000000000",
+			"turn_id": "11111111-1111-1111-1111-111111111111",
+			"transcript_path": "/home/user/codex-rollout.jsonl",
+			"cwd": "/home/user/project",
+			"hook_event_name": "PostToolUse",
+			"model": "gpt-6-luna",
+			"permission_mode": "bypassPermissions",
+			"tool_name": "Bash",
+			"tool_input": {
+				"command": "false"
+			},
+			"tool_response": "",
+			"tool_use_id": "exec-a"
+		},
+		{
+			"session_id": "00000000-0000-0000-0000-000000000000",
+			"turn_id": "11111111-1111-1111-1111-111111111111",
+			"transcript_path": "/home/user/codex-rollout.jsonl",
+			"cwd": "/home/user/project",
+			"hook_event_name": "PostToolUse",
+			"model": "gpt-6-luna",
+			"permission_mode": "bypassPermissions",
+			"tool_name": "Bash",
+			"tool_input": {
+				"command": "sh -c 'echo boom >&2; exit 3'"
+			},
+			"tool_response": "boom\n",
+			"tool_use_id": "exec-placeholder"
+		},
+		{
+			"session_id": "00000000-0000-0000-0000-000000000000",
+			"turn_id": "11111111-1111-1111-1111-111111111111",
+			"transcript_path": "/home/user/codex-rollout.jsonl",
+			"cwd": "/home/user/project",
+			"hook_event_name": "PostToolUse",
+			"model": "gpt-6-luna",
+			"permission_mode": "bypassPermissions",
+			"tool_name": "Bash",
+			"tool_input": {
+				"command": "echo ok"
+			},
+			"tool_response": "ok\n",
+			"tool_use_id": "exec-placeholder"
+		},
+		{
+			"session_id": "00000000-0000-0000-0000-000000000000",
+			"turn_id": "11111111-1111-1111-1111-111111111111",
+			"transcript_path": "/home/user/codex-rollout.jsonl",
+			"cwd": "/home/user/project",
+			"hook_event_name": "Stop",
+			"model": "gpt-6-luna",
+			"permission_mode": "bypassPermissions",
+			"stop_hook_active": false,
+			"last_assistant_message": "Done."
+		}
+	]
+}

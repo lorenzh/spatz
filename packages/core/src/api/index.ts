@@ -12,6 +12,7 @@ import type {
 	AgentToolResponse,
 	BashToolInput,
 	BashToolResponse,
+	CodexHookInput,
 	HookInput,
 } from "../contracts/hooks.ts";
 import {
@@ -37,6 +38,7 @@ import {
 	type AssistantMessage,
 	type ModelUsage,
 	mainTurnMessages,
+	parseCodexRollout,
 	subagentMessages,
 	sumByModel,
 } from "../signals/transcript.ts";
@@ -251,6 +253,124 @@ export function createApi(
 		});
 	}
 
+	async function onCodexHook(
+		input: CodexHookInput,
+		cfg: Config,
+	): Promise<void> {
+		const now = deps.clock.now();
+		return withStore(async (store) => {
+			const open = store.findOpenSuggestion(
+				input.session_id,
+				now,
+				cfg.tuning.openWindowMs,
+			);
+			if (open) store.touch(open, now);
+			if (input.hook_event_name === "PostToolUse") {
+				if (input.tool_name !== "Bash") return;
+				const command =
+					(input.tool_input as BashToolInput | undefined)?.command ?? "";
+				if (detectCommandKind(command) !== "spatz-suggest") return;
+				const id = extractSuggestionId(
+					typeof input.tool_response === "string" ? input.tool_response : "",
+				);
+				if (id) {
+					const shrunk = store.linkSession(
+						id,
+						input.session_id,
+						input.turn_id ?? null,
+						now,
+					);
+					for (const scope of store.usageScopes(shrunk)) {
+						if (scope.source !== "transcript") continue;
+						const text = await Bun.file(input.transcript_path)
+							.text()
+							.catch(() => null);
+						if (text === null) continue;
+						const rollout = parseCodexRollout(text, scope.scope_key);
+						if (!rollout) continue;
+						store.rewriteScope(
+							{
+								session_id: input.session_id,
+								source: "transcript",
+								scope_key: scope.scope_key,
+								message_count: 1,
+								from: now,
+								last_at: now,
+								openWindowMs: cfg.tuning.openWindowMs,
+							},
+							(windows) =>
+								windows.map((w) => ({
+									suggestion_id: w.id,
+									model: toCanonicalId(rollout.model, cfg.aliases),
+									effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
+									source: "transcript",
+									scope_key: scope.scope_key,
+									is_sidechain: false,
+									input_tokens: rollout.usage.input_tokens ?? 0,
+									output_tokens: rollout.usage.output_tokens ?? 0,
+									cache_read_tokens: rollout.usage.cache_read_input_tokens ?? 0,
+									cache_creation_tokens:
+										rollout.usage.cache_creation_input_tokens ?? 0,
+									rounds: null,
+									note: null,
+									reported_at: now,
+								})),
+						);
+					}
+				}
+				return;
+			}
+			if (input.hook_event_name !== "Stop" || !input.turn_id) return;
+			const turnId = input.turn_id;
+			const text = await Bun.file(input.transcript_path)
+				.text()
+				.catch(() => "");
+			const rollout = parseCodexRollout(text, turnId);
+			if (!rollout) return;
+			if (open)
+				for (const call of rollout.calls) {
+					const kind = detectCommandKind(call.command);
+					if (kind !== "test" && kind !== "build") continue;
+					store.insertSignal({
+						suggestion_id: open,
+						kind,
+						value: call.exit_code === 0 ? 1 : 0,
+						weight: SIGNAL_WEIGHTS[kind],
+						source: call.exit_code === 0 ? "PostToolUse" : "PostToolUseFailure",
+						observed_at: now,
+					});
+				}
+			store.rewriteScope(
+				{
+					session_id: input.session_id,
+					source: "transcript",
+					scope_key: turnId,
+					message_count: 1,
+					from: now,
+					last_at: now,
+					openWindowMs: cfg.tuning.openWindowMs,
+				},
+				(windows) =>
+					windows.map((w) => ({
+						suggestion_id: w.id,
+						model: toCanonicalId(rollout.model, cfg.aliases),
+						effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
+						source: "transcript",
+						scope_key: turnId,
+						is_sidechain: false,
+						input_tokens: rollout.usage.input_tokens ?? 0,
+						output_tokens: rollout.usage.output_tokens ?? 0,
+						cache_read_tokens: rollout.usage.cache_read_input_tokens ?? 0,
+						cache_creation_tokens:
+							rollout.usage.cache_creation_input_tokens ?? 0,
+						rounds: null,
+						note: null,
+						reported_at: now,
+					})),
+			);
+		});
+	}
+
 	return {
 		async suggest({ task, models, dryRun }) {
 			const requested = parseModelsArg(models);
@@ -354,8 +474,14 @@ export function createApi(
 		async handleHook(_event, stdin) {
 			// Hooks must never block the session: every error is swallowed.
 			try {
-				const input = parseHookInput(stdin);
-				if (input) await onHook(input, await getConfig());
+				if (_event.startsWith("codex:")) {
+					const input = JSON.parse(stdin) as CodexHookInput;
+					if (input && typeof input.hook_event_name === "string")
+						await onCodexHook(input, await getConfig());
+				} else {
+					const input = parseHookInput(stdin);
+					if (input) await onHook(input, await getConfig());
+				}
 			} catch {}
 		},
 

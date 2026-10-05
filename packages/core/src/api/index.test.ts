@@ -549,6 +549,70 @@ const assistant = (
 	});
 
 describe("handleHook", () => {
+	test("Codex PostToolUse links suggestion with turn_id as prompt id", async () => {
+		const s = setup();
+		const id = (await s.api.suggest(suggestInput())).suggestion_id;
+		await s.api.handleHook(
+			"codex:PostToolUse",
+			JSON.stringify({
+				session_id: SESSION,
+				turn_id: PROMPT,
+				transcript_path: "/nope",
+				hook_event_name: "PostToolUse",
+				tool_name: "Bash",
+				tool_input: { command: `spatz "fix it" --models ${MODELS}` },
+				tool_response: `suggestion_id: ${id}`,
+			}),
+		);
+		expect(s.argsOf("linkSession")).toEqual([[id, SESSION, PROMPT, T0]]);
+	});
+	test("Codex Stop records rollout shell outcomes and cumulative tokens", async () => {
+		const s = setup();
+		const id = await linked(s);
+		const path = `${import.meta.dir}/../signals/fixtures/codex-rollout.jsonl`;
+		const rollout = (await Bun.file(path).text()).replace(
+			'cmd:\\"false\\"',
+			'cmd:\\"bun test\\"',
+		);
+		const testPath = join(dir, "codex.jsonl");
+		await Bun.write(testPath, rollout);
+		await s.api.handleHook(
+			"codex:Stop",
+			JSON.stringify({
+				session_id: SESSION,
+				turn_id: "11111111-1111-1111-1111-111111111111",
+				transcript_path: testPath,
+				hook_event_name: "Stop",
+			}),
+		);
+		expect(s.argsOf("insertSignal").map(([x]) => x)).toEqual([
+			{
+				suggestion_id: id,
+				kind: "test",
+				value: 0,
+				weight: 1,
+				source: "PostToolUseFailure",
+				observed_at: T0,
+			},
+		]);
+		expect(s.argsOf("rewriteScope")[0]?.[0]).toMatchObject({
+			source: "transcript",
+			scope_key: "11111111-1111-1111-1111-111111111111",
+		});
+		const rows = s.argsOf("rewriteScope")[0]?.[1] as (
+			windows: { id: string; start: number; end: number }[],
+		) => unknown[];
+		expect(rows([{ id, start: T0, end: T0 + HOUR }])).toMatchObject([
+			{
+				suggestion_id: id,
+				model: "openai/gpt-6-luna",
+				effort: "low",
+				input_tokens: 61711,
+				output_tokens: 124,
+				cache_read_tokens: 48128,
+			},
+		]);
+	});
 	test("never throws: invalid JSON, unknown event, missing transcript, store errors", async () => {
 		const s = setup();
 		await expect(

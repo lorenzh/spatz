@@ -11,7 +11,7 @@ spatz learns which pair of model and effort succeeds. It needs results for that.
 
 The hooks never block a session. `spatz hook` always exits with code 0, prints nothing and ignores all errors. The snippet below also runs each hook with `"async": true`, so Claude Code does not wait for it.
 
-spatz supports only Claude Code. For the command reference see [cli.md](cli.md).
+spatz supports Claude Code and Codex CLI. For the command reference see [cli.md](cli.md).
 
 ## Install the hooks
 
@@ -166,3 +166,25 @@ Without a report, the used pair is the model with the most output tokens over th
 - Claude Code gives the main session model only in the transcript, not in the hook input.
 - `UserPromptSubmit` and `SubagentStart` have no `effort.level`.
 - spatz does not use `SessionEnd`.
+
+## Codex CLI
+
+Add these hooks to `~/.codex/hooks.json` or the project Codex hooks file. Codex hooks run synchronously.
+
+```json
+{
+	"hooks": {
+		"PostToolUse": [{
+			"matcher": "Bash",
+			"hooks": [{ "type": "command", "command": "spatz hook PostToolUse --agent codex" }]
+		}],
+		"Stop": [{
+			"hooks": [{ "type": "command", "command": "spatz hook Stop --agent codex" }]
+		}]
+	}
+}
+```
+
+Review and trust the hook with `/hooks` in Codex. `codex exec` also enforces hook trust.
+
+Codex hook input has no exit code. spatz reads the rollout at turn end and matches shell calls to their outputs by call id. Signals are available only when the rollout records an exit code; activity refreshes the open window when the hook runs. Codex has no `SubagentStop` or `PostToolUseFailure` hook.
