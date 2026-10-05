@@ -1,77 +1,157 @@
 # spatz
 
-spatz recommends a model and effort pair for a coding-agent task, and learns which pairs succeed.
+**Choose a model and effort for your coding task. Learn from the result.**
 
-The motto is: do not use a cannon to shoot sparrows. Do not use the strongest model when a cheaper model is good enough.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/lorenzh/spatz)](https://github.com/lorenzh/spatz/releases/latest)
+[![Bun 1.4](https://img.shields.io/badge/Bun-1.4-black?logo=bun)](https://bun.sh)
 
-## Status
+Do not use a cannon to shoot sparrows.
 
-spatz is a proof of concept. Expect changes to commands, output and the database schema.
+spatz ranks the model and effort pairs that you can use for a coding task.
+It learns from task results to help choose cheaper pairs that succeed.
+You or your coding agent run the task with the recommended pair.
 
-What works:
+[Quickstart](#quickstart) · [Documentation](#documentation) · [Contributing](#contributing) · [Releases](https://github.com/lorenzh/spatz/releases)
 
-- Recommendations from the candidates that you give with `--models`.
-- Task classification with Jev, or with local keyword rules when Jev is off.
-- Learning from Claude Code and Codex CLI hooks, and from `spatz report`.
-- Statistics per task type with `spatz stats`.
+## Why spatz?
 
-What does not work yet:
+Different tasks need different models and effort levels.
+spatz combines task classification with results from your previous tasks.
 
-- Signal collection works only with Claude Code and Codex CLI hooks. Other coding agents can only use `spatz report`.
-- There is no MCP server.
+- **Use your available models.** Pass the candidates with `--models`.
+- **Learn from results.** Record outcomes through hooks or `spatz report`.
+- **Compare performance.** Use `spatz stats` to see results per task type or routing scope.
+- **Connect to coding agents.** Hooks support Claude Code and Codex CLI. Other agents can use the CLI directly.
+- **Keep learning data local.** spatz stores results in `~/.spatz/spatz.db`. It does not store task text.
+
+## Quickstart
+
+### 1. Install
+
+Install the stable CLI with Node.js 18 or newer:
+
+```bash
+npm install -g @spatz/cli
+spatz --version
+```
+
+The npm package includes the Bun runtime. Keep optional dependencies enabled.
+Linux needs glibc. spatz does not support Alpine Linux.
+Windows x64 support is experimental. Some releases omit it.
+
+For installation without Node.js, use a [release archive](#releases).
+For the unstable nightly version, use `npm install -g @spatz/cli@nightly`.
+
+### 2. Ask for a recommendation
+
+Pass the task and the model pairs that your agent can run:
+
+```bash
+spatz "Fix the off-by-one error in src/list.ts" \
+  --models claude-opus-5-5:high+medium,claude-sonnet-5-5:medium+low
+```
+
+Each candidate uses `<model-id>:<effort>+<effort>...`.
+Use model IDs and efforts that your environment supports.
+The output includes a `suggestion_id` and a ranked list of pairs.
+Add `--json` for machine-readable output.
+
+spatz works without an API key.
+Without Jev or learned results, it recommends the most expensive candidate.
+Jev is the TypeSafe AI model that classifies the task and estimates candidate suitability.
+To enable Jev, set your TypeSafe AI key:
+
+```bash
+export TYPESAFE_AI_API_KEY="<your-key>"
+```
+
+When you enable Jev, spatz sends task text and candidate details to TypeSafe AI.
+Read [Privacy](#privacy) before using sensitive task text.
+
+### 3. Run the task and report the result
+
+Run the task with the chosen model and effort in your coding agent.
+Then report the pair you actually used:
+
+```bash
+spatz report <suggestion_id> \
+  --model claude-sonnet-5-5 --effort medium --result pass
+
+spatz stats
+```
+
+Replace `<suggestion_id>` with the ID from the recommendation.
+Results can be `pass`, `partial`, or `fail`.
+An explicit report overrides hook signals for that recommendation.
+
+For experiments, add `--dry-run` to the recommendation command.
+These suggestions never count toward learning or statistics.
 
 ## How it works
 
-You give spatz a task text and a list of candidate pairs. A local filter first checks the task text for secrets. If the filter finds no secret, Jev classifies the task. The classification gives a task type, a difficulty and a criticality. Jev is a TypeSafe AI model that returns typed answers with calibrated probabilities. spatz then reads the learned success estimates for each candidate in that task class and ranks the candidates. spatz never runs the task and never switches the model. You or your agent pick the model. Claude Code hooks and `spatz report` send the outcome back, and spatz updates its estimates.
+1. A local filter checks the task text for known secret patterns.
+2. Jev classifies the task. Without Jev, spatz uses local keyword rules.
+3. spatz ranks your candidates using classification and learned success estimates.
+4. You or your agent choose a pair and run the task.
+5. Hooks or `spatz report` record the outcome for future recommendations.
 
-```mermaid
-flowchart LR
-    T[Task text] --> F[Privacy filter]
-    F -->|no secret, Jev on| J[Jev classification]
-    F -->|secret found, Jev off or no key| K[Keyword rules]
-    J -->|Jev error| K
-    J --> E[Learned estimates]
-    K --> E
-    E --> R[Ranking of --models candidates]
-    R --> U[You or your agent pick a pair]
-    U --> H[Claude Code or Codex hooks]
-    U --> S[spatz report]
-    H --> O[(Outcomes in ~/.spatz/spatz.db)]
-    S --> O
-    O --> E
+The CLI recommends pairs. The optional Claude Code mod can apply them automatically.
+See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recommendation.md) for the decision process.
+
+## Agent integrations
+
+| Integration | What it does | Setup |
+| --- | --- | --- |
+| Claude Code hooks | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
+| Codex CLI hooks | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
+| Claude Code mod | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
+| Other agents | Request recommendations and report outcomes through the CLI. | [CLI reference](docs/cli.md) |
+
+The Claude Code mod supports `step`, `turn`, `subagent`, `session`, and `escalate` routing scopes.
+Hooks and the mod can run together. The mod's `record: auto` avoids duplicate usage recording with the `spatz-hooks` plugin.
+
+## Privacy
+
+spatz stores learning data under `~/.spatz`. It does not store task text or tool output.
+Hooks process task signals locally and make no network requests.
+
+When you enable Jev, spatz sends task text and candidate details to TypeSafe AI.
+The secret filter catches known patterns. It cannot detect every secret.
+Do not put secrets in task text.
+
+To disable Jev:
+
+```bash
+export SPATZ_NO_JEV=1
 ```
 
-[docs/how-it-works.md](docs/how-it-works.md) and [docs/recommendation.md](docs/recommendation.md) explain the details.
+For a project, put `{"jev": false}` in `.spatz.json` in the working directory.
+Without `TYPESAFE_AI_API_KEY`, Jev is also disabled.
 
-## Requirements
+Disabling Jev still allows OpenRouter requests for model prices. These requests contain no task data.
+spatz caches prices for 24 hours. When the network is unavailable, spatz can still use cached prices.
+The first `spatz stats` run downloads DuckDB's SQLite extension.
 
-- Node.js 18 or newer for npm installation. The platform package includes the Bun runtime.
-- Bun 1.4 for development or installation from source. Release archives include the runtime.
-- Optional: a TypeSafe AI API key for Jev classification. Jev is in early access.
-
-spatz works without a key. Without a key, spatz uses the keyword rules. These rules set only the criticality. The task type is always `other`.
+See the [Privacy guide](docs/privacy.md) for data flows and deletion instructions.
+See [Configuration](docs/configuration.md) for environment variables and local files.
 
 ## Releases
 
 Download an archive and its matching `.sha256` file from [GitHub Releases](https://github.com/lorenzh/spatz/releases).
-Choose `linux` or `darwin` (macOS), then `x64` (Intel/AMD) or `arm64` (including Apple Silicon). Windows x64 archives are experimental.
-Linux builds need glibc. They do not support Alpine Linux.
+Archives include the runtime. You do not need Node.js or Bun installed.
 
-Check the checksum before you extract the archive. This Linux x64 example uses version `0.1.0`. Use your downloaded version:
+Choose `linux` or `darwin` (macOS), then `x64` or `arm64`.
+Apple Silicon uses `darwin-arm64`. Linux builds need glibc.
+Windows x64 ZIP archives are experimental. Windows hooks are untested.
+
+Check the checksum before extraction. This Linux x64 example uses version `0.1.0`:
 
 ```bash
 version=0.1.0
 archive="spatz-cli-$version-linux-x64.tar.gz"
 sha256sum --check "$archive.sha256"
-```
 
-On macOS, use `shasum -a 256 --check "$archive.sha256"` and a `darwin` archive.
-The release also contains `SHA256SUMS` with checksums for all archives.
-On Windows, download the `win32-x64.zip` archive and its `.sha256` file. Windows support is experimental; hooks are untested on Windows.
-
-Keep the archive contents together. Put a symlink to the executable on your `PATH`:
-
-```bash
 mkdir -p ~/.local/lib/spatz ~/.local/bin
 tar -xzf "$archive" -C ~/.local/lib/spatz
 ln -sfn "$HOME/.local/lib/spatz/${archive%.tar.gz}/spatz" ~/.local/bin/spatz
@@ -79,149 +159,65 @@ export PATH="$HOME/.local/bin:$PATH"
 spatz --version
 ```
 
-If needed, add the `PATH` line to your shell profile.
-Each archive includes `spatz`, `LICENSE`, `README.md`, the DuckDB binding, and the DuckDB shared library.
-`spatz stats` needs the binding and shared library beside the executable.
-The Windows archive contains `spatz.exe` and the DuckDB Windows binding and DLL beside it.
-On first use, it downloads DuckDB's SQLite extension into `~/.spatz/duckdb-extensions`.
-Later runs can use that extension offline.
+Use your downloaded version. On macOS, use `shasum -a 256 --check "$archive.sha256"`.
+If your shell does not include `~/.local/bin`, add the `PATH` line to your shell profile.
+Keep the executable and DuckDB libraries together. `spatz stats` needs these libraries beside the executable.
 
-The fixed [`nightly` release](https://github.com/lorenzh/spatz/releases/tag/nightly) is unstable.
-When code or release inputs change on `main`, it updates at the next daily run at 03:00 UTC.
-You can also start a manual workflow run with `force` enabled.
-See [RELEASING.md](RELEASING.md) for the release procedure.
+The [nightly release](https://github.com/lorenzh/spatz/releases/tag/nightly) is unstable.
+See [Releasing spatz](RELEASING.md) for the release process.
 
-## Install and quickstart
+## Install from source
 
-Install the stable version with npm:
+Install Bun 1.4, then clone the repository:
 
 ```bash
-npm i -g @spatz/cli
+git clone https://github.com/lorenzh/spatz.git
+cd spatz
+bun install
+```
+
+Put a wrapper on your `PATH` so hooks can find `spatz` in non-interactive shells:
+
+```bash
+mkdir -p ~/.local/bin
+printf '#!/bin/sh\nexec bun "%s/packages/cli/src/cli.ts" "$@"\n' "$PWD" > ~/.local/bin/spatz
+chmod +x ~/.local/bin/spatz
+export PATH="$HOME/.local/bin:$PATH"
 spatz --version
 ```
 
-For the unstable nightly version:
-
-```bash
-npm i -g @spatz/cli@nightly
-```
-
-Keep optional dependencies enabled. npm selects the package for your OS and architecture.
-Linux needs glibc and does not support Alpine Linux.
-Windows x64 is experimental. Some releases omit it.
-You can also [download a GitHub release archive](#releases). Archives need neither Node.js nor Bun installed.
-
-To install from source instead:
-
-1. Clone the repository and install the dependencies.
-
-   ```bash
-   git clone https://github.com/lorenzh/spatz.git
-   cd spatz
-   bun install
-   ```
-
-2. Put `spatz` on your `PATH` with a small wrapper. Hooks run in a non-interactive shell, so a shell alias does not work.
-
-   ```bash
-   mkdir -p ~/.local/bin
-   printf '#!/bin/sh\nexec bun "%s/packages/cli/src/cli.ts" "$@"\n' "$PWD" > ~/.local/bin/spatz
-   chmod +x ~/.local/bin/spatz
-   ```
-
-3. Optional: set your TypeSafe AI key to turn on Jev.
-
-   ```bash
-   export TYPESAFE_AI_API_KEY=<your-key>
-   ```
-
-4. Ask for a recommendation. `--models` lists the pairs that you can use, in the form `<id>[:<effort>+<effort>...]`.
-
-   ```bash
-   spatz "Fix the off-by-one error in src/list.ts" \
-     --models claude-opus-5-5:high+medium,claude-sonnet-5-5:medium+low --dry-run
-   ```
-
-   Example output without a key (`SPATZ_NO_JEV=1`, empty database):
-
-   ```text
-   suggestion_id: fd8b7c1f-1f93-44f6-ac7b-b77ee287d1bb
-   1. anthropic/claude-opus-5.5:high  estimate=0.50  n=0
-   reason: Without Jev and learned data the most expensive pair anthropic/claude-opus-5.5 (high) is recommended.
-   task_type: other  difficulty: medium  criticality: none
-   explored: false  control: false  fallback_used: true  (dry-run)
-   ```
-
-   `--dry-run` marks the recommendation as a test. A test never counts for learning or statistics. Remove the flag for real use.
-
-   spatz gets model prices from the OpenRouter model list and keeps them for 24 hours in `~/.spatz/openrouter-models.json`. To fill this cache, spatz needs network access. Without network access, you still get a recommendation. spatz uses the cached prices, even from a stale cache. If no cache exists, all prices are unknown and the models rank as most expensive.
-
-5. After the task, report the pair that you used and the result.
-
-   ```bash
-   spatz report <suggestion_id> --model claude-sonnet-5-5 --effort medium --result pass
-   ```
-
-   A report overrides all hook signals for that recommendation.
-
-## Use with Claude Code
-
-You can connect spatz to Claude Code in three ways. They can run alone or together.
-
-- **Hooks only.** The hooks in your Claude Code settings watch Bash calls and record test and build results, models and tokens. See [docs/hooks.md](docs/hooks.md).
-- **Mod only.** The `spatz` mod in `packages/claude-mod` asks spatz for each decision. In `apply` mode it sets model and effort for subagents or for the main session. It records usage itself. See [docs/claude-mod.md](docs/claude-mod.md).
-- **Both.** The mod routes and the hooks record. With `record: auto` the mod stops recording when the `spatz-hooks` plugin is enabled, so nothing is counted twice.
-
-The mod has five routing scopes: `step`, `turn`, `subagent` (default), `session` and `escalate`. `spatz stats --by scope` compares them.
-
-## Commands
-
-The suggestion, report, usage, link and stats commands accept `--json` for machine-readable output.
-
-| Command | Purpose |
-| --- | --- |
-| `spatz --version` | Print the CLI version. |
-| `spatz "<task>" --models <list> [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--dry-run]` | Rank candidate pairs and optionally store routing attribution. |
-| `spatz report <suggestion_id> --model <m> --effort <e> --result pass\|partial\|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod]` | Record the pair that you used and the result. |
-| `spatz usage <suggestion_id> ... --turn <id> --source claude-code-mod` | Record direct model usage and token counts. |
-| `spatz link <suggestion_id> --agent-id <id> --session <id>` | Link a subagent suggestion after its id is known. |
-| `spatz hook <event> [--agent codex]` | Read a Claude Code or Codex hook event from stdin. Prints nothing and always exits 0. |
-| `spatz stats [--type <t>] [--by scope]` | Show results per task type or routing scope. |
-
-Exit codes: 0 for success, 1 for a runtime error (for example an unknown `suggestion_id`), 2 for a usage error. [docs/cli.md](docs/cli.md) is the full reference.
-
-## Configuration and privacy
-
-spatz reads four environment variables. `HOME` sets the location of `~/.spatz`. `TYPESAFE_AI_API_KEY` turns on Jev. `SPATZ_NO_JEV=1` turns off Jev. If you set `OPENROUTER_API_KEY`, spatz sends it with the OpenRouter model-list request. A project can also turn off Jev with `{"jev": false}` in `.spatz.json` in the working directory. All data stays in `~/.spatz`. [docs/configuration.md](docs/configuration.md) lists all settings and files.
-
-When Jev is on, spatz sends the task text and the candidate list to TypeSafe AI. The candidate list holds the `model:effort` labels and a short description per model. If Jev is off, the key is missing or the secret filter finds a secret, spatz sends nothing to TypeSafe AI. spatz does not store the task text. The OpenRouter model-list request holds no task data. Turning off Jev does not stop this request. The hooks store only derived signals, model names, efforts and token counts. [docs/privacy.md](docs/privacy.md) describes each data flow.
+A shell alias does not work for hooks.
+See [Contributing](CONTRIBUTING.md) for the full development setup.
 
 ## Documentation
 
-- [docs/how-it-works.md](docs/how-it-works.md): the architecture and the flow from task to outcome.
-- [docs/recommendation.md](docs/recommendation.md): how spatz ranks candidates, explores and uses control groups.
-- [docs/privacy.md](docs/privacy.md): what data leaves your machine and what spatz stores.
-- [docs/cli.md](docs/cli.md): all commands, flags, output fields and exit codes.
-- [docs/hooks.md](docs/hooks.md): the Claude Code hooks setup and the signals they record.
-- [docs/claude-mod.md](docs/claude-mod.md): the Claude Code mod, its modes, routing scopes and `/spatz` commands.
-- [docs/configuration.md](docs/configuration.md): environment variables, project file and files in `~/.spatz`.
-- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and the change process.
-- [SECURITY.md](SECURITY.md): how to report a vulnerability.
+| Guide | What you will find |
+| --- | --- |
+| [CLI reference](docs/cli.md) | Commands, flags, model IDs, output fields, and exit codes. |
+| [How it works](docs/how-it-works.md) | Architecture and the flow from task to outcome. |
+| [Recommendation rules](docs/recommendation.md) | Ranking, exploration, and control groups. |
+| [Hooks](docs/hooks.md) | Claude Code and Codex CLI setup and recorded signals. |
+| [Claude Code mod](docs/claude-mod.md) | Modes, routing scopes, and `/spatz` commands. |
+| [Configuration](docs/configuration.md) | Environment variables and local files. |
+| [Privacy](docs/privacy.md) | Network requests, stored data, and deletion. |
 
-## Development
+## Contributing
 
-The repository is a Bun workspace with two packages. `packages/core` (`@spatz/core`) holds all logic. `packages/cli` (`@spatz/cli`) is a thin CLI on top of it.
+Bug reports and pull requests are welcome.
+For larger changes, [open an issue](https://github.com/lorenzh/spatz/issues) first to agree on the scope.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the test-first workflow.
+Changes to `main` must go through a pull request.
 
-Run these gates before you push:
+Run the checks before submitting a change:
 
 ```bash
-bun test            # all tests, including end-to-end tests of the CLI
-bun run typecheck   # tsc --noEmit
-bun run lint        # biome check
+bun test
+bun run typecheck
+bun run lint
 ```
 
-Work test first. Write a failing test and make it pass with the minimum code. Then clean up. [CONTRIBUTING.md](CONTRIBUTING.md) has the details.
+For vulnerabilities, follow [SECURITY.md](SECURITY.md). Do not open a public issue.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE) © 2026 Lorenz Hilpert.
