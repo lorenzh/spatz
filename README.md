@@ -144,7 +144,13 @@ See [RELEASING.md](RELEASING.md) for the release procedure.
 
 ## Use with Claude Code
 
-If you add the spatz hooks to `.claude/settings.json` of a project, spatz learns without manual reports. The hooks call `spatz hook <event>` for `PostToolUse`, `PostToolUseFailure`, `Stop` and `SubagentStop`. They record test and build results, the model, the effort and token counts. They never store prompt text or tool output. [docs/hooks.md](docs/hooks.md) has the settings snippet and the full list of signals.
+You can connect spatz to Claude Code in three ways. They can run alone or together.
+
+- **Hooks only.** The hooks in your Claude Code settings watch Bash calls and record test and build results, models and tokens. See [docs/hooks.md](docs/hooks.md).
+- **Mod only.** The `spatz` mod in `packages/claude-mod` asks spatz for each decision. In `apply` mode it sets model and effort for subagents or for the main session. It records usage itself. See [docs/claude-mod.md](docs/claude-mod.md).
+- **Both.** The mod routes and the hooks record. With `record: auto` the mod stops recording when the `spatz-hooks` plugin is enabled, so nothing is counted twice.
+
+The mod has five routing scopes: `step`, `turn`, `subagent` (default), `session` and `escalate`. `spatz stats --by scope` compares them.
 
 ## Commands
 
@@ -173,6 +179,7 @@ When Jev is on, spatz sends the task text and the candidate list to TypeSafe AI.
 - [docs/privacy.md](docs/privacy.md): what data leaves your machine and what spatz stores.
 - [docs/cli.md](docs/cli.md): all commands, flags, output fields and exit codes.
 - [docs/hooks.md](docs/hooks.md): the Claude Code hooks setup and the signals they record.
+- [docs/claude-mod.md](docs/claude-mod.md): the Claude Code mod, its modes, routing scopes and `/spatz` commands.
 - [docs/configuration.md](docs/configuration.md): environment variables, project file and files in `~/.spatz`.
 - [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and the change process.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability.

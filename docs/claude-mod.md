@@ -1,0 +1,102 @@
+---
+title: The spatz Claude Code mod
+description: How the spatz mod for Claude Code recommends and applies model and effort, the five routing scopes with their trade-offs, the /spatz commands, all config keys with defaults, fail-open behaviour, usage recording and privacy.
+tags: [claude-mod, claude-code, routing, spatz]
+keywords: [mod, plugin, scope, step, turn, subagent, session, escalate, apply, show, off, /spatz, record, spatz-hooks, main, prompt cache, fail open, userConfig, alias, effort, model switch]
+---
+
+# The spatz Claude Code mod
+
+The mod is a Claude Code plugin in `packages/claude-mod`. It asks the `spatz` CLI for a recommendation. In `show` mode it displays the recommendation. In `apply` mode it also changes the model and effort of the request. The mod needs Claude Code 2.1.287 or newer and the `spatz` CLI on your `PATH`. Load it with `claude --plugin-dir packages/claude-mod`.
+
+The mod never edits a prompt. It stores no task text. [hooks.md](hooks.md) describes the other way to feed spatz: the settings hooks, which only observe.
+
+## Modes
+
+| Mode | What the mod does |
+| --- | --- |
+| `off` | Nothing. The mod makes no call. |
+| `show` (default) | It asks spatz and shows the last recommendation with its scope in the status line under the prompt. It changes nothing. |
+| `apply` | It also sets the model and effort. Subagents are rewritten by default. The main session is rewritten only when `main` is on. |
+
+spatz stores every suggestion with its scope. `spatz stats --by scope` compares the scopes ([cli.md](cli.md)).
+
+## Routing scopes
+
+One setting picks when spatz decides. The default is `subagent`. Every scope works with every mode.
+
+| Scope | spatz decides | The mod rewrites | Trade-offs |
+| --- | --- | --- | --- |
+| `step` | At every model request of the main session and of subagents, before the request starts. | Model and effort of that request. | Costs the most latency: one spatz call per request. The model can change inside a turn, so the prompt cache breaks often. Use it for experiments. |
+| `turn` | At the start of each user turn in the main session. | Every request of that turn. | One call per turn. A switch between turns breaks the cache once. Subagents are not touched. |
+| `subagent` | When the Agent tool starts a subagent, from the brief. | The model at spawn, and model and effort on every request of that subagent. | Adds latency only when an agent starts. The main session keeps its cache. Forks are skipped, because a fork inherits the parent model. |
+| `session` | At the first turn of the session. | Every request of the session. | One call in total. The decision cannot follow a change of task. |
+| `escalate` | Like `turn` for the main session and like `subagent` for subagents. | The same, plus a switch to the next stronger pair after repeated failures. | The only scope that changes the pair inside a turn or agent run. |
+
+How the pieces work:
+
+- `turn` and `escalate` skip a prompt shorter than `minPromptChars` (20 characters). The turn then uses the last decision.
+- `session` decides at the first turn that has text. Later turns reuse that decision.
+- `escalate` counts failing Bash results of test or build commands in the same turn or agent run. A failure is a Bash result that reports an error. After `escalateAfter` failures (2), the pair moves one step up. The mod keeps the new pair for the rest of that turn or run. The counter starts again after each switch.
+- The ladder comes from `models`. The list names the strongest model first. Inside a model the efforts go from low to high. If the current pair is already the top, or is not on the list, nothing changes.
+- For a subagent, the agent id exists only after the spawn. The mod links the suggestion to the `tool_use_id` of the spawn instead. Step and escalation use the real agent id.
+
+## What the mod rewrites
+
+The Agent tool accepts only the aliases `sonnet`, `opus`, `haiku` and `fable` as model. At spawn the mod passes the alias that resolves to the chosen model. The table is fixed in the code. If the chosen model has no alias, the spawn stays unchanged. The model and effort are then set on each request of the agent. Requests accept full model ids.
+
+Switching the model drops the prompt cache. This is why the main session needs its own setting.
+
+## /spatz commands
+
+| Command | Effect |
+| --- | --- |
+| `/spatz` or `/spatz status` | Shows mode, scope, main, record and the last decision. |
+| `/spatz mode <off\|show\|apply>` | Sets the mode for this session. |
+| `/spatz scope <step\|turn\|subagent\|session\|escalate>` | Sets the routing scope for this session. |
+| `/spatz record <auto\|on\|off>` | Sets usage recording. |
+| `/spatz main <on\|off>` | Allows or forbids main-session rewrites in apply mode. |
+
+Changes last until the session ends. A wrong argument prints the usage line and changes nothing.
+
+## Config keys
+
+Set them as plugin options (`userConfig`). The `/spatz` commands override the first five per session.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `show` | `off`, `show` or `apply`. |
+| `scope` | `subagent` | The routing scope. |
+| `main` | `false` | Rewrite the main session in apply mode. |
+| `record` | `auto` | Usage recording, see below. |
+| `minPromptChars` | `20` | Shortest prompt that gets a new decision in `turn` and `escalate`. |
+| `escalateAfter` | `2` | Failing test or build results before `escalate` switches. |
+| `spatz` | `spatz` | The CLI executable. |
+| `models` | `claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high` | Candidate pairs, strongest model first. |
+
+An unknown value falls back to its default.
+
+## Recording usage
+
+After each request and at the end of each turn, the mod can call `spatz usage` with the token counts and the model that answered. It keys them by turn. The end-of-turn call holds the sum of the turn and replaces the last request's figures. The model is the one of the last response. A turn with several models is not split by model. The `step` scope records each request against its own suggestion. A turn or agent run that has no usage in its result records nothing.
+
+`record` has three values:
+
+- `on`: always record.
+- `off`: never record.
+- `auto` (default): do not record when the `spatz-hooks` plugin is enabled, otherwise record.
+
+For `auto`, the mod runs `claude plugin list --json` once. When it finds an enabled `spatz-hooks` plugin, it shows one notice that recording is off. If the lookup fails, the mod records. The mod records no outcomes: it records usage only.
+
+## Fail-open behaviour
+
+The mod never blocks a request.
+
+- A missing `spatz`, a non-zero exit, invalid JSON or an unsupported model leaves the request unchanged.
+- The recommendation call stops after 6 seconds. A `spatz usage` call stops after 2 seconds. The check for `spatz-hooks` stops after 3 seconds.
+- A denied spawn, or a spawn result without an agent id, creates no link to an agent.
+- Each hook passes the event on exactly once.
+
+## Privacy
+
+For each decision the mod passes the task text to `spatz` as a command-line argument: the user prompt for the main session, the brief for a subagent. spatz does not store it. If Jev is on, spatz sends the text to TypeSafe AI, as for any call ([privacy.md](privacy.md)). The mod itself holds the text in memory only: for the `step` scope until the turn or run ends, in the other scopes only during the call. It never edits a prompt.
