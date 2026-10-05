@@ -19,6 +19,8 @@ concurrency:
 
 jobs:
   version:
+    # Nightly is always built from main, even when dispatched from another branch.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.version.outputs.changed }}

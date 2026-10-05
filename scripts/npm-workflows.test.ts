@@ -32,6 +32,7 @@ test("npm workflow accepts only trusted release runs or direct manual dispatch",
 	const run = {
 		conclusion: "success",
 		head_repository: { full_name: "lorenzh/spatz" },
+		head_branch: "main",
 		name: "Release",
 		event: "push",
 		path: ".github/workflows/release.yml",
@@ -73,6 +74,17 @@ test("npm workflow accepts only trusted release runs or direct manual dispatch",
 			expect(accepts(github({ ...trusted, ...overrides }))).toBe(false);
 	}
 	expect(accepts(github({ ...run, event: "workflow_dispatch" }))).toBe(false);
+	expect(
+		accepts(
+			github({
+				...run,
+				name: "Nightly",
+				event: "workflow_dispatch",
+				path: ".github/workflows/nightly.yml",
+				head_branch: "feature",
+			}),
+		),
+	).toBe(false);
 	expect(
 		accepts(
 			github({
@@ -189,6 +201,17 @@ exit "$PUBLISH_CODE"
 			);
 			expect(duplicate.code).toBe(0);
 			expect(duplicate.log.trim().split("\n")).toHaveLength(2);
+			// npm's own pre-upload check reports the duplicate without an error code.
+			const local = await run({
+				PUBLISH_CODE: "1",
+				PUBLISH_JSON: JSON.stringify({
+					error: {
+						summary:
+							"You cannot publish over the previously published versions: 1.2.3.",
+					},
+				}),
+			});
+			expect(local.code).toBe(0);
 			for (const failure of [
 				error("E403", "Permission denied"),
 				error("E500", "cannot publish over the previously published version"),

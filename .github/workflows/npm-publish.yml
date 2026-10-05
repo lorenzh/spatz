@@ -25,6 +25,7 @@ jobs:
          github.event.workflow_run.event == 'push' &&
          github.event.workflow_run.path == '.github/workflows/release.yml') ||
         (github.event.workflow_run.name == 'Nightly' &&
+         github.event.workflow_run.head_branch == 'main' &&
          (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') &&
          github.event.workflow_run.path == '.github/workflows/nightly.yml')))
     runs-on: ubuntu-latest
@@ -160,7 +161,7 @@ jobs:
             fi
             if (cd "$dir" && npm publish --access public --provenance --tag "$DIST_TAG" --json) > publish.json 2> publish.err; then
               cat publish.json
-            elif jq -e '.error.code == "E403" and ([.error.summary, .error.detail] | map(. // "") | join(" ") | ascii_downcase | contains("cannot publish over the previously published version"))' publish.json > /dev/null; then
+            elif jq -e '((.error.code // "") | IN("", "E403")) and ([.error.summary, .error.detail] | map(. // "") | join(" ") | ascii_downcase | contains("cannot publish over the previously published version"))' publish.json > /dev/null; then
               echo "Skipping existing $name@$version"
             else
               cat publish.json publish.err >&2
