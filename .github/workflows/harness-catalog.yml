@@ -22,7 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          # Every job uses the commit this run started on, so publish ships what test checked.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -47,7 +48,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          # Every job uses the commit this run started on, so publish ships what test checked.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -60,11 +62,13 @@ jobs:
         id: validate
         run: bun scripts/accept-harness-catalog.ts "$RUNNER_TEMP/harness-catalog/harness-models.json" catalog/harness-models.json
       - run: bun install --frozen-lockfile
-      - name: Install DuckDB SQLite extension for offline tests
+      - name: Install DuckDB SQLite extension in a temporary home
         run: |
-          bun packages/cli/src/cli.ts 'catalog setup' --models gpt-6-luna --dry-run
-          bun packages/cli/src/cli.ts stats
-      - run: bun test
+          mkdir "$RUNNER_TEMP/bootstrap-home"
+          HOME="$RUNNER_TEMP/bootstrap-home" bun packages/cli/src/cli.ts 'catalog setup' --models gpt-6-luna --dry-run
+          HOME="$RUNNER_TEMP/bootstrap-home" bun packages/cli/src/cli.ts stats
+      - name: Run the tests in a temporary home
+        run: SPATZ_DUCKDB_EXTENSION_DIR="$RUNNER_TEMP/bootstrap-home/.spatz/duckdb-extensions" HOME="$(mktemp -d)" bun test
 
   publish:
     needs: test
@@ -76,7 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          # Every job uses the commit this run started on, so publish ships what test checked.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -93,6 +98,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # The tests ran on GITHUB_SHA, so merge only onto that base. A moved main needs a new run.
+          # ponytail: main can still move between this check and the merge; a merge queue closes that window.
+          require_tested_base() {
+            if [[ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]]; then
+              echo "::error::main moved after the tests ran on $GITHUB_SHA. Run the workflow again to test the new main."
+              exit 1
+            fi
+          }
           today="$(date -u +%Y%m%d)"
           branch="catalog/update-$today"
           stale="$(gh pr list --base main --state open --author 'github-actions[bot]' --limit 1000 \
@@ -104,6 +117,7 @@ jobs:
             fi
           done <<< "$stale"
           if git diff --quiet -- catalog/harness-models.json; then exit 0; fi
+          require_tested_base
           gh auth setup-git
           # Fetch the remote tip before using a lease when today's branch exists.
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
@@ -121,6 +135,7 @@ jobs:
               --title 'chore(catalog): update harness models' \
               --body 'Refresh the model catalog from the latest published Claude Code and Codex versions. The extractor validates both harnesses before writing this file.')"
           fi
+          require_tested_base
           gh pr merge "$pr" --merge --delete-branch
 
   report:

@@ -153,17 +153,20 @@ A repeated run updates today's open branch with a force-with-lease push and reus
 If the file has no changes, the workflow exits without a commit.
 The workflow uses four jobs, each with a timeout:
 
-- `extract` has `contents: read` and a 15-minute timeout. Its checkout stores no credentials.
+- `extract` has `contents: read` and a 15-minute timeout. It checks out the run's commit (`github.sha`) and stores no credentials.
   It runs the extractor and uploads only `catalog/harness-models.json` with the pinned artifact action.
-- `test` needs `extract`, has `contents: read` and a 15-minute timeout. It checks out `main` without stored credentials.
-  It copies the artifact with `scripts/accept-harness-catalog.ts`, installs the dev dependencies and runs `bun test`.
+- `test` needs `extract`, has `contents: read` and a 15-minute timeout. It checks out the run's commit without stored credentials.
+  It copies the artifact with `scripts/accept-harness-catalog.ts` and installs the dev dependencies.
+  It installs the DuckDB extension in a temporary home, then runs `bun test` with another temporary `HOME` and `SPATZ_DUCKDB_EXTENSION_DIR` set to that extension.
   The dev dependencies are third-party code, so this job has no write access.
-- `publish` needs `test` and has a 10-minute timeout. It checks out `main` again without stored credentials.
+- `publish` needs `test` and has a 10-minute timeout. It checks out the run's commit again without stored credentials.
   The pinned download action puts the `extract` artifact in a temporary directory.
   `scripts/accept-harness-catalog.ts` checks the JSON, its size and dropped models, then writes only the known fields of that one file.
   The output is the same file that `test` checked.
   This job never installs dependencies or executes downloaded harness packages or artifact code.
   Only this job has `contents: write` and `pull-requests: write`.
+  Before the push and again before the merge, it checks that `main` is still the commit that `test` checked.
+  If `main` moved, the job fails without merging. Run the workflow again so that `test` checks the new `main`.
 - `report` runs only when a job before it fails. It has `actions: read`, `issues: write` and a 5-minute timeout, and runs only `gh`.
   When the two previous completed runs on `main` also failed, it opens the issue `Harness catalog workflow failed three runs in a row`.
   It opens no second issue while that one is open. Close the issue after the fix.

@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	stat,
+	symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLED_HARNESS_CATALOG } from "../packages/core/src/catalog/harness.ts";
@@ -177,10 +185,26 @@ test("workflow isolates extraction and validates only the catalog before publish
 	expect(tests.needs).toBe("extract");
 	expect(tests.permissions).toEqual({ contents: "read" });
 	const testRuns = tests.steps.map((s) => s.run ?? "");
+	const testRun = testRuns.findIndex((r) => r.endsWith(" bun test"));
 	expect(
 		testRuns.findIndex((r) => r.includes("accept-harness-catalog.ts")),
-	).toBeLessThan(testRuns.indexOf("bun test"));
-	expect(testRuns).toContain("bun test");
+	).toBeLessThan(testRun);
+	// Bootstrap and tests never touch the runner's real home.
+	expect(testRuns[testRun]).toContain('HOME="$(mktemp -d)"');
+	expect(testRuns[testRun]).toContain(
+		'SPATZ_DUCKDB_EXTENSION_DIR="$RUNNER_TEMP/bootstrap-home/',
+	);
+	for (const run of testRuns.filter((r) => r.includes("cli.ts")))
+		for (const line of run.split("\n").filter((l) => l.includes("cli.ts")))
+			expect(line).toStartWith('HOME="$RUNNER_TEMP/bootstrap-home" ');
+	// Publish merges only onto the commit that test checked.
+	const publishLines = publish.steps.flatMap((s) => (s.run ?? "").split("\n"));
+	const line = (prefix: string) =>
+		publishLines.findIndex((l) => l.startsWith(prefix));
+	const check = publishLines.indexOf("require_tested_base");
+	expect(check).toBeGreaterThan(-1);
+	expect(check).toBeLessThan(line("git push"));
+	expect(publishLines[line("gh pr merge") - 1]).toBe("require_tested_base");
 	expect(report.permissions).toEqual({ actions: "read", issues: "write" });
 	expect(report.if).toBe("failure()");
 	expect(report["timeout-minutes"]).toBeGreaterThan(0);
@@ -194,7 +218,8 @@ test("workflow isolates extraction and validates only the catalog before publish
 	for (const job of [extract, tests, publish]) {
 		expect(job["timeout-minutes"]).toBeGreaterThan(0);
 		expect(job.steps[0]?.with).toEqual({
-			ref: "main",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression.
+			ref: "${{ github.sha }}",
 			"persist-credentials": false,
 		});
 		for (const step of job.steps) {
@@ -273,6 +298,77 @@ test("workflow isolates extraction and validates only the catalog before publish
 		expect(result.exitCode).not.toBe(0);
 		expect(new TextDecoder().decode(result.stderr)).toContain("drops");
 		expect(await Bun.file(output).text()).toBe(current);
+	} finally {
+		await rm(temp, { recursive: true, force: true });
+	}
+});
+
+test("report opens one issue only after three failed runs in a row", async () => {
+	const workflow = Bun.YAML.parse(
+		await Bun.file(
+			new URL("../.github/workflows/harness-catalog.yml", import.meta.url),
+		).text(),
+	) as { jobs: { report: { steps: { run?: string }[] } } };
+	const script = workflow.jobs.report.steps.map((s) => s.run ?? "").join("\n");
+	const temp = await mkdtemp(join(tmpdir(), "spatz-catalog-report-"));
+	// Fake gh: logs each call and applies --limit and --jq to canned JSON like gh does.
+	const gh = join(temp, "gh");
+	await Bun.write(
+		gh,
+		`#!/usr/bin/env bash
+echo "$*" >> "$GH_LOG"
+case "$1 $2" in
+  "run list") data="$FAKE_RUNS" ;;
+  "issue list") data="$FAKE_ISSUES" ;;
+  "issue create") exit 0 ;;
+  *) exit 1 ;;
+esac
+limit=1000 filter=.
+while (($#)); do
+  case "$1" in --limit) limit=$2; shift ;; --jq) filter=$2; shift ;; esac
+  shift
+done
+jq -r ".[:$limit] | $filter" <<< "$data"
+`,
+	);
+	await chmod(gh, 0o755);
+	const title = "Harness catalog workflow failed three runs in a row";
+	const run = (conclusions: string[], issues: string[] = []) => {
+		const log = join(temp, `log-${crypto.randomUUID()}`);
+		const result = Bun.spawnSync(["bash", "-eu", "-c", script], {
+			env: {
+				...process.env,
+				PATH: `${temp}:${process.env.PATH}`,
+				GH_LOG: log,
+				RUN_URL: "https://example.test/run",
+				// Newest first, like gh run list.
+				FAKE_RUNS: JSON.stringify(
+					conclusions.map((conclusion) => ({ conclusion })),
+				),
+				FAKE_ISSUES: JSON.stringify(issues.map((t) => ({ title: t }))),
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(result.exitCode).toBe(0);
+		const calls = Bun.spawnSync(["cat", log])
+			.stdout.toString()
+			.trim()
+			.split("\n");
+		expect(calls[0]).toContain("--branch main --status completed --limit 2");
+		return calls.some((c) => c.startsWith("issue create"));
+	};
+	try {
+		expect(run(["failure", "failure"])).toBe(true);
+		// Threshold: fewer than two earlier failures.
+		expect(run([])).toBe(false);
+		expect(run(["failure"])).toBe(false);
+		// Reset: a success inside the window breaks the streak.
+		expect(run(["failure", "success", "failure"])).toBe(false);
+		expect(run(["success", "failure", "failure"])).toBe(false);
+		// Duplicate suppression: an open issue with the same title.
+		expect(run(["failure", "failure"], ["Other", title])).toBe(false);
+		expect(run(["failure", "failure"], [`${title} (old)`])).toBe(true);
 	} finally {
 		await rm(temp, { recursive: true, force: true });
 	}
