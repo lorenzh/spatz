@@ -222,6 +222,8 @@ exit "$PUBLISH_CODE"
 			await rm(temp, { recursive: true, force: true });
 		}
 	},
+	// Spawns many shells; the macOS Intel runner needed just over the 5 s default.
+	30_000,
 );
 
 test.skipIf(process.platform === "win32")(
