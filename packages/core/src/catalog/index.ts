@@ -49,6 +49,8 @@ export function toCanonicalId(
 	const alias = Object.hasOwn(aliases, id) ? aliases[id] : undefined;
 	if (alias) return alias;
 	if (id.includes("/")) return id;
+	// The main-picker Haiku snapshot uses the undated OpenRouter price entry.
+	if (id === "claude-haiku-4-5-20251001") return "anthropic/claude-haiku-4.5";
 	// Greedy prefix makes this hit the last digit-dash-digit.
 	if (id.startsWith("claude-"))
 		return `anthropic/${id.replace(/^(.*\d)-(\d)/, "$1.$2")}`;
@@ -97,7 +99,7 @@ export function buildCatalog(
 	return [...seen.values()].sort(compareCost);
 }
 
-/** Output price, input price, effort (low < medium < high < xhigh < max), id; unknown models after all known. */
+/** Output price, input price, effort (none < low < medium < high < xhigh < max < ultra), id; unknown models after all known. */
 export function compareCost(a: Candidate, b: Candidate): number {
 	// Unknown (null price) counts as the most expensive tier.
 	const price = (p: number | null) => p ?? Number.POSITIVE_INFINITY;

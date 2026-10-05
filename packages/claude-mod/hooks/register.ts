@@ -282,7 +282,13 @@ export function register(on: On, options: PluginOptions = {}) {
 		}
 		if (d) used.set(e.turnId, d);
 		const result = yield* next(
-			d && applies(e.agentId) ? { ...e, model: d.model, effort: d.effort } : e,
+			d && applies(e.agentId)
+				? {
+						...e,
+						model: d.model,
+						...(d.effort !== "none" && { effort: d.effort }),
+					}
+				: e,
 		);
 		try {
 			if (d && result.usage && (await recording(io))) {

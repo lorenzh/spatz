@@ -356,7 +356,7 @@ describe("suggest", () => {
 	test("invalid --models throws", async () => {
 		const s = setup();
 		await expect(
-			s.api.suggest({ ...suggestInput(), models: "gpt-6-sol:ultra" }),
+			s.api.suggest({ ...suggestInput(), models: "gpt-6-sol:turbo" }),
 		).rejects.toThrow();
 		expect(s.writes()).toEqual([]);
 	});
@@ -443,7 +443,7 @@ describe("report", () => {
 		},
 	);
 
-	test("rejects an effort outside low..max without writing", async () => {
+	test("rejects an effort outside none..ultra without writing", async () => {
 		const s = setup();
 		await s.api.suggest(suggestInput());
 		const before = s.writes().length;
@@ -451,7 +451,7 @@ describe("report", () => {
 			s.api.report({
 				suggestionId: ID1,
 				model: "gpt-6-luna",
-				effort: "ultra",
+				effort: "turbo",
 				result: "pass",
 			}),
 		).rejects.toThrow(/effort/);

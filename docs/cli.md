@@ -83,12 +83,14 @@ spatz "Review the parser" --family gpt --json
 ```text
 <list>   = <entry>[,<entry>...]
 <entry>  = <id>[:<effort>[+<effort>...]]
-<effort> = low | medium | high | xhigh | max
+<effort> = none | low | medium | high | xhigh | max | ultra
 ```
 
-- If an entry has no efforts, spatz uses `low`, `medium` and `high`. If OpenRouter lists the efforts of the model, spatz keeps only the listed ones. spatz uses `xhigh` and `max` only if you name them.
+- If an entry has no efforts, spatz uses `low`, `medium` and `high`. If OpenRouter lists the efforts of the model, spatz keeps only the listed ones. spatz uses `none`, `xhigh`, `max` and `ultra` only if you name them.
 - spatz removes duplicate pairs.
 - An unknown effort stops the command with exit code 1.
+- `none` means the harness offers no effort setting. It sorts below `low`; `ultra` sorts above `max`, after price.
+- For Codex dispatch, pass `ultra` as `-c model_reasoning_effort=ultra`. Claude Code has no `ultra`.
 
 spatz converts each id to the canonical OpenRouter id:
 
@@ -99,6 +101,8 @@ spatz converts each id to the canonical OpenRouter id:
 | `claude-*` | Prefix `anthropic/`. The last dash between two digits becomes a dot. | `claude-opus-5-5` becomes `anthropic/claude-opus-5.5` |
 | `gpt-*` | Prefix `openai/`. | `gpt-6-sol` becomes `openai/gpt-6-sol` |
 | Any other id | Used as given. | `my-model` |
+
+The Claude picker ID `claude-haiku-4-5-20251001` maps to `anthropic/claude-haiku-4.5` for pricing and learning. User aliases take precedence.
 
 spatz sorts the candidates by cost: output price, then input price, then effort, then id. A model that OpenRouter does not list counts as the most expensive.
 
@@ -122,7 +126,7 @@ The first line is always `suggestion_id: <uuid>`. The Claude Code hook reads thi
 | `models_source` | string | `flag`, `env`, `project`, `user`, `preset:claude-code` or `preset:codex`. |
 | `ranking` | array, 1 to 3 entries | `ranking[0]` is the recommendation. The next entries are the next more expensive candidates. |
 | `ranking[].model` | string | Canonical OpenRouter id. |
-| `ranking[].effort` | string | `low`, `medium`, `high`, `xhigh` or `max`. |
+| `ranking[].effort` | string | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. |
 | `ranking[].n` | number | Count of outcomes for this pair on the level that made the decision. That level is the cell (one pair of `task_type` and `difficulty`). If a learned choice used pooled data, it is the pooled level (same task type, same and harder difficulties). See [recommendation.md](recommendation.md). |
 | `ranking[].estimate` | number | Estimated success rate on the same level as `n`: `(1 + sum of quality) / (2 + n)`. With no data it is `0.5`. |
 | `reason` | string | One sentence that explains the choice. |
@@ -163,7 +167,7 @@ This command records the pair you used and the result of the task. A report wins
 | --- | --- | --- | --- |
 | `<suggestion_id>` | string, positional | required | The id from `spatz "<task>"`. An unknown id gives exit code 1. |
 | `--model <m>` | string | required | The model you used. spatz converts it with the same id rules as `--models`. |
-| `--effort <e>` | string | required | `low`, `medium`, `high`, `xhigh` or `max`. Another value gives exit code 1. |
+| `--effort <e>` | string | required | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. Another value gives exit code 1. |
 | `--result <r>` | `pass`, `partial` or `fail` | required | The result. spatz stores it as quality 1, 0.5 or 0. |
 | `--rounds <n>` | non-negative integer | none | Count of rounds the agent needed. |
 | `--note <t>` | string | none | A short note. spatz stores it in the database. |
@@ -212,7 +216,7 @@ It does not create a success signal or close the suggestion.
 | --- | --- | --- |
 | `<suggestion_id>` | required | The existing suggestion id. |
 | `--model <m>` | required | The model used. spatz applies its model-id rules. |
-| `--effort <e>` | `null` | `low`, `medium`, `high`, `xhigh` or `max`. |
+| `--effort <e>` | `null` | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. |
 | `--input <n>` | required | Uncached input tokens. |
 | `--output <n>` | required | Output tokens. |
 | `--cache-read <n>` | required | Input tokens read from cache. |

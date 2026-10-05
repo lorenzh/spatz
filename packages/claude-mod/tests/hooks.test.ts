@@ -927,3 +927,57 @@ test("default candidates accept and escalate through catalog xhigh and max", asy
 		"max",
 	);
 });
+
+test("none changes only the model at spawn and step, then escalates to a reasoning model", async () => {
+	for (const configured of [false, true]) {
+		const s = session(
+			{
+				...apply,
+				scope: "escalate",
+				escalateAfter: 1,
+				...(configured && {
+					models: "claude-sonnet-5-5:ultra+max,claude-haiku-4-5-20251001:none",
+				}),
+			},
+			{
+				suggestion: () => ({
+					exitCode: 0,
+					stderr: "",
+					stdout: JSON.stringify({
+						suggestion_id: "s1",
+						ranking: [{ model: "anthropic/claude-haiku-4.5", effort: "none" }],
+						candidates: [
+							{ model: "anthropic/claude-haiku-4.5", effort: "none" },
+							{ model: "anthropic/claude-sonnet-5.5", effort: "max" },
+							{ model: "anthropic/claude-sonnet-5.5", effort: "ultra" },
+						],
+					}),
+				}),
+			},
+		);
+		const spawned = await s.spawn({});
+		expect(spawned.passed.model).toBe("haiku");
+		expect(spawned.passed).not.toHaveProperty("effort");
+		const inherited = await s.step({
+			turnId: "t1",
+			agentId: "a1",
+			effort: "low",
+		});
+		expect(inherited.seen).toMatchObject({
+			model: "claude-haiku-4-5-20251001",
+			effort: "low",
+		});
+		expect(
+			(await s.step({ turnId: "t1", agentId: "a1" })).seen.effort,
+		).toBeUndefined();
+		await s.bash("bun test", "a1", true);
+		expect((await s.step({ turnId: "t1", agentId: "a1" })).seen).toMatchObject({
+			model: "claude-sonnet-5-5",
+			effort: "max",
+		});
+		await s.bash("bun test", "a1", true);
+		expect((await s.step({ turnId: "t1", agentId: "a1" })).seen.effort).toBe(
+			"max",
+		);
+	}
+});

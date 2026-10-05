@@ -148,3 +148,18 @@ test("bridge accepts max effort from CLI defaults", async () => {
 	);
 	expect(result?.effort).toBe("max");
 });
+
+test("Claude fails open for a Codex-only ultra recommendation", async () => {
+	expect(
+		await suggest(
+			async () => ({
+				exitCode: 0,
+				stderr: "",
+				stdout: good.replace('"high"', '"ultra"'),
+			}),
+			"task",
+			[],
+			{ scope: "turn" },
+		),
+	).toBeNull();
+});

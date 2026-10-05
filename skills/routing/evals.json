@@ -25,6 +25,18 @@
 			"prompt": "Test spatz itself with hypothetical customer data.",
 			"expect": "Remove customer data before invocation and add --dry-run.",
 			"baseline": "No dry-run command supplied."
+		},
+		{
+			"prompt": "Spatz selects gpt-6-sol at ultra for a Codex CLI task.",
+			"expect": "Dispatch codex exec with -m gpt-6-sol -c model_reasoning_effort=ultra; report ultra."
+		},
+		{
+			"prompt": "Spatz selects Claude Haiku at none.",
+			"expect": "Set only the model, leave harness effort untouched, and report none."
+		},
+		{
+			"prompt": "A Claude Code candidate is configured with ultra.",
+			"expect": "Exclude unsupported ultra from dispatchable Claude candidates; never pass ultra to Claude Code."
 		}
 	],
 	"trigger_cases": {

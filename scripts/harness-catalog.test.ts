@@ -10,12 +10,18 @@ import {
 } from "./harness-catalog.ts";
 
 describe("harness picker parsers", () => {
-	test("selects the newest Opus and Sonnet IDs from Claude's embedded catalog", async () => {
+	test("selects every enabled first-party main model regardless of family", async () => {
 		const fixture = await readFile(
 			new URL("./fixtures/claude-picker-strings.txt", import.meta.url),
 			"utf8",
 		);
 		expect(parseClaudeModelCatalog(fixture)).toEqual([
+			{ id: "claude-fable-5-1", efforts: ["high", "max"] },
+			{ id: "claude-haiku-4-5-20251001", efforts: ["none"] },
+			{
+				id: "claude-opus-5",
+				efforts: ["low", "medium", "high", "xhigh", "max"],
+			},
 			{
 				id: "claude-opus-5-5",
 				efforts: ["low", "medium", "high", "xhigh", "max"],
@@ -31,9 +37,14 @@ describe("harness picker parsers", () => {
 				fixture.replace("schema_version:1", "schema_version:2"),
 			),
 		).toThrow();
-		expect(() =>
+		expect(
 			parseClaudeModelCatalog(
 				fixture.replace('family:"sonnet"', 'family:"missing"'),
+			),
+		).toEqual(parseClaudeModelCatalog(fixture));
+		expect(() =>
+			parseClaudeModelCatalog(
+				fixture.replaceAll('section:"main"', 'section:"overflow"'),
 			),
 		).toThrow();
 		expect(() =>
@@ -54,8 +65,11 @@ describe("harness picker parsers", () => {
 			),
 		);
 		expect(parseCodexModelCatalog(fixture)).toEqual([
-			{ id: "gpt-6-astra", efforts: ["low", "medium", "high"] },
-			{ id: "gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+			{ id: "gpt-6-astra", efforts: ["low", "medium", "high", "ultra"] },
+			{
+				id: "gpt-6.1-sol",
+				efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+			},
 		]);
 		fixture.models.push({ ...fixture.models[1], slug: "gpt-6-sol" });
 		expect(parseCodexModelCatalog(fixture).map((m) => m.id)).toEqual([

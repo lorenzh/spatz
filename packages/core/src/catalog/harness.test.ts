@@ -17,11 +17,11 @@ const catalog: HarnessCatalog = {
 	harnesses: {
 		"claude-code": {
 			version: "2.1.0",
-			models: [{ id: "claude-test", efforts: ["low", "max"] }],
+			models: [{ id: "claude-test", efforts: ["none", "low", "max"] }],
 		},
 		codex: {
 			version: "0.100.0",
-			models: [{ id: "gpt-test", efforts: ["high"] }],
+			models: [{ id: "gpt-test", efforts: ["high", "ultra"] }],
 		},
 	},
 };

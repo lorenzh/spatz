@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [models, family, presets, catalog, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics]
+keywords: [models, family, presets, catalog, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -113,6 +113,10 @@ All values use the [CLI model grammar](cli.md#the---models-grammar).
 Empty lists and unknown efforts fail with exit 1. Non-string defaults fail with exit 2 when selected.
 A higher-priority source overrides an invalid lower-priority value.
 
+Valid efforts, in ascending cost order, are `none`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`.
+Prices take precedence over effort. `none` means the harness offers no effort setting; it differs from missing usage data (`null`).
+Codex supports `ultra` only on models that list it. Claude Code has no `ultra`.
+
 ### Harness detection
 
 spatz reads the environment of its own process:
@@ -131,8 +135,8 @@ Presets use every effort listed for each model in the harness catalog.
 The implementation environment confirmed `CLAUDECODE=1` and `CLAUDE_CODE_ENTRYPOINT=cli` in Claude Code.
 
 The presets come from the [harness catalog](#harness-catalog) and keep `models_source` as `preset:<harness>`.
-Defaults include `xhigh` and `max` where listed.
-Critical tasks and cold start select the most expensive candidate pair, now at `max`.
+Defaults include `none`, `xhigh`, `max` and `ultra` where listed.
+Critical tasks and cold start select the most expensive candidate pair, with effort as a price tie-break.
 To narrow candidates, set `models` in config or `SPATZ_MODELS`, for example `claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high`.
 They describe harness defaults, not account entitlements. If a preset does not match your dispatch tools, use `--models` or a configured default.
 Without a detected harness or model default, spatz exits 2 with configuration instructions.
@@ -153,6 +157,11 @@ Unknown schema versions and malformed known harnesses count as failures. A faile
 The parser ignores unknown harnesses and extra fields. Only breaking changes need a schema bump.
 Known harnesses allow up to 50 models, IDs up to 64 characters, and valid spatz efforts.
 Downloads stop above 256 KiB.
+
+**v0.1.5 compatibility:** its strict effort validator rejects this entire catalog because it contains `none` and `ultra`.
+Those clients keep using their last valid cache or bundled catalog; failed validation does not overwrite the cache.
+This is the chosen compatibility path: keep the catalog accurate and accept frozen presets on v0.1.5 until users upgrade.
+Adding fields cannot teach released clients new efforts. Upgrade the CLI to use these models and efforts.
 
 `SPATZ_NO_NETWORK=1` skips both catalog requests and Jev classification for suggestions.
 It uses stale caches and keyword classification.

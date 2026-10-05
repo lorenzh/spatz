@@ -341,11 +341,13 @@ describe("effortFromHook", () => {
 			"max",
 		);
 		expect(effortFromHook(parsed(2))).toBe("low");
+		for (const level of ["none", "ultra"] as const)
+			expect(effortFromHook({ ...ok("x"), effort: { level } })).toBe(level);
 	});
 	test("missing or unknown -> null", () => {
 		expect(effortFromHook(ok("x"))).toBeNull();
 		expect(
-			effortFromHook({ ...ok("x"), effort: { level: "none" } }),
+			effortFromHook({ ...ok("x"), effort: { level: "turbo" } }),
 		).toBeNull();
 		expect(effortFromHook(parsed(1))).toBeNull();
 	});

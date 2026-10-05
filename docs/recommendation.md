@@ -70,7 +70,7 @@ spatz sorts the catalog from cheap to expensive by these keys:
 
 1. Output price per token
 2. Input price per token
-3. Effort: `low` < `medium` < `high` < `xhigh` < `max`
+3. Effort: `none` < `low` < `medium` < `high` < `xhigh` < `max` < `ultra`
 4. Model id, alphabetically
 
 The prices come from the OpenRouter model list. Prices apply per model, not per effort. spatz uses only the base prices.
@@ -79,7 +79,7 @@ A model that OpenRouter does not list is unknown. Unknown models come after all 
 
 The "most expensive candidate" is the last candidate in this order. If you pass an unknown model, it becomes the most expensive candidate. Then the control group, the `rules` strategy and critical tasks recommend that model.
 
-If a model has no effort in `--models`, spatz uses `low`, `medium` and `high`. It keeps only the efforts that OpenRouter lists for the model. `xhigh` and `max` are used only when you pass them.
+If a model has no effort in `--models`, spatz uses `low`, `medium` and `high`. It keeps only the efforts that OpenRouter lists for the model. `none`, `xhigh`, `max` and `ultra` are used only when you pass them.
 
 ## Exploration
 

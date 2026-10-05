@@ -57,38 +57,35 @@ export function parseClaudeModelCatalog(source: string): HarnessModel[] {
 	const rows = object(configs.find((row) => object(row).id === "cc")).models;
 	if (!Array.isArray(rows))
 		throw new Error("Claude Code picker models are missing");
-	// Deliberate scope: newest main-picker Opus and Sonnet, excluding overflow/legacy.
-	return ["opus", "sonnet"]
-		.map((family) => {
-			const candidates = rows
-				.map(object)
-				.filter(
-					(row) =>
-						row.section === "main" &&
-						object(row.runtime).family === family &&
-						row.disabled !== true &&
-						Array.isArray(row.offered_on) &&
-						row.offered_on.includes("first_party") &&
-						typeof row.id === "string" &&
-						new RegExp(`^claude-${family}-\\d+(?:-\\d+)?$`).test(row.id),
-				);
-			candidates.sort((a, b) =>
-				String(b.id).localeCompare(String(a.id), "en", { numeric: true }),
-			);
-			const row = candidates[0];
-			if (!row) throw new Error(`Claude Code picker lost ${family}`);
-			const thinking = object(row.thinking);
-			if (!Array.isArray(thinking.effort_options))
-				throw new Error(`Claude Code ${family} effort options are missing`);
+	const models = rows
+		.map(object)
+		.filter(
+			(row) =>
+				row.section === "main" &&
+				row.disabled !== true &&
+				Array.isArray(row.offered_on) &&
+				row.offered_on.includes("first_party") &&
+				typeof row.id === "string" &&
+				/^[a-z0-9][a-z0-9._-]{0,63}$/.test(row.id),
+		)
+		.map((row) => {
+			const options = object(row.thinking).effort_options;
+			if (options === undefined || (Array.isArray(options) && !options.length))
+				return { id: String(row.id), efforts: ["none"] as Effort[] };
+			if (!Array.isArray(options))
+				throw new Error(`Claude Code ${row.id} has invalid effort options`);
 			const runtime = efforts(object(row.runtime).effort_levels);
 			const supported = efforts(
-				thinking.effort_options.map((option) => object(option).id),
+				options.map((option) => object(option).id),
 			).filter((e) => runtime.includes(e));
 			if (!supported.length)
-				throw new Error(`Claude Code ${family} has no supported efforts`);
+				throw new Error(`Claude Code ${row.id} has no supported efforts`);
 			return { id: String(row.id), efforts: supported };
 		})
 		.sort((a, b) => a.id.localeCompare(b.id, "en"));
+	if (!models.length)
+		throw new Error("Claude Code picker extraction returned no current models");
+	return models;
 }
 
 /** Keep visible Codex picker entries from its newest GPT major generation. */

@@ -27,10 +27,18 @@ export const CRITICALITIES = [
 ] as const;
 export type Criticality = (typeof CRITICALITIES)[number];
 
-/** Cost order of efforts: low < medium < high < xhigh < max. */
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** Cost order of efforts: none < low < medium < high < xhigh < max < ultra. */
+export const EFFORTS = [
+	"none",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+	"ultra",
+] as const;
 export type Effort = (typeof EFFORTS)[number];
-/** Efforts used when --models gives no effort for a model (xhigh/max only when explicit). */
+/** Efforts used when --models gives no effort for a model (none/xhigh/max/ultra only when explicit). */
 export const DEFAULT_EFFORTS: readonly Effort[] = ["low", "medium", "high"];
 
 export const JEV_MODEL = "jev-1.13.0";

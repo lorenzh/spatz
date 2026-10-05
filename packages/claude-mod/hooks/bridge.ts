@@ -8,8 +8,19 @@ export const SCOPES = [
 export type Scope = (typeof SCOPES)[number];
 export const MODES = ["off", "show", "apply"] as const;
 export type Mode = (typeof MODES)[number];
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const EFFORTS = [
+	"none",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+	"ultra",
+] as const;
 export type Effort = (typeof EFFORTS)[number];
+// ultra is a spatz effort, but Claude Code cannot dispatch it.
+const isClaudeEffort = (value: unknown): value is Exclude<Effort, "ultra"> =>
+	value !== "ultra" && (EFFORTS as readonly unknown[]).includes(value);
 
 export interface Decision {
 	suggestionId: string;
@@ -54,7 +65,7 @@ const USAGE_TIMEOUT_MS = 2000;
 const ALIASES: Record<string, string> = {
 	sonnet: "claude-sonnet-5-5",
 	opus: "claude-opus-5-5",
-	haiku: "claude-haiku-4-5",
+	haiku: "claude-haiku-4-5-20251001",
 	fable: "claude-fable-5-1",
 };
 
@@ -66,7 +77,8 @@ export function aliasFor(model: string): string | undefined {
 function claudeModel(id: unknown): string | null {
 	if (typeof id !== "string" || !id.startsWith("anthropic/claude-"))
 		return null;
-	return id.slice("anthropic/".length).replaceAll(".", "-");
+	const model = id.slice("anthropic/".length).replaceAll(".", "-");
+	return model === "claude-haiku-4-5" ? (ALIASES.haiku ?? model) : model;
 }
 
 export async function suggest(
@@ -113,7 +125,7 @@ export async function suggest(
 		if (
 			typeof result?.suggestion_id !== "string" ||
 			!model ||
-			!(EFFORTS as readonly string[]).includes(first?.effort)
+			!isClaudeEffort(first?.effort)
 		) {
 			fail(new Error("invalid suggestion response"));
 			return null;
@@ -122,8 +134,7 @@ export async function suggest(
 			? result.candidates.flatMap(
 					(pair: { model?: unknown; effort?: unknown }) => {
 						const model = claudeModel(pair?.model);
-						return model &&
-							(EFFORTS as readonly unknown[]).includes(pair?.effort)
+						return model && isClaudeEffort(pair?.effort)
 							? [{ model, effort: pair.effort as Effort }]
 							: [];
 					},
@@ -215,7 +226,7 @@ export function ladder(models: string[]): { model: string; effort: Effort }[] {
 		const [model = "", efforts = ""] = entry.split(":");
 		return efforts
 			.split("+")
-			.filter((e): e is Effort => (EFFORTS as readonly string[]).includes(e))
+			.filter(isClaudeEffort)
 			.sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b))
 			.map((effort) => ({ model, effort }));
 	});

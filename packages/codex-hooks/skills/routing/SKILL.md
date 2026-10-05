@@ -39,6 +39,10 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
 
    Take `strategy` from the response and `n` from the selected ranking entry. Require the agent to report the model actually answering. Check available runtime evidence against the pick. If the selected model is unavailable, say so and stop that dispatch. Do not silently substitute another pair or claim an independent review.
 
+   Efforts are `none`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`. Use only efforts offered by the selected harness model.
+   For Codex CLI, map `ultra` to `-c model_reasoning_effort=ultra` (for example, `codex exec -m gpt-6-sol -c model_reasoning_effort=ultra "<task>"`). Claude Code has no `ultra`.
+   For `none`, set only the model and leave the harness effort setting untouched. Report the effort as `none`.
+
    Done when the dispatch uses the selected pair and its answering model is recorded, or its unavailability is disclosed.
 
 ## Report after verification
