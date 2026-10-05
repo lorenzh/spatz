@@ -356,7 +356,7 @@ describe("suggest", () => {
 	test("invalid --models throws", async () => {
 		const s = setup();
 		await expect(
-			s.api.suggest({ ...suggestInput(), models: "gpt-6-sol:ultra" }),
+			s.api.suggest({ ...suggestInput(), models: "gpt-6-sol:turbo" }),
 		).rejects.toThrow();
 		expect(s.writes()).toEqual([]);
 	});
@@ -443,7 +443,7 @@ describe("report", () => {
 		},
 	);
 
-	test("rejects an effort outside low..max without writing", async () => {
+	test("rejects an effort outside none..ultra without writing", async () => {
 		const s = setup();
 		await s.api.suggest(suggestInput());
 		const before = s.writes().length;
@@ -451,7 +451,7 @@ describe("report", () => {
 			s.api.report({
 				suggestionId: ID1,
 				model: "gpt-6-luna",
-				effort: "ultra",
+				effort: "turbo",
 				result: "pass",
 			}),
 		).rejects.toThrow(/effort/);
@@ -1342,6 +1342,7 @@ describe("stats", () => {
 				extensionDir: join(dir, "ext"),
 				type: "review",
 				successQuality: 0.8,
+				noneOnlyModels: ["anthropic/claude-haiku-4.5"],
 			},
 		]);
 	});
@@ -1528,7 +1529,12 @@ describe("direct mod attribution", () => {
 		};
 		await s.api.usage(input);
 		await s.api.usage({ ...input, output: 21 });
-		await s.api.usage({ ...input, turn: "t2", effort: "high" });
+		const opusUsage = await s.api.usage({
+			...input,
+			turn: "t2",
+			effort: "high",
+		});
+		expect(opusUsage.effort).toBe("high");
 		const db = new Database(dbPath);
 		try {
 			expect(
@@ -1565,6 +1571,24 @@ describe("direct mod attribution", () => {
 		} finally {
 			db.close();
 		}
+
+		const haiku = await s.api.suggest(suggestInput());
+		const haikuUsage = await s.api.usage({
+			...input,
+			suggestionId: haiku.suggestion_id,
+			model: "claude-haiku-4-5",
+			turn: "haiku",
+			effort: "high",
+		});
+		expect(haikuUsage.effort).toBe("none");
+		await expect(
+			s.api.usage({
+				...input,
+				suggestionId: haiku.suggestion_id,
+				model: "claude-opus-5-5",
+				effort: "none",
+			}),
+		).rejects.toThrow("none is not supported");
 		await expect(
 			s.api.usage({ ...input, suggestionId: "missing" }),
 		).rejects.toThrow("unknown suggestion_id");
@@ -1902,4 +1926,118 @@ test("preset catalogs start in parallel and the mod receives the full resolved l
 	expect(
 		result.candidates?.every((c) => c.model.startsWith("anthropic/")),
 	).toBe(true);
+});
+
+test("none rejects known reasoning models in suggestions and reports, but accepts unknown models", async () => {
+	const s = setup();
+	for (const model of [
+		"claude-opus-5-5",
+		"anthropic/claude-opus-5.5",
+		"gpt-6-astra",
+	]) {
+		await expect(
+			s.api.suggest({ task: "test", models: `${model}:none`, dryRun: true }),
+		).rejects.toThrow(`none is not supported for ${model}`);
+		await expect(
+			s.api.report({
+				suggestionId: ID1,
+				model,
+				effort: "none",
+				result: "pass",
+			}),
+		).rejects.toThrow(`none is not supported for ${model}`);
+	}
+	expect(s.fetched).toEqual([]);
+	expect(s.writes()).toEqual([]);
+	for (const model of ["claude-haiku-4-5-20251001", "unknown-model"]) {
+		const r = await s.api.suggest({
+			task: "test",
+			models: `${model}:none`,
+			dryRun: true,
+		});
+		expect(r.ranking[0]?.effort).toBe("none");
+		expect(
+			(
+				await s.api.report({
+					suggestionId: r.suggestion_id,
+					model,
+					effort: "none",
+					result: "pass",
+				})
+			)?.effort,
+		).toBe("none");
+	}
+});
+test("missing efforts from mod usage, Claude hooks and Codex hooks use the available none-only catalog", async () => {
+	const dbPath = join(dir, "none.db");
+	const s = setup({ dbPath, openStore });
+	const id = await linked(s);
+	await s.api.usage({
+		suggestionId: id,
+		model: "claude-haiku-4-5-20251001",
+		source: "claude-code-mod",
+		turn: "mod",
+		input: 1,
+		output: 2,
+		cacheRead: 0,
+		cacheCreation: 0,
+	});
+	const path = join(dir, "main.jsonl");
+	await Bun.write(
+		path,
+		[
+			JSON.stringify({ type: "user", promptId: PROMPT }),
+			assistant("a", "claude-haiku-4-5-20251001", 3),
+		].join("\n"),
+	);
+	await s.api.handleHook(
+		"Stop",
+		JSON.stringify(
+			base({
+				hook_event_name: "Stop",
+				effort: undefined,
+				transcript_path: path,
+				stop_hook_active: false,
+			}),
+		),
+	);
+	// A future none-only model must work from cache, without a release or network request.
+	const bundled = (await import("../catalog/harness.ts"))
+		.BUNDLED_HARNESS_CATALOG;
+	const catalog = structuredClone(bundled);
+	catalog.harnesses.codex.models.push({ id: "gpt-future", efforts: ["none"] });
+	await Bun.write(
+		join(dir, ".spatz", "harness-models.json"),
+		JSON.stringify({ fetched_at: T0, catalog }),
+	);
+	const rollout = (
+		await Bun.file(
+			`${import.meta.dir}/../signals/fixtures/codex-command-events.jsonl`,
+		).text()
+	)
+		.replaceAll("gpt-6-luna", "gpt-future")
+		.replace(/,"effort":"[^"]*"/g, "");
+	const codexPath = join(dir, "codex.jsonl");
+	await Bun.write(codexPath, rollout);
+	await s.api.handleHook(
+		"codex:Stop",
+		JSON.stringify({
+			session_id: SESSION,
+			turn_id: "todo-turn",
+			transcript_path: codexPath,
+			hook_event_name: "Stop",
+		}),
+	);
+	const db = new Database(dbPath);
+	try {
+		expect(
+			db.query("SELECT model, effort FROM usages ORDER BY model, source").all(),
+		).toEqual([
+			{ model: "anthropic/claude-haiku-4.5", effort: "none" },
+			{ model: "anthropic/claude-haiku-4.5", effort: "none" },
+			{ model: "openai/gpt-future", effort: "none" },
+		]);
+	} finally {
+		db.close();
+	}
 });

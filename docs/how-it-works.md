@@ -23,7 +23,7 @@ For the decision rule, read [recommendation.md](recommendation.md). For data tha
 | Outcome | The quality of one suggestion (0 to 1), computed from its signals, plus the pair that was actually used. |
 | Cell | The pair (task type, difficulty). spatz learns success rates per cell. |
 
-Effort is one of `low`, `medium`, `high`, `xhigh`, `max`, in this cost order.
+Effort is one of `none`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, in this cost order.
 
 ## Architecture
 

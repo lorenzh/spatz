@@ -28,7 +28,7 @@
 			]
 		},
 		{
-			"slug": "gpt-reserve",
+			"slug": "gpt-99-hidden",
 			"visibility": "hide",
 			"supported_reasoning_levels": [{ "effort": "low" }]
 		}

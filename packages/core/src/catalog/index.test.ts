@@ -46,6 +46,10 @@ describe("toCanonicalId", () => {
 	test.each([
 		["claude-opus-5-5", "anthropic/claude-opus-5.5"],
 		["claude-sonnet-5-5", "anthropic/claude-sonnet-5.5"],
+		["claude-haiku-4-5-20251001", "anthropic/claude-haiku-4.5"],
+		["claude-sonnet-5-5-20261001", "anthropic/claude-sonnet-5.5"],
+		["claude-fable-5-1-20261231", "anthropic/claude-fable-5.1"],
+		["claude-haiku-4-5-20260101", "anthropic/claude-haiku-4.5"],
 		["gpt-6-sol", "openai/gpt-6-sol"],
 		["gpt-6.1-sol", "openai/gpt-6.1-sol"],
 	])("%s -> %s", (id, canonical) => {
@@ -198,18 +202,62 @@ describe("cost order", () => {
 		]);
 	});
 
-	test("equal prices sort by all five effort ranks", () => {
+	test("equal prices sort by all seven effort ranks", () => {
 		const c = buildCatalog(
-			parseModelsArg("gpt-6-sol:max+high+low+xhigh+medium"),
+			parseModelsArg("gpt-6-sol:ultra+max+high+low+xhigh+medium+none"),
 			models,
 			noConfig,
 		);
 		expect(c.map((x) => x.effort)).toEqual([
+			"none",
 			"low",
 			"medium",
 			"high",
 			"xhigh",
 			"max",
+			"ultra",
+		]);
+	});
+
+	test("dated picker Haiku uses its OpenRouter price and stays below reasoning models", () => {
+		const c = buildCatalog(
+			parseModelsArg("claude-haiku-4-5-20251001:none,claude-opus-5-5:low"),
+			[
+				...models,
+				{
+					id: "anthropic/claude-haiku-4.5",
+					name: "Haiku",
+					price_prompt: 1e-6,
+					price_completion: 5e-6,
+					context_length: 200000,
+					supported_efforts: null,
+				},
+			],
+			noConfig,
+		);
+		expect(c[0]).toMatchObject({
+			model: "anthropic/claude-haiku-4.5",
+			effort: "none",
+			known: true,
+			requested_id: "claude-haiku-4-5-20251001",
+		});
+		expect(c[1]?.model).toBe("anthropic/claude-opus-5.5");
+		expect(
+			toCanonicalId("claude-haiku-4-5-20251001", {
+				"claude-haiku-4-5-20251001": "custom/haiku",
+			}),
+		).toBe("custom/haiku");
+	});
+
+	test("price takes precedence over none and ultra", () => {
+		const c = buildCatalog(
+			parseModelsArg("claude-opus-5-5:none,claude-sonnet-5-5:ultra"),
+			models,
+			noConfig,
+		);
+		expect(keys(c)).toEqual([
+			"anthropic/claude-sonnet-5.5:ultra",
+			"anthropic/claude-opus-5.5:none",
 		]);
 	});
 

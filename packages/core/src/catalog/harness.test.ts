@@ -17,11 +17,11 @@ const catalog: HarnessCatalog = {
 	harnesses: {
 		"claude-code": {
 			version: "2.1.0",
-			models: [{ id: "claude-test", efforts: ["low", "max"] }],
+			models: [{ id: "claude-test", efforts: ["none", "low", "max"] }],
 		},
 		codex: {
 			version: "0.100.0",
-			models: [{ id: "gpt-test", efforts: ["high"] }],
+			models: [{ id: "gpt-test", efforts: ["high", "ultra"] }],
 		},
 	},
 };
@@ -235,4 +235,36 @@ test("body cap stops oversized streams and preserves stale cache", async () => {
 	const atLimit = `${JSON.stringify(catalog)}`.padEnd(256 * 1024, " ");
 	expect(await load(async () => new Response(atLimit))).toEqual(catalog);
 	expect((await Bun.file(cachePath).json()).fetched_at).toBe(NOW);
+});
+
+test("unknown efforts and unknown-only models are filtered without mutating input", async () => {
+	const future = structuredClone(catalog);
+	const models = [
+		{ id: "gpt-test", efforts: ["high", "turbo"] },
+		{ id: "gpt-future", efforts: ["turbo"] },
+	];
+	const input = {
+		...future,
+		harnesses: {
+			...future.harnesses,
+			codex: { ...future.harnesses.codex, models },
+		},
+	};
+	const expected: HarnessCatalog = {
+		...future,
+		harnesses: {
+			...future.harnesses,
+			codex: {
+				...future.harnesses.codex,
+				models: [{ id: "gpt-test", efforts: ["high"] }],
+			},
+		},
+	};
+	expect(parseHarnessCatalog(input)).toEqual(expected);
+	expect(models[0]?.efforts).toEqual(["high", "turbo"]);
+	expect(models).toHaveLength(2);
+	expect(await load(async () => Response.json(input))).toEqual(expected);
+	expect((await Bun.file(cachePath).json()).catalog).toEqual(expected);
+	models.push({ id: "bad:id", efforts: ["turbo"] });
+	expect(parseHarnessCatalog(input)).toBeNull();
 });

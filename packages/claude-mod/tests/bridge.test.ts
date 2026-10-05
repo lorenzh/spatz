@@ -148,3 +148,41 @@ test("bridge accepts max effort from CLI defaults", async () => {
 	);
 	expect(result?.effort).toBe("max");
 });
+
+test("Claude fails open for a Codex-only ultra recommendation", async () => {
+	expect(
+		await suggest(
+			async () => ({
+				exitCode: 0,
+				stderr: "",
+				stdout: good.replace('"high"', '"ultra"'),
+			}),
+			"task",
+			[],
+			{ scope: "turn" },
+		),
+	).toBeNull();
+});
+
+test("bridge restores catalog snapshots and preserves explicit dated IDs", async () => {
+	for (const [id, expected] of [
+		["anthropic/claude-haiku-4.5", "claude-haiku-4-5-20251001"],
+		["anthropic/claude-sonnet-5.5-20261001", "claude-sonnet-5-5-20261001"],
+		["anthropic/claude-fable-5.1-20261231", "claude-fable-5-1-20261231"],
+	]) {
+		const result = await suggest(
+			async () => ({
+				exitCode: 0,
+				stderr: "",
+				stdout: JSON.stringify({
+					suggestion_id: "s",
+					ranking: [{ model: id, effort: "high" }],
+				}),
+			}),
+			"task",
+			[],
+			{ scope: "turn" },
+		);
+		expect(result?.model).toBe(expected);
+	}
+});

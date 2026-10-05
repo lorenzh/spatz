@@ -100,8 +100,13 @@ Set them as plugin options (`userConfig`). The `/spatz` commands override the fi
 An unknown value falls back to its default.
 
 Empty `models` omits `--models`. The CLI checks `SPATZ_MODELS`, then project and user config, then the Claude Code catalog preset.
-The preset uses every catalog effort, including `xhigh` and `max`.
-Critical tasks and cold start choose the most expensive pair, now at `max`.
+The preset includes every enabled first-party model in the main picker, with its catalog efforts, including `none`, `xhigh` and `max`.
+For `none`, the mod sets only the model. It leaves effort untouched in `agent.spawn` and `turn.step`.
+Haiku uses `none`. When the catalog lists only `none`, spatz records missing usage effort as `none`.
+Learning also counts older null-effort outcomes for these models. Other models keep unknown effort as `null`.
+Escalation can move from a `none` model to a reasoning model with an explicit effort.
+Claude Code has no `ultra`: the mod rejects an `ultra` recommendation and excludes it from escalation.
+Critical tasks and cold start choose the most expensive pair, currently `claude-fable-5-1:max`.
 To narrow candidates, set the mod option, config `models`, or `SPATZ_MODELS`.
 For example: `claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high`.
 See [model defaults](configuration.md#harness-catalog) for cache and offline behavior.

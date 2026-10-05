@@ -79,12 +79,47 @@ export function createApi(
 	const debugHook = (message: string) => {
 		if (deps.env.SPATZ_DEBUG === "1") console.error(`spatz hook: ${message}`);
 	};
+	async function availableEfforts() {
+		const cfg = await getConfig();
+		// Recording and explicit lists use the available cache/bundle without a network request.
+		const catalog = await loadHarnessCatalog({
+			fetch: deps.fetch,
+			env: { ...deps.env, SPATZ_NO_NETWORK: "1" },
+			cachePath: join(deps.homeDir, ".spatz", "harness-models.json"),
+			clock: deps.clock,
+			ttlMs: cfg.tuning.openRouterCacheMs,
+		});
+		const byModel = new Map<string, Effort[]>();
+		for (const harness of Object.values(catalog.harnesses))
+			for (const model of harness.models) {
+				const id = toCanonicalId(model.id, cfg.aliases);
+				byModel.set(id, [...(byModel.get(id) ?? []), ...model.efforts]);
+			}
+		return byModel;
+	}
+	const noneOnly = (available: Map<string, Effort[]>) =>
+		[...available]
+			.filter(([, efforts]) => efforts.every((e) => e === "none"))
+			.map(([model]) => model);
+	async function validateNone(models: string[]) {
+		if (!models.length) return;
+		const cfg = await getConfig();
+		const available = await availableEfforts();
+		for (const model of models) {
+			const efforts = available.get(toCanonicalId(model, cfg.aliases));
+			if (efforts?.some((e) => e !== "none"))
+				throw new Error(
+					`none is not supported for ${model}; use a catalog effort: ${efforts.join(", ")}`,
+				);
+		}
+	}
 
 	/** One store handle per use case; each spatz call is its own process. */
 	async function withStore<T>(
 		fn: (store: Store) => T | Promise<T>,
 	): Promise<T> {
-		const store = deps.openStore(deps.dbPath);
+		const noneOnlyModels = noneOnly(await availableEfforts());
+		const store = deps.openStore(deps.dbPath, noneOnlyModels);
 		try {
 			return await fn(store);
 		} finally {
@@ -446,6 +481,18 @@ export function createApi(
 			};
 			// Reject invalid explicit candidates before starting either request.
 			let requested = parseRequested();
+			try {
+				await validateNone(
+					requested
+						.filter((r) => r.efforts?.includes("none"))
+						.map((r) => r.requested_id),
+				);
+			} catch (error) {
+				throw labelModelsError(
+					new Error(`--models: ${(error as Error).message}`),
+					resolved.source,
+				);
+			}
 			const options = {
 				fetch: deps.fetch,
 				env: deps.env,
@@ -562,6 +609,7 @@ export function createApi(
 				!(EFFORTS as readonly string[]).includes(effort)
 			)
 				throw new Error("invalid effort");
+			if (effort === "none") await validateNone([model]);
 			for (const n of [
 				input.input,
 				input.output,
@@ -594,7 +642,9 @@ export function createApi(
 					reported_at: deps.clock.now(),
 				};
 				store.upsertUsage(record);
-				return record;
+				const stored = store.getUsage(suggestionId, source, turn, record.model);
+				if (!stored) throw new Error("usage was not stored");
+				return stored;
 			});
 		},
 
@@ -621,6 +671,7 @@ export function createApi(
 				);
 			if (!Object.hasOwn(REPORT_VALUES, result))
 				throw new Error(`invalid result "${result}"`);
+			if (effort === "none") await validateNone([model]);
 			const cfg = await getConfig();
 			return withStore((store) => {
 				const suggestion = store.getSuggestion(suggestionId);
@@ -680,6 +731,7 @@ export function createApi(
 
 		async stats({ type, by }) {
 			const cfg = await getConfig();
+			const noneOnlyModels = noneOnly(await availableEfforts());
 			// Opening the store runs migrations; the read-only DuckDB scan cannot.
 			await withStore(() => {});
 			const runStats =
@@ -690,6 +742,7 @@ export function createApi(
 				...(type && { type }),
 				...(by && { by }),
 				successQuality: cfg.tuning.successQuality,
+				noneOnlyModels,
 			});
 		},
 	};

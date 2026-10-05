@@ -51,7 +51,7 @@ export function toCanonicalId(
 	if (id.includes("/")) return id;
 	// Greedy prefix makes this hit the last digit-dash-digit.
 	if (id.startsWith("claude-"))
-		return `anthropic/${id.replace(/^(.*\d)-(\d)/, "$1.$2")}`;
+		return `anthropic/${id.replace(/-\d{8}$/, "").replace(/^(.*\d)-(\d)/, "$1.$2")}`;
 	if (id.startsWith("gpt-")) return `openai/${id}`;
 	return id;
 }
@@ -97,7 +97,7 @@ export function buildCatalog(
 	return [...seen.values()].sort(compareCost);
 }
 
-/** Output price, input price, effort (low < medium < high < xhigh < max), id; unknown models after all known. */
+/** Output price, input price, effort (none < low < medium < high < xhigh < max < ultra), id; unknown models after all known. */
 export function compareCost(a: Candidate, b: Candidate): number {
 	// Unknown (null price) counts as the most expensive tier.
 	const price = (p: number | null) => p ?? Number.POSITIVE_INFINITY;

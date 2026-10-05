@@ -31,6 +31,7 @@ export function parseHarnessCatalog(value: unknown): HarnessCatalog | null {
 		!object(value.harnesses)
 	)
 		return null;
+	const harnesses = {} as HarnessCatalog["harnesses"];
 	for (const harness of HARNESSES) {
 		const entry = value.harnesses[harness];
 		if (
@@ -43,6 +44,7 @@ export function parseHarnessCatalog(value: unknown): HarnessCatalog | null {
 		)
 			return null;
 		const ids = new Set<string>();
+		const models: HarnessModel[] = [];
 		for (const model of entry.models) {
 			if (
 				!object(model) ||
@@ -52,14 +54,20 @@ export function parseHarnessCatalog(value: unknown): HarnessCatalog | null {
 				ids.has(model.id) ||
 				!Array.isArray(model.efforts) ||
 				model.efforts.length === 0 ||
-				!model.efforts.every((e) => EFFORTS.includes(e)) ||
+				!model.efforts.every((e) => typeof e === "string") ||
 				new Set(model.efforts).size !== model.efforts.length
 			)
 				return null;
 			ids.add(model.id);
+			const efforts = model.efforts.filter((e): e is Effort =>
+				(EFFORTS as readonly string[]).includes(e),
+			);
+			if (efforts.length) models.push({ id: model.id, efforts });
 		}
+		if (!models.length) return null;
+		harnesses[harness] = { version: entry.version, models };
 	}
-	return value as unknown as HarnessCatalog;
+	return { schema: 1, updated: value.updated, harnesses };
 }
 
 const checkedBundle = parseHarnessCatalog(bundled);

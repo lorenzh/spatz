@@ -472,6 +472,7 @@ test("mod CLI stores explicit attribution, usage replays, direct reports and sco
 			scope_key: "turn-1",
 			agent_id: "agent-1",
 			source: "claude-code-mod",
+			is_sidechain: true,
 		});
 	}
 	const reportArgs = [
@@ -646,4 +647,50 @@ describe("candidate resolution CLI", () => {
 			if (code === 2) expect(r.stderr).toContain("usage:");
 		},
 	);
+});
+
+test("none and ultra survive CLI validation, storage, reports and stats", async () => {
+	for (const [model, effort] of [
+		["claude-haiku-4-5-20251001", "none"],
+		["gpt-6-sol", "ultra"],
+	] as const) {
+		const suggested = await spatz([
+			TASK,
+			"--models",
+			`${model}:${effort}`,
+			"--json",
+		]);
+		expect(suggested.code).toBe(0);
+		const suggestion: Suggestion = JSON.parse(suggested.stdout);
+		expect(suggestion.ranking[0]?.effort).toBe(effort);
+		const reported = await spatz([
+			"report",
+			suggestion.suggestion_id,
+			"--model",
+			model,
+			"--effort",
+			effort,
+			"--result",
+			"pass",
+			"--json",
+		]);
+		expect(reported.code).toBe(0);
+		expect(JSON.parse(reported.stdout).effort).toBe(effort);
+		const stats = await spatz(["stats", "--json"]);
+		expect(stats.code).toBe(0);
+		const pairs = (JSON.parse(stats.stdout) as StatsReport).by_type.flatMap(
+			(t) => t.pairs,
+		);
+		expect(
+			pairs.some(
+				(p) =>
+					p.model === suggestion.ranking[0]?.model &&
+					p.effort === effort &&
+					p.n === 1,
+			),
+		).toBe(true);
+		expect((await spatz(["stats"])).stdout).toContain(
+			`${suggestion.ranking[0]?.model}:${effort}  n=1`,
+		);
+	}
 });

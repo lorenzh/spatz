@@ -129,6 +129,12 @@ export interface Store {
 	insertSignal(record: SignalRecord): void;
 	/** Upsert on (suggestion_id, source, scope_key, model). */
 	upsertUsage(record: UsageRecord): void;
+	getUsage(
+		suggestionId: string,
+		source: UsageRecord["source"],
+		scopeKey: string,
+		model: string,
+	): UsageRecord | null;
 	/** Distinct transcript and subagent usage scopes of the suggestions, with their stored effort. */
 	usageScopes(
 		suggestionIds: string[],
@@ -180,7 +186,7 @@ export interface CoreDeps {
 	/** New suggestion id; default crypto.randomUUID. */
 	newId: () => string;
 	/** Opens the store; tests may return an in-memory or fake store. */
-	openStore: (dbPath: string) => Store;
+	openStore: (dbPath: string, noneOnlyModels?: string[]) => Store;
 	/** Optional preloaded config; when absent the api loads it from files and env. */
 	config?: Config;
 }

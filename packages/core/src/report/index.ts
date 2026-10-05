@@ -18,6 +18,8 @@ export interface StatsOptions {
 	by?: "scope";
 	/** Success means quality >= this (0.8). */
 	successQuality: number;
+	/** Catalog-confirmed models whose only effort is `none`. */
+	noneOnlyModels?: string[];
 	/** Called with each SQL statement before it runs; may throw to abort (tests block INSTALL). */
 	onSql?: (sql: string) => void;
 }
@@ -25,9 +27,9 @@ export interface StatsOptions {
 // Non-test suggestions and their outcomes. The sqlite scanner reads the view's
 // CAST(... AS REAL) column as FLOAT (0.79999999 -> 0.800000011920929), so the
 // success test runs inside SQLite at double precision.
-const base = (q: number) => `
+const base = (q: number, noneOnlyModels: string[]) => `
 WITH s AS (SELECT * FROM db.suggestions WHERE is_test = 0),
-oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, effort, quality >= ${q} AS success FROM outcomes')),
+oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, CASE WHEN model IN (${noneOnlyModels.map((id) => `''${id.replaceAll("'", "''''")}''`).join(",") || "NULL"}) THEN ''none'' ELSE effort END AS effort, quality >= ${q} AS success FROM outcomes')),
 o AS (
 	SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success::INTEGER AS success,
@@ -41,7 +43,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 	const { dbPath, extensionDir, type, successQuality: q, onSql } = options;
 	// Interpolated into SQL: String(q) of a finite number round-trips exactly.
 	if (!Number.isFinite(q)) throw new Error(`invalid successQuality: ${q}`);
-	const BASE = base(q);
+	const BASE = base(q, options.noneOnlyModels ?? []);
 	const instance = await DuckDBInstance.create(":memory:", {
 		extension_directory: extensionDir,
 		// Only the explicit INSTALL below may download.

@@ -939,3 +939,51 @@ test("agent windows are independent and late links only close their own scope", 
 		{ id: "main2", start: 40, end: 151 },
 	]);
 });
+
+test("none-only models normalize missing usage effort and pool legacy null rows", () => {
+	const path = tempDb();
+	const model = "anthropic/claude-haiku-4.5";
+	const legacy = openStore(path);
+	for (const [id, m] of [
+		["old", model],
+		["unknown", "m/unknown"],
+		["reasoning", "anthropic/claude-opus-5.5"],
+	]) {
+		legacy.insertSuggestion(suggestion({ id }));
+		legacy.upsertUsage(usage({ suggestion_id: id, model: m, effort: null }));
+		signal(legacy, "test", 1, 1000, id);
+	}
+	legacy.dispose();
+	const store = openStore(path, [model]);
+	stores.push(store);
+	for (const [id, effort] of [
+		["new", null],
+		["explicit", "high"],
+	] as const) {
+		store.insertSuggestion(suggestion({ id }));
+		store.upsertUsage(usage({ suggestion_id: id, model, effort }));
+		signal(store, "test", 1, 1000, id);
+	}
+	expect(store.outcome("new")?.effort).toBe("none");
+	expect(store.outcome("explicit")?.effort).toBe("none");
+	expect(store.cellStats("code.bugfix")).toEqual([
+		{
+			task_type: "code.bugfix",
+			difficulty: "medium",
+			model,
+			effort: "none",
+			n: 3,
+			sum_quality: 3,
+		},
+	]);
+});
+test("usage scopes select the highest ranked effort, not lexical maximum", () => {
+	const store = open();
+	for (const [i, effort] of (
+		["none", "medium", "high", "max", "xhigh", "ultra"] as const
+	).entries()) {
+		store.upsertUsage(usage({ model: `m/${i}`, effort }));
+		expect(store.usageScopes(["s1"])[0]?.effort).toBe(i === 4 ? "max" : effort);
+	}
+	expect(store.usageScopes([])).toEqual([]);
+});

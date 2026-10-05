@@ -202,6 +202,23 @@ test("reads the SQLite file read-only and leaves it unchanged", async () => {
 	store = openStore(dbPath); // afterEach disposes again
 });
 
+test("stats normalizes legacy null efforts for none-only catalog models", async () => {
+	const model = "anthropic/claude-haiku-4.5";
+	sug("haiku", { top: [model, "none"] });
+	usage("haiku", model, null, [0, 1], "transcript");
+	signal("haiku", 1);
+	const result = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		noneOnlyModels: [model],
+		onSql: noInstall,
+	});
+	expect(result.by_type[0]?.pairs).toEqual([
+		{ model, effort: "none", n: 1, success_rate: 1 },
+	]);
+});
+
 test("missing extension: INSTALL is attempted only after LOAD fails (guard stops it)", async () => {
 	const empty = join(dir, "no-ext");
 	const sqls: string[] = [];
