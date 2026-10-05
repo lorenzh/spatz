@@ -1,0 +1,32 @@
+{
+	"name": "spatz-mod",
+	"version": "0.1.0",
+	"description": "Suggests Claude models for subagents using spatz.",
+	"author": { "name": "spatz" },
+	"userConfig": {
+		"mode": {
+			"type": "string",
+			"title": "Mode",
+			"default": "show",
+			"description": "show or apply model suggestions"
+		},
+		"scope": {
+			"type": "string",
+			"title": "Scope",
+			"default": "subagent",
+			"description": "Routing scope"
+		},
+		"spatz": {
+			"type": "string",
+			"title": "spatz executable",
+			"default": "spatz",
+			"description": "spatz executable"
+		},
+		"models": {
+			"type": "string",
+			"title": "Models",
+			"default": "claude-opus-5-5:low+medium+high,claude-sonnet-5-5:low+medium+high",
+			"description": "Claude model candidates"
+		}
+	}
+}

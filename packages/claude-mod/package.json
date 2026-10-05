@@ -1,0 +1,5 @@
+{
+	"name": "@spatz/claude-mod",
+	"private": true,
+	"type": "module"
+}

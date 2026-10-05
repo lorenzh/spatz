@@ -1,0 +1,4 @@
+{
+	"description": "Spatz model suggestion hooks",
+	"modules": ["./register.ts"]
+}
