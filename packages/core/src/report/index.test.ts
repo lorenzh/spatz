@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import type {
 	Difficulty,
 	Effort,
 	ReportResult,
+	RoutingScope,
 	StrategyName,
 	TaskType,
 	TypeStats,
@@ -35,6 +37,7 @@ afterEach(() => {
 });
 
 interface SugOpts {
+	scope?: RoutingScope;
 	task_type?: TaskType;
 	difficulty?: Difficulty;
 	control?: boolean;
@@ -50,10 +53,14 @@ function sug(id: string, o: SugOpts = {}) {
 	store.insertSuggestion({
 		id,
 		created_at: 1,
+		scope: o.scope ?? null,
+		agent: null,
+		turn_id: null,
+		agent_id: null,
 		session_id: null,
 		prompt_id: null,
 		task_type: o.task_type ?? "code.bugfix",
-		difficulty: o.difficulty ?? "leicht",
+		difficulty: o.difficulty ?? "easy",
 		criticality: "none",
 		probabilities: null,
 		model_ref: null,
@@ -114,6 +121,33 @@ function report(
 const noInstall = (sql: string) => {
 	if (/\bINSTALL\b/i.test(sql)) throw new Error(`INSTALL blocked: ${sql}`);
 };
+
+test("stats and stats by scope combine legacy and English difficulty cells", async () => {
+	sug("legacy", { difficulty: "medium", scope: "turn" });
+	sug("english", { difficulty: "medium", scope: "turn", control: true });
+	report("legacy", "m/a", "low", "pass");
+	report("english", "m/a", "low", "fail");
+	const db = new Database(dbPath);
+	db.run("UPDATE suggestions SET difficulty = 'mittel' WHERE id = 'legacy'");
+	db.close();
+	for (const by of [undefined, "scope"] as const) {
+		const result = await runStats({
+			dbPath,
+			extensionDir,
+			successQuality: 0.8,
+			onSql: noInstall,
+			...(by && { by }),
+		});
+		expect(result.learned_success).toBe(1);
+		expect(result.control_success).toBe(0);
+		if (by)
+			expect(result.by_scope?.[0]).toMatchObject({
+				scope: "turn",
+				n: 2,
+				success_rate: 0.5,
+			});
+	}
+});
 const stats = (type?: TaskType) =>
 	runStats({
 		dbPath,
@@ -197,7 +231,7 @@ test("DuckDB is imported only by the report module", async () => {
 
 describe("one dataset", () => {
 	beforeEach(() => {
-		// code.bugfix / leicht
+		// code.bugfix / easy
 		sug("s1", { top: ["m/a", "low"] });
 		report("s1", "m/a", "low", "pass", [100, 10]);
 		sug("s2", { top: ["m/a", "low"] });
@@ -208,8 +242,8 @@ describe("one dataset", () => {
 		usage("s4", "m/a", null, [5, 1], "transcript");
 		sug("s5", { is_test: true }); // dry-run: excluded everywhere
 		report("s5", "m/a", "low", "fail", [1000, 1000]);
-		// review / mittel: learned only
-		sug("r1", { task_type: "review", difficulty: "mittel" });
+		// review / medium: learned only
+		sug("r1", { task_type: "review", difficulty: "medium" });
 		report("r1", "m/a", "low", "fail", [7, 3]);
 	});
 
@@ -267,20 +301,20 @@ test("only dry-run suggestions: counts nothing", async () => {
 
 test("learned vs control is weighted by outcome count per cell", async () => {
 	const t = "code.feature";
-	// cell leicht (2 outcomes): learned 1/1, control 0/1
-	sug("a1", { task_type: t, difficulty: "leicht" });
+	// cell easy (2 outcomes): learned 1/1, control 0/1
+	sug("a1", { task_type: t, difficulty: "easy" });
 	report("a1", "m/a", "low", "pass");
-	sug("a2", { task_type: t, difficulty: "leicht", control: true });
+	sug("a2", { task_type: t, difficulty: "easy", control: true });
 	report("a2", "m/b", "high", "fail");
-	// cell schwer (3 outcomes): learned 0/2, control 1/1
-	sug("b1", { task_type: t, difficulty: "schwer" });
+	// cell hard (3 outcomes): learned 0/2, control 1/1
+	sug("b1", { task_type: t, difficulty: "hard" });
 	report("b1", "m/a", "low", "fail");
-	sug("b2", { task_type: t, difficulty: "schwer" });
+	sug("b2", { task_type: t, difficulty: "hard" });
 	report("b2", "m/a", "low", "partial");
-	sug("b3", { task_type: t, difficulty: "schwer", control: true });
+	sug("b3", { task_type: t, difficulty: "hard", control: true });
 	report("b3", "m/b", "high", "pass");
-	// cell mittel: control only, ignored
-	sug("c1", { task_type: t, difficulty: "mittel", control: true });
+	// cell medium: control only, ignored
+	sug("c1", { task_type: t, difficulty: "medium", control: true });
 	report("c1", "m/b", "high", "fail");
 	const r = await stats();
 	expect(r.learned_success).toBeCloseTo((2 * 1 + 3 * 0) / 5);
@@ -328,7 +362,7 @@ test("success is quality >= 0.8; pairs and adoption distinguish effort", async (
 });
 
 test("success boundary keeps double precision: 0.79999999 fails, 0.8 passes", async () => {
-	sug("b1"); // learned, leicht
+	sug("b1"); // learned, easy
 	usage("b1", "m/a", "low", [1, 1]);
 	signal("b1", 0.79999999);
 	sug("b2", { control: true });
@@ -344,19 +378,19 @@ test("success boundary keeps double precision: 0.79999999 fails, 0.8 passes", as
 });
 
 test("learned vs control cells are (task_type, difficulty), not difficulty alone", async () => {
-	// leicht: learned only in code.feature, control only in review -> no shared cell
-	sug("x1", { task_type: "code.feature", difficulty: "leicht" });
+	// easy: learned only in code.feature, control only in review -> no shared cell
+	sug("x1", { task_type: "code.feature", difficulty: "easy" });
 	report("x1", "m/a", "low", "pass");
-	sug("x2", { task_type: "review", difficulty: "leicht", control: true });
+	sug("x2", { task_type: "review", difficulty: "easy", control: true });
 	report("x2", "m/b", "high", "fail");
 	expect(await stats()).toMatchObject({
 		learned_success: null,
 		control_success: null,
 	});
-	// shared cell code.feature/schwer: learned fails, control passes
-	sug("y1", { task_type: "code.feature", difficulty: "schwer" });
+	// shared cell code.feature/hard: learned fails, control passes
+	sug("y1", { task_type: "code.feature", difficulty: "hard" });
 	report("y1", "m/a", "low", "fail");
-	sug("y2", { task_type: "code.feature", difficulty: "schwer", control: true });
+	sug("y2", { task_type: "code.feature", difficulty: "hard", control: true });
 	report("y2", "m/b", "high", "pass");
 	const r = await stats();
 	expect(r.learned_success).toBe(0);
@@ -376,4 +410,82 @@ test("outcome without usage counts in n but not in pairs or adoption", async () 
 			output_tokens: 0,
 		},
 	]);
+});
+
+test("scope stats count outcomes once and include cache tokens, unscoped and usage-only suggestions", async () => {
+	sug("t1", { scope: "turn" });
+	report("t1", "m/a", "low", "pass", [10, 20]);
+	usage("t1", "m/b", "high", [10, 30], "transcript");
+	sug("t2", { scope: "turn" });
+	report("t2", "m/a", "low", "fail");
+	sug("t3", { scope: "turn" });
+	store.upsertUsage({
+		suggestion_id: "t3",
+		model: "m/a",
+		effort: null,
+		source: "claude-code-mod",
+		scope_key: "run",
+		turn_id: "run",
+		input_tokens: 20,
+		output_tokens: 10,
+		cache_read_tokens: 60,
+		cache_creation_tokens: 20,
+		is_sidechain: false,
+		rounds: null,
+		note: null,
+		reported_at: 1,
+	});
+	sug("legacy");
+	report("legacy", "m/a", "low", "partial", [5, 6]);
+	sug("dry", { scope: "turn", is_test: true });
+	report("dry", "m/a", "low", "pass", [999, 999]);
+	sug("zero", { scope: "step", task_type: "review" });
+	const r = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		onSql: noInstall,
+	});
+	expect(r.by_scope).toEqual([
+		{
+			scope: "step",
+			n: 0,
+			success_rate: null,
+			input_tokens: 0,
+			output_tokens: 0,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
+			cache_read_share: 0,
+		},
+		{
+			scope: "turn",
+			n: 2,
+			success_rate: 0.5,
+			input_tokens: 40,
+			output_tokens: 60,
+			cache_read_tokens: 60,
+			cache_creation_tokens: 20,
+			cache_read_share: 0.5,
+		},
+		{
+			scope: null,
+			n: 1,
+			success_rate: 0,
+			input_tokens: 5,
+			output_tokens: 6,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
+			cache_read_share: 0,
+		},
+	]);
+	const filtered = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		type: "review",
+		onSql: noInstall,
+	});
+	expect(filtered.by_scope).toEqual(r.by_scope?.slice(0, 1));
 });

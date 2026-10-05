@@ -43,7 +43,7 @@ const key = (c: { model: string; effort: Effort }) => `${c.model}:${c.effort}`;
 function cls(over: Partial<Classification> = {}): Classification {
 	return {
 		task_type: "code.bugfix",
-		difficulty: "leicht",
+		difficulty: "easy",
 		criticality: "none",
 		best_candidate: key(c1),
 		probabilities: null,
@@ -63,7 +63,7 @@ function stat(
 	c: Candidate,
 	n: number,
 	sum: number,
-	difficulty: Difficulty = "leicht",
+	difficulty: Difficulty = "easy",
 	task_type: CellStat["task_type"] = "code.bugfix",
 ): CellStat {
 	return {
@@ -77,6 +77,27 @@ function stat(
 }
 const pick = (d: Decision) => d.ranking[0];
 const LEARNED = 0.5; // random draw in the 80 % learned band
+
+test("legacy difficulty inputs pool exactly like English and print English reasons", () => {
+	const history = [
+		stat(c0, 3, 3, "medium"),
+		stat(c0, 2, 2, "hard"),
+		stat(c1, 20, 20, "easy"),
+	];
+	const expected = recommend(
+		ctx(LEARNED, { difficulty: "medium" }),
+		CATALOG,
+		history,
+	);
+	const legacyContext = JSON.parse(JSON.stringify(ctx(LEARNED)));
+	legacyContext.classification.difficulty = "mittel";
+	const legacyHistory = JSON.parse(JSON.stringify(history));
+	for (const [i, difficulty] of ["mittel", "schwer", "leicht"].entries())
+		legacyHistory[i].difficulty = difficulty;
+	expect(recommend(legacyContext, CATALOG, legacyHistory)).toEqual(expected);
+	expect(expected.reason).toContain("medium+hard level");
+	expect(expected.ranking[0]?.n).toBe(5);
+});
 
 describe("estimate", () => {
 	test("is the Beta mean (1 + sum) / (2 + n)", () => {
@@ -143,7 +164,7 @@ describe("critical tasks", () => {
 	test("estimate below 0.9 or data only on the extended level does not count", () => {
 		const history = [
 			stat(c1, 10, 9), // 10/12 ≈ 0.83
-			stat(c0, 50, 50, "schwer"), // other cell
+			stat(c0, 50, 50, "hard"), // other cell
 		];
 		const d = recommend(
 			ctx(LEARNED, { criticality: "security" }),
@@ -180,7 +201,7 @@ describe("random draw", () => {
 			stat(c0, 3, 3),
 			stat(c1, 1, 0),
 			stat(c2, 5, 5),
-			stat(c1, 10, 10, "schwer"), // extended: c1 11 > c0 3
+			stat(c1, 10, 10, "hard"), // extended: c1 11 > c0 3
 		];
 		const d = recommend(ctx(0.15), CATALOG, history);
 		expect(pick(d)).toMatchObject({ model: c1.model, effort: c1.effort, n: 1 });
@@ -257,12 +278,12 @@ describe("learned choice", () => {
 });
 
 describe("extended level", () => {
-	test("leicht sums leicht, mittel and schwer of the same task_type", () => {
+	test("easy sums easy, medium and hard of the same task_type", () => {
 		const history = [
-			stat(c0, 2, 2, "leicht"),
-			stat(c0, 2, 2, "mittel"),
-			stat(c0, 1, 1, "schwer"),
-			stat(c1, 20, 20, "leicht", "review"), // other task_type
+			stat(c0, 2, 2, "easy"),
+			stat(c0, 2, 2, "medium"),
+			stat(c0, 1, 1, "hard"),
+			stat(c1, 20, 20, "easy", "review"), // other task_type
 		];
 		const d = recommend(ctx(LEARNED), CATALOG, history);
 		expect(pick(d)).toMatchObject({ model: c0.model, effort: c0.effort, n: 5 });
@@ -270,29 +291,29 @@ describe("extended level", () => {
 		expect(d.strategy).toBe("learned");
 	});
 
-	test("mittel uses mittel and schwer, not leicht", () => {
-		const easyOnly = [stat(c0, 10, 10, "leicht")];
+	test("medium uses medium and hard, not easy", () => {
+		const easyOnly = [stat(c0, 10, 10, "easy")];
 		const d = recommend(
-			ctx(LEARNED, { difficulty: "mittel" }),
+			ctx(LEARNED, { difficulty: "medium" }),
 			CATALOG,
 			easyOnly,
 		);
 		expect(d.strategy).toBe("jev-choice");
 
-		const hard = [stat(c0, 5, 5, "schwer")];
-		const e = recommend(ctx(LEARNED, { difficulty: "mittel" }), CATALOG, hard);
+		const hard = [stat(c0, 5, 5, "hard")];
+		const e = recommend(ctx(LEARNED, { difficulty: "medium" }), CATALOG, hard);
 		expect(e.strategy).toBe("learned");
 		expect(pick(e)).toMatchObject({ model: c0.model, n: 5 });
 	});
 
-	test("mittel sums mittel and schwer when neither alone has n >= 5", () => {
+	test("medium sums medium and hard when neither alone has n >= 5", () => {
 		const history = [
-			stat(c0, 3, 3, "mittel"),
-			stat(c0, 2, 2, "schwer"),
-			stat(c0, 10, 0, "leicht"), // easier, ignored
+			stat(c0, 3, 3, "medium"),
+			stat(c0, 2, 2, "hard"),
+			stat(c0, 10, 0, "easy"), // easier, ignored
 		];
 		const d = recommend(
-			ctx(LEARNED, { difficulty: "mittel" }),
+			ctx(LEARNED, { difficulty: "medium" }),
 			CATALOG,
 			history,
 		);
@@ -301,18 +322,14 @@ describe("extended level", () => {
 		expect(pick(d)?.estimate).toBeCloseTo(6 / 7);
 	});
 
-	test("schwer has no extension", () => {
-		const easier = [stat(c0, 10, 10, "leicht"), stat(c0, 10, 10, "mittel")];
-		const d = recommend(
-			ctx(LEARNED, { difficulty: "schwer" }),
-			CATALOG,
-			easier,
-		);
+	test("hard has no extension", () => {
+		const easier = [stat(c0, 10, 10, "easy"), stat(c0, 10, 10, "medium")];
+		const d = recommend(ctx(LEARNED, { difficulty: "hard" }), CATALOG, easier);
 		expect(d.strategy).toBe("jev-choice");
 	});
 
 	test("extended level enough data but none qualifies: highest estimate", () => {
-		const history = [stat(c0, 5, 1, "mittel"), stat(c2, 1, 1, "schwer")];
+		const history = [stat(c0, 5, 1, "medium"), stat(c2, 1, 1, "hard")];
 		const d = recommend(ctx(LEARNED), CATALOG, history);
 		expect(pick(d)).toMatchObject({ model: c2.model, effort: c2.effort, n: 1 });
 		expect(d.strategy).toBe("learned");
@@ -423,9 +440,9 @@ describe("ranking", () => {
 
 	test("extended level values are used for the ranking", () => {
 		const history = [
-			stat(c0, 5, 5, "schwer"),
-			stat(c1, 2, 1, "mittel"),
-			stat(c1, 1, 1, "leicht"),
+			stat(c0, 5, 5, "hard"),
+			stat(c1, 2, 1, "medium"),
+			stat(c1, 1, 1, "easy"),
 		];
 		const d = recommend(ctx(LEARNED), CATALOG, history);
 		expect(d.ranking[0]).toMatchObject({ model: c0.model, n: 5 });

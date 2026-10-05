@@ -1,9 +1,15 @@
 // store: bun:sqlite with schema, migrations (PRAGMA user_version), WAL and busy_timeout.
-// Spec: "Datenhaltung", outcomes view per "Signale".
+// Spec: "Storage", outcomes view per "Signals".
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Store } from "../contracts/deps.ts";
+import {
+	difficultySql,
+	normalizeDifficulty,
+	normalizeProbabilities,
+	normalizeReason,
+} from "../contracts/difficulty.ts";
 import type {
 	CellStat,
 	Outcome,
@@ -12,7 +18,7 @@ import type {
 	UsageRecord,
 } from "../contracts/types.ts";
 
-// No column holds task text (spec "Datenhaltung", "Privacy").
+// No column holds task text (spec "Storage", "Privacy").
 const SCHEMA_V1 = `
 CREATE TABLE suggestions (
 	id TEXT PRIMARY KEY,
@@ -113,7 +119,33 @@ CREATE TABLE usage_scopes (
 );
 `;
 
-const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2];
+const SCHEMA_V3 = `
+ALTER TABLE suggestions ADD COLUMN scope TEXT CHECK (scope IN ('step', 'turn', 'subagent', 'session', 'escalate'));
+ALTER TABLE suggestions ADD COLUMN agent TEXT CHECK (agent IN ('claude-code', 'claude-code-mod', 'codex'));
+ALTER TABLE suggestions ADD COLUMN turn_id TEXT;
+ALTER TABLE suggestions ADD COLUMN agent_id TEXT;
+ALTER TABLE usages ADD COLUMN turn_id TEXT;
+ALTER TABLE usages ADD COLUMN agent_id TEXT;
+ALTER TABLE signals ADD COLUMN turn_id TEXT;
+ALTER TABLE signals ADD COLUMN agent_id TEXT;
+CREATE UNIQUE INDEX signals_turn ON signals (suggestion_id, source, turn_id, kind) WHERE turn_id IS NOT NULL;
+`;
+
+// One statement per entry: bun:sqlite run() ignores step errors after the first statement of a multi-statement string.
+const SCHEMA_V4 = [
+	`UPDATE suggestions SET difficulty = ${difficultySql("difficulty")}`,
+	`UPDATE suggestions SET probabilities = json_set(probabilities, '$.difficulty', json((
+	SELECT json_group_object(${difficultySql("key")}, value)
+	FROM json_each(suggestions.probabilities, '$.difficulty')
+	WHERE key NOT IN ('leicht', 'mittel', 'schwer')
+		OR json_type(suggestions.probabilities, '$.difficulty.' || ${difficultySql("key")}) IS NULL
+))) WHERE json_type(probabilities, '$.difficulty') = 'object'`,
+	`UPDATE suggestions SET reason = replace(replace(reason,
+	'leicht+mittel+schwer level', 'easy+medium+hard level'),
+	'mittel+schwer level', 'medium+hard level')`,
+];
+
+const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /** Opens the db with WAL and busy_timeout 5000 and migrates to SCHEMA_VERSION. */
@@ -129,7 +161,7 @@ export function openDatabase(dbPath: string): Database {
 		// IMMEDIATE + re-check: two processes opening the same file must not both migrate.
 		db.transaction(() => {
 			if (version() !== v) return;
-			db.run(MIGRATIONS[v] as string);
+			for (const sql of [MIGRATIONS[v] ?? []].flat()) db.run(sql);
 			db.run(`PRAGMA user_version = ${v + 1}`);
 		}).immediate();
 	}
@@ -156,15 +188,29 @@ type SuggestionRow = Omit<
 /** Creates the parent dir, opens the db, sets journal_mode=WAL and busy_timeout=5000, migrates, returns the Store. ":memory:" allowed. */
 export function openStore(dbPath: string): Store {
 	const db = openDatabase(dbPath);
+	// Legacy agents share the main sequence until they have an explicit link.
+	const windowAgent = (session: string, agent: string | null) =>
+		agent !== null &&
+		db
+			.query(
+				"SELECT 1 FROM suggestions WHERE session_id = ? AND agent_id = ? LIMIT 1",
+			)
+			.get(session, agent)
+			? agent
+			: null;
 	const store: Store = {
 		insertSuggestion(r) {
 			db.query(
 				`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
 				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
-				$fallback_used, $is_test, $last_event_at, $closed_at)`,
+				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id)`,
 			).run({
 				...r,
-				probabilities: r.probabilities && JSON.stringify(r.probabilities),
+				difficulty: normalizeDifficulty(r.difficulty),
+				reason: normalizeReason(r.reason),
+				probabilities:
+					r.probabilities &&
+					JSON.stringify(normalizeProbabilities(r.probabilities)),
 				ranking: JSON.stringify(r.ranking),
 				explored: Number(r.explored),
 				control: Number(r.control),
@@ -181,7 +227,11 @@ export function openStore(dbPath: string): Store {
 			if (!row) return null;
 			return {
 				...row,
-				probabilities: row.probabilities && JSON.parse(row.probabilities),
+				difficulty: normalizeDifficulty(row.difficulty),
+				reason: normalizeReason(row.reason),
+				probabilities: normalizeProbabilities(
+					row.probabilities ? JSON.parse(row.probabilities) : null,
+				),
 				ranking: JSON.parse(row.ranking),
 				explored: row.explored === 1,
 				control: row.control === 1,
@@ -192,21 +242,26 @@ export function openStore(dbPath: string): Store {
 		cellStats(taskType) {
 			return db
 				.query<CellStat, [TaskType]>(
-					`SELECT s.task_type, s.difficulty, o.model, o.effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
+					`SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
 					FROM suggestions s JOIN outcomes o ON o.suggestion_id = s.id
 					WHERE s.task_type = ? AND s.is_test = 0 AND o.model IS NOT NULL AND o.effort IS NOT NULL
-					GROUP BY s.task_type, s.difficulty, o.model, o.effort`,
+					GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.effort`,
 				)
 				.all(taskType);
 		},
-		linkSession(id, sessionId, promptId, at) {
+		linkSession(id, sessionId, promptId, at, agentId) {
 			// Hooks run async, so links may arrive late, twice or out of order.
-			// Session order is creation order: each suggestion ends where the next one of its session starts.
+			// Creation order sets the boundaries within each session and agent sequence.
 			return db.transaction(() => {
+				if (agentId !== undefined)
+					db.query(
+						"UPDATE suggestions SET agent_id = COALESCE(agent_id, ?) WHERE id = ?",
+					).run(agentId, id);
 				const me = db
-					.query<{ created_at: number; rowid: number }, [string]>(
-						"SELECT created_at, rowid FROM suggestions WHERE id = ?",
-					)
+					.query<
+						{ created_at: number; rowid: number; agent_id: string | null },
+						[string]
+					>("SELECT created_at, rowid, agent_id FROM suggestions WHERE id = ?")
 					.get(id);
 				if (!me) return [];
 				db.query(
@@ -215,19 +270,32 @@ export function openStore(dbPath: string): Store {
 				const shrunk = db
 					.query<
 						{ id: string },
-						{ start: number; rowid: number; session: string }
+						{
+							start: number;
+							rowid: number;
+							session: string;
+							agent: string | null;
+						}
 					>(
 						`UPDATE suggestions SET closed_at = $start
-						WHERE session_id = $session AND (created_at, rowid) < ($start, $rowid)
+						WHERE session_id = $session AND agent_id IS $agent AND (created_at, rowid) < ($start, $rowid)
 						AND (closed_at IS NULL OR closed_at > $start) RETURNING id`,
 					)
-					.all({ start: me.created_at, rowid: me.rowid, session: sessionId });
+					.all({
+						start: me.created_at,
+						rowid: me.rowid,
+						session: sessionId,
+						agent: me.agent_id,
+					});
 				const next = db
-					.query<{ created_at: number }, [string, number, number]>(
-						`SELECT created_at FROM suggestions WHERE session_id = ? AND (created_at, rowid) > (?, ?)
+					.query<
+						{ created_at: number },
+						[string, string | null, number, number]
+					>(
+						`SELECT created_at FROM suggestions WHERE session_id = ? AND agent_id IS ? AND (created_at, rowid) > (?, ?)
 						ORDER BY created_at, rowid LIMIT 1`,
 					)
-					.get(sessionId, me.created_at, me.rowid);
+					.get(sessionId, me.agent_id, me.created_at, me.rowid);
 				if (next)
 					shrunk.push(
 						...db
@@ -239,29 +307,41 @@ export function openStore(dbPath: string): Store {
 				return shrunk.map((r) => r.id);
 			})();
 		},
-		sessionWindows(sessionId, from, to, openWindowMs) {
+		sessionWindows(sessionId, from, to, openWindowMs, agentId = null) {
 			// A window ends at the earliest of closure (report or next recommendation) and idle expiry.
 			return db
 				.query<
 					{ id: string; start: number; end: number },
-					{ session: string; from: number; to: number; idle: number }
+					{
+						session: string;
+						from: number;
+						to: number;
+						idle: number;
+						agent: string | null;
+					}
 				>(
 					`SELECT id, start, "end" FROM (
 						SELECT id, rowid, created_at AS start,
 							MIN(COALESCE(closed_at, last_event_at + $idle + 1), last_event_at + $idle + 1) AS "end"
-						FROM suggestions WHERE session_id = $session
+						FROM suggestions WHERE session_id = $session AND agent_id IS $agent
 					) WHERE start <= $to AND "end" > $from ORDER BY start, rowid`,
 				)
-				.all({ session: sessionId, from, to, idle: openWindowMs });
+				.all({
+					session: sessionId,
+					from,
+					to,
+					idle: openWindowMs,
+					agent: windowAgent(sessionId, agentId),
+				});
 		},
-		findOpenSuggestion(sessionId, now, openWindowMs) {
+		findOpenSuggestion(sessionId, now, openWindowMs, agentId = null) {
 			const row = db
-				.query<{ id: string }, [string, number]>(
+				.query<{ id: string }, [string, string | null, number]>(
 					`SELECT id FROM suggestions
-					WHERE session_id = ? AND closed_at IS NULL AND last_event_at >= ?
+					WHERE session_id = ? AND agent_id IS ? AND closed_at IS NULL AND last_event_at >= ?
 					ORDER BY created_at DESC, rowid DESC LIMIT 1`,
 				)
-				.get(sessionId, now - openWindowMs);
+				.get(sessionId, windowAgent(sessionId, agentId), now - openWindowMs);
 			return row?.id ?? null;
 		},
 		touch(id, at) {
@@ -275,15 +355,20 @@ export function openStore(dbPath: string): Store {
 		},
 		insertSignal(r) {
 			db.query(
-				`INSERT INTO signals VALUES ($suggestion_id, $kind, $value, $weight, $source, $observed_at)`,
-			).run({ ...r });
+				`INSERT OR REPLACE INTO signals VALUES ($suggestion_id, $kind, $value, $weight, $source, $observed_at, $turn_id, $agent_id)`,
+			).run({ ...r, turn_id: r.turn_id ?? null, agent_id: r.agent_id ?? null });
 		},
 		upsertUsage(r) {
 			db.query(
 				`INSERT OR REPLACE INTO usages VALUES ($suggestion_id, $model, $effort, $source, $scope_key,
 				$input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $is_sidechain,
-				$rounds, $note, $reported_at)`,
-			).run({ ...r, is_sidechain: Number(r.is_sidechain) });
+				$rounds, $note, $reported_at, $turn_id, $agent_id)`,
+			).run({
+				...r,
+				turn_id: r.turn_id ?? null,
+				agent_id: r.agent_id ?? null,
+				is_sidechain: Number(r.is_sidechain),
+			});
 		},
 		usageScopes(ids) {
 			return db
@@ -322,6 +407,7 @@ export function openStore(dbPath: string): Store {
 							scope.from,
 							scope.last_at,
 							scope.openWindowMs,
+							scope.agent_id,
 						),
 					);
 					db.query(

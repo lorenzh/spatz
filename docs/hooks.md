@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async]
+keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod]
 ---
 
 # Claude Code hooks for spatz
@@ -95,14 +95,18 @@ Rules:
 
 ## Link a suggestion to a session
 
-spatz does not know the Claude Code session when it makes a suggestion. The `PostToolUse` hook makes the link.
+`--session` links a suggestion when the CLI creates it.
+The caller can also pass `--turn`, `--agent-id`, `--scope` and `--source claude-code-mod`.
+See [cli.md](cli.md) for the flags.
+
+Without explicit linking, the `PostToolUse` hook makes the link:
 
 1. The agent runs `spatz "<task>" --models <list>` with the Bash tool.
-2. The `PostToolUse` hook sees a Bash command whose segment starts with `spatz` or `<path>/spatz`. The first argument is not `report`, `hook` or `stats`.
+2. The `PostToolUse` hook sees a Bash command whose segment starts with `spatz` or `<path>/spatz`. The first argument is not `report`, `usage`, `hook` or `stats`.
 3. spatz reads the suggestion id from the output. Text output gives the line `suggestion_id: <uuid>`. JSON output gives the field `"suggestion_id"`.
-4. spatz stores `session_id` and `prompt_id` with the suggestion.
+4. spatz stores `session_id` and `prompt_id` with the suggestion. Subagent events also supply `agent_id`.
 
-From then on, signals and token usage of this session go to this suggestion.
+Later signals and usage use the matching session and agent window.
 
 ```mermaid
 sequenceDiagram
@@ -123,7 +127,7 @@ sequenceDiagram
     S->>D: report signal, close suggestion
 ```
 
-The link works only when the command starts with `spatz` or a path that ends in `/spatz`. These calls are not linked:
+Bash detection works only when the command starts with `spatz` or a path that ends in `/spatz`. Without `--session`, these calls are not linked:
 
 - `SPATZ_NO_JEV=1 spatz "<task>" ...` (an environment assignment before `spatz`)
 - `bunx spatz "<task>" ...`
@@ -141,25 +145,41 @@ The link works only when the command starts with `spatz` or a path that ends in 
 A suggestion is open from its creation until the first of these events:
 
 - `spatz report` for this suggestion.
-- The next linked spatz suggestion in the same session. The old suggestion ends where the new one starts.
-- 2 hours without a hook event in the session. Each hook event of the session resets this time.
+- The next linked suggestion with the same session and agent id. The old window ends at the new suggestion.
+- 2 hours without activity in that window. Each matching hook event resets this time.
 
-Signals go to the open suggestion of the session. Token usage goes to the suggestion whose window holds the time stamp of each transcript message. Messages before the first suggestion of the session count for no suggestion.
+Signals go to the open suggestion of the matching session and agent window. Token usage goes to the suggestion whose window holds the time stamp of each transcript message. Messages before the first suggestion of that window sequence count for no suggestion.
 
 Hooks run async, so the link can arrive after `Stop` or `SubagentStop`. In that case spatz reads the transcripts again and puts each message in the correct window. A replayed or older transcript snapshot does not overwrite newer data.
 
 ## Subagents
 
-spatz counts a subagent as its own usage.
+Each subagent with an explicitly linked suggestion has its own windows.
+Its suggestions do not close the main window or another subagent's window.
+If an agent has no linked suggestion, its hooks use the main sequence as before.
+If it has a linked suggestion, closure does not send later events back to the main sequence.
 
 - `SubagentStop` reads `<session>/subagents/agent-<agent_id>.jsonl`. spatz sums the tokens per model.
 - `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has 0 tokens and no effort, because the `effort.level` in this event belongs to the main session.
 
-Without a report, the used pair is the model with the most output tokens over the main session and all subagents. Its effort is the newest effort that a hook gave for that model. A report always sets the used pair.
+Without a report, the used pair is the model with the most output tokens assigned to the suggestion. Its effort is the newest effort that a hook gave for that model. A report always sets the used pair.
+
+## Mod and hooks together
+
+The core accepts explicitly linked `claude-code-mod` suggestions in hook windows.
+It does not exclude them by provenance. This supports separate routing and recording roles.
+The mod routes through the CLI. Hooks can record signals and transcript usage for those suggestions.
+Direct `spatz usage` records tokens without a transcript.
+
+The mod can record usage directly, use the hooks, or select a recorder automatically when the hooks plugin is enabled. This avoids counting the same usage twice.
+
+Do not send both transcript usage and direct mod usage for the same run.
+The sources have different uniqueness keys, so the database keeps both.
+When you install the hooks plugin, remove equivalent hand-written entries from `~/.claude/settings.json`.
 
 ## Limits
 
-- Only Claude Code. Other agents can still use `spatz "<task>"` and `spatz report`.
+- Signal collection supports Claude Code and Codex CLI. Other agents can still use `spatz "<task>"` and `spatz report`.
 - A hook cannot set the model or the effort. spatz only recommends.
 - Test and build detection is a set of keyword patterns. It misses tools that are not in the list, and it skips commands with an unclear status.
 - `Stop` fires once per turn, not once per task.

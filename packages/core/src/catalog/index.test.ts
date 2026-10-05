@@ -239,9 +239,9 @@ describe("description", () => {
 	test("uses the description file entry when present", () => {
 		const c = buildCatalog(parseModelsArg("claude-opus-5-5:high"), models, {
 			aliases: {},
-			descriptions: { "anthropic/claude-opus-5.5": "Stärkstes Modell" },
+			descriptions: { "anthropic/claude-opus-5.5": "Strongest model" },
 		});
-		expect(c[0]?.description).toBe("Stärkstes Modell");
+		expect(c[0]?.description).toBe("Strongest model");
 	});
 
 	test("falls back to model name and output price class", () => {

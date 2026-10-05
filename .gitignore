@@ -32,3 +32,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# written by Claude Code when it loads the mod
+packages/claude-mod/tsconfig.json
+packages/claude-mod/.claude-plugin/types/

@@ -2,7 +2,7 @@
 
 spatz recommends a model and effort pair for a coding-agent task, and learns which pairs succeed.
 
-The motto is "nicht mit Kanonen auf Spatzen schießen". In English: do not use a cannon to shoot sparrows. Do not use the strongest model when a cheaper model is good enough.
+The motto is: do not use a cannon to shoot sparrows. Do not use the strongest model when a cheaper model is good enough.
 
 ## Status
 
@@ -126,7 +126,7 @@ See [RELEASING.md](RELEASING.md) for the release procedure.
    suggestion_id: fd8b7c1f-1f93-44f6-ac7b-b77ee287d1bb
    1. anthropic/claude-opus-5.5:high  estimate=0.50  n=0
    reason: Without Jev and learned data the most expensive pair anthropic/claude-opus-5.5 (high) is recommended.
-   task_type: other  difficulty: mittel  criticality: none
+   task_type: other  difficulty: medium  criticality: none
    explored: false  control: false  fallback_used: true  (dry-run)
    ```
 
@@ -144,19 +144,27 @@ See [RELEASING.md](RELEASING.md) for the release procedure.
 
 ## Use with Claude Code
 
-If you add the spatz hooks to `.claude/settings.json` of a project, spatz learns without manual reports. The hooks call `spatz hook <event>` for `PostToolUse`, `PostToolUseFailure`, `Stop` and `SubagentStop`. They record test and build results, the model, the effort and token counts. They never store prompt text or tool output. [docs/hooks.md](docs/hooks.md) has the settings snippet and the full list of signals.
+You can connect spatz to Claude Code in three ways. They can run alone or together.
+
+- **Hooks only.** The hooks in your Claude Code settings watch Bash calls and record test and build results, models and tokens. See [docs/hooks.md](docs/hooks.md).
+- **Mod only.** The `spatz` mod in `packages/claude-mod` asks spatz for each decision. In `apply` mode it sets model and effort for subagents or for the main session. It records usage itself. See [docs/claude-mod.md](docs/claude-mod.md).
+- **Both.** The mod routes and the hooks record. With `record: auto` the mod stops recording when the `spatz-hooks` plugin is enabled, so nothing is counted twice.
+
+The mod has five routing scopes: `step`, `turn`, `subagent` (default), `session` and `escalate`. `spatz stats --by scope` compares them.
 
 ## Commands
 
-The suggestion, report, and stats commands accept `--json` for machine-readable output.
+The suggestion, report, usage, link and stats commands accept `--json` for machine-readable output.
 
 | Command | Purpose |
 | --- | --- |
 | `spatz --version` | Print the CLI version. |
-| `spatz "<task>" --models <list> [--dry-run]` | Rank the candidate pairs for a task. Prints `suggestion_id: <id>` first. |
-| `spatz report <suggestion_id> --model <m> --effort <e> --result pass\|partial\|fail [--rounds <n>] [--note <t>]` | Record the pair that you used and the result. |
-| `spatz hook <event>` | Read a Claude Code hook event from stdin. Prints nothing and always exits 0. |
-| `spatz stats [--type <t>]` | Show results per task type: n, success rate per pair, adoption, tokens, coverage. |
+| `spatz "<task>" --models <list> [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--dry-run]` | Rank candidate pairs and optionally store routing attribution. |
+| `spatz report <suggestion_id> --model <m> --effort <e> --result pass\|partial\|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod]` | Record the pair that you used and the result. |
+| `spatz usage <suggestion_id> ... --turn <id> --source claude-code-mod` | Record direct model usage and token counts. |
+| `spatz link <suggestion_id> --agent-id <id> --session <id>` | Link a subagent suggestion after its id is known. |
+| `spatz hook <event> [--agent codex]` | Read a Claude Code or Codex hook event from stdin. Prints nothing and always exits 0. |
+| `spatz stats [--type <t>] [--by scope]` | Show results per task type or routing scope. |
 
 Exit codes: 0 for success, 1 for a runtime error (for example an unknown `suggestion_id`), 2 for a usage error. [docs/cli.md](docs/cli.md) is the full reference.
 
@@ -173,6 +181,7 @@ When Jev is on, spatz sends the task text and the candidate list to TypeSafe AI.
 - [docs/privacy.md](docs/privacy.md): what data leaves your machine and what spatz stores.
 - [docs/cli.md](docs/cli.md): all commands, flags, output fields and exit codes.
 - [docs/hooks.md](docs/hooks.md): the Claude Code hooks setup and the signals they record.
+- [docs/claude-mod.md](docs/claude-mod.md): the Claude Code mod, its modes, routing scopes and `/spatz` commands.
 - [docs/configuration.md](docs/configuration.md): environment variables, project file and files in `~/.spatz`.
 - [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and the change process.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability.

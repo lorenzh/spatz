@@ -1,8 +1,10 @@
 // report: DuckDB read-only evaluation over the SQLite file (only loaded by spatz stats).
-// Spec: "Datenhaltung", "Erfolgskriterien und Messung".
+// Spec: "Storage", "Success criteria and measurement".
 import { DuckDBInstance } from "@duckdb/node-api";
+import { difficultySql } from "../contracts/difficulty.ts";
 import type {
 	PairStats,
+	ScopeStats,
 	StatsReport,
 	TaskType,
 	TypeStats,
@@ -13,6 +15,7 @@ export interface StatsOptions {
 	/** DuckDB extension_directory holding the sqlite extension; INSTALL sqlite only if missing. */
 	extensionDir: string;
 	type?: TaskType;
+	by?: "scope";
 	/** Success means quality >= this (0.8). */
 	successQuality: number;
 	/** Called with each SQL statement before it runs; may throw to abort (tests block INSTALL). */
@@ -26,7 +29,7 @@ const base = (q: number) => `
 WITH s AS (SELECT * FROM db.suggestions WHERE is_test = 0),
 oq AS (FROM sqlite_query('db', 'SELECT suggestion_id, model, effort, quality >= ${q} AS success FROM outcomes')),
 o AS (
-	SELECT s.task_type, s.difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
+	SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success::INTEGER AS success,
 		COALESCE(o.model = json_extract_string(s.ranking, '$[0].model')
 			AND o.effort = json_extract_string(s.ranking, '$[0].effort'), false)::INTEGER AS adopted
@@ -102,7 +105,30 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			SELECT SUM(w * l) / SUM(w) AS learned_success, SUM(w * k) / SUM(w) AS control_success FROM cells`,
 		);
 
+		const scopes =
+			options.by === "scope"
+				? await rows<ScopeStats>(`
+			, tok AS (
+				SELECT suggestion_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+					SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens
+				FROM db.usages GROUP BY suggestion_id
+			), agg AS (
+				SELECT s.scope, COUNT(oq.suggestion_id)::INTEGER AS n, AVG(oq.success::INTEGER) AS success_rate,
+					COALESCE(SUM(tok.input_tokens), 0)::DOUBLE AS input_tokens,
+					COALESCE(SUM(tok.output_tokens), 0)::DOUBLE AS output_tokens,
+					COALESCE(SUM(tok.cache_read_tokens), 0)::DOUBLE AS cache_read_tokens,
+					COALESCE(SUM(tok.cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens
+				FROM s LEFT JOIN oq ON oq.suggestion_id = s.id LEFT JOIN tok ON tok.suggestion_id = s.id
+				${type ? `WHERE s.task_type = '${type.replaceAll("'", "''")}'` : ""}
+				GROUP BY s.scope
+			)
+			SELECT *, COALESCE(cache_read_tokens / NULLIF(input_tokens + cache_read_tokens + cache_creation_tokens, 0), 0) AS cache_read_share
+			FROM agg ORDER BY scope NULLS LAST
+		`)
+				: undefined;
+
 		return {
+			...(scopes && { by_scope: scopes }),
 			by_type: types
 				.filter((t) => !type || t.task_type === type)
 				.map((t) => ({

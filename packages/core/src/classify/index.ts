@@ -1,7 +1,8 @@
 // classify: Jev adapter (4 questions in one request) and fallback orchestration.
-// Spec: "Klassifikation mit Jev", "Zugang", "Fallback", "Privacy".
+// Spec: "Classification with Jev", "Access", "Fallback", "Privacy".
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { JevClient, JevRequest, JevResult } from "../contracts/deps.ts";
+import { difficultyProbabilities } from "../contracts/difficulty.ts";
 import {
 	type Catalog,
 	type Classification,
@@ -26,31 +27,30 @@ export function createJevClient(apiKey: string): JevClient {
 	});
 }
 
-/** One-line descriptions per option, verbatim from the spec tables (Jev uses them as option boundaries). */
+/** One-line descriptions per option, translated from the spec tables (Jev uses them as option boundaries). */
 export const TASK_TYPE_DESCRIPTIONS: Record<TaskType, string> = {
-	"code.bugfix": "Ein Fehler im bestehenden Code wird gefunden und behoben.",
-	"code.feature": "Neuer Code fügt eine Funktion hinzu.",
-	"code.refactor":
-		"Der Code ändert seine Struktur, das Verhalten bleibt gleich.",
-	"code.explain": "Der Agent erklärt Code und ändert nichts.",
-	review: "Der Agent prüft fremde Arbeit: ein Review oder eine Verifikation.",
-	spec: "Der Agent schreibt oder ändert eine Spezifikation.",
-	planning: "Der Agent plant Schritte, Architektur oder Vorgehen ohne Code.",
-	other: "Keine der anderen Optionen passt.",
+	"code.bugfix": "Find and fix a bug in existing code.",
+	"code.feature": "Add a feature with new code.",
+	"code.refactor": "Change the code structure without changing its behavior.",
+	"code.explain": "Explain code without changing it.",
+	review: "Review or verify someone else's work.",
+	spec: "Write or change a specification.",
+	planning: "Plan steps, architecture or an approach without writing code.",
+	other: "None of the other options fits.",
 };
 
 const DIFFICULTY_RUBRIC = [
-	"leicht: Klarer Auftrag mit wenig Kontext. Ein Ort oder ein Thema.",
-	"mittel: Mehrere Stellen oder Themen. Der Weg braucht etwas Analyse.",
-	"schwer: Viele Teile, eine unklare Ursache, eine Entwurfsentscheidung oder viel Kontext.",
+	"easy: A clear task with little context. One place or one topic.",
+	"medium: Several places or topics. The approach needs some analysis.",
+	"hard: Many parts, an unclear cause, a design decision or much context.",
 ] as const;
 
 const CRITICALITY_DESCRIPTIONS: Record<Criticality, string> = {
-	none: "Normale Änderung ohne die Risiken unten. Auch sichtbare Fehler gehören hierher.",
-	business_logic: "Geld, Preise, Abrechnung, Verträge oder rechtliche Regeln.",
-	security: "Anmeldung, Berechtigungen, Geheimnisse oder Schwachstellen.",
+	none: "A normal change without the risks below. Visible bugs also belong here.",
+	business_logic: "Money, prices, billing, contracts or legal rules.",
+	security: "Login, permissions, secrets or vulnerabilities.",
 	data_integrity:
-		"Gespeicherte Daten: Migrationen, Löschen oder Schutz vor Datenverlust.",
+		"Stored data: migrations, deletion or protection against data loss.",
 };
 
 export function buildJevRequest(task: string, catalog: Catalog): JevRequest {
@@ -60,24 +60,23 @@ export function buildJevRequest(task: string, catalog: Catalog): JevRequest {
 		questions: {
 			task_type: {
 				type: "choice",
-				instructions:
-					"Welche Art von Aufgabe für einen Coding-Agenten ist das?",
+				instructions: "What kind of task is this for a coding agent?",
 				criteria: TASK_TYPE_DESCRIPTIONS,
 			},
 			difficulty: {
 				type: "score",
-				instructions: "Wie schwer ist die Aufgabe?",
+				instructions: "How difficult is the task?",
 				criteria: DIFFICULTY_RUBRIC,
 			},
 			criticality: {
 				type: "choice",
-				instructions: "Welches Risiko trägt die Änderung?",
+				instructions: "What risk does the change carry?",
 				criteria: CRITICALITY_DESCRIPTIONS,
 			},
 			best_candidate: {
 				type: "choice",
 				instructions:
-					"Wähle das günstigste Paar aus Modell und Effort, das die Aufgabe zuverlässig löst.",
+					"Choose the cheapest model and effort pair that can reliably solve the task.",
 				criteria: Object.fromEntries(
 					catalog.map((c) => [`${c.model}:${c.effort}`, c.description]),
 				),
@@ -86,21 +85,19 @@ export function buildJevRequest(task: string, catalog: Catalog): JevRequest {
 	};
 }
 
-/** Maps Jev answers to a Classification (score keys "0","1","2" -> leicht, mittel, schwer) and applies the round-up rule. */
+/** Maps Jev answers to a Classification (score keys "0","1","2" -> easy, medium, hard) and applies the round-up rule. */
 export function parseJevResult(
 	result: JevResult,
 	catalog: Catalog,
 	tuning: Tuning,
 ): Classification {
 	const { task_type, difficulty, criticality, best_candidate } = result.answers;
-	const difficultyProbabilities = Object.fromEntries(
-		DIFFICULTIES.map((d, i) => [d, difficulty.probabilities[String(i)] ?? 0]),
-	) as Record<Difficulty, number>;
+	const probabilities = difficultyProbabilities(difficulty.probabilities);
 	const keys = new Set(catalog.map((c) => `${c.model}:${c.effort}`));
 	return {
 		task_type: task_type.choice as TaskType,
 		difficulty: roundUpDifficulty(
-			difficultyProbabilities,
+			probabilities,
 			tuning.difficultyMinProbability,
 		),
 		criticality: criticality.choice as Criticality,
@@ -109,7 +106,7 @@ export function parseJevResult(
 			: null,
 		probabilities: {
 			task_type: task_type.probabilities,
-			difficulty: difficultyProbabilities,
+			difficulty: probabilities,
 			criticality: criticality.probabilities,
 			best_candidate: best_candidate.probabilities,
 		},
@@ -119,11 +116,12 @@ export function parseJevResult(
 	};
 }
 
-/** Top-probability level; if that probability < minProbability, one level up (schwer stays schwer). */
+/** Top-probability level; if that probability < minProbability, one level up (hard stays hard). */
 export function roundUpDifficulty(
-	probabilities: Record<Difficulty, number>,
+	values: Record<string, number>,
 	minProbability: number,
 ): Difficulty {
+	const probabilities = difficultyProbabilities(values);
 	let top = 0;
 	DIFFICULTIES.forEach((d, i) => {
 		if (probabilities[d] > probabilities[DIFFICULTIES[top] as Difficulty])

@@ -56,7 +56,7 @@ const CRITICALITY_KEYWORDS: [Criticality, string[]][] = [
 	],
 ];
 
-/** task_type other, difficulty mittel, criticality from keywords (auth, password, migration, payment, ...), best_candidate null, fallback_used true. */
+/** task_type other, difficulty medium, criticality from keywords (auth, password, migration, payment, ...), best_candidate null, fallback_used true. */
 export function classifyByRules(
 	task: string,
 	reason: FallbackReason,
@@ -67,7 +67,7 @@ export function classifyByRules(
 	);
 	return {
 		task_type: "other",
-		difficulty: "mittel",
+		difficulty: "medium",
 		criticality: hit?.[0] ?? "none",
 		best_candidate: null,
 		probabilities: null,

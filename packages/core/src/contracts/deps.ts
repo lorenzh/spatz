@@ -1,9 +1,12 @@
 // Injection seams. Unit tests pass fakes for all of these; no network, no real home dir.
+import type { DifficultyInput } from "./difficulty.ts";
 import type {
+	Agent,
 	CellStat,
 	Config,
 	Outcome,
 	ReportResult,
+	RoutingScope,
 	SignalRecord,
 	StatsReport,
 	Suggestion,
@@ -88,29 +91,37 @@ export type RandomFn = () => number;
 // ---------- Store (implemented by store module with bun:sqlite) ----------
 
 export interface Store {
-	insertSuggestion(record: SuggestionRecord): void;
+	insertSuggestion(
+		record: Omit<SuggestionRecord, "difficulty"> & {
+			difficulty: DifficultyInput;
+		},
+	): void;
 	getSuggestion(id: string): SuggestionRecord | null;
 	/** Non-test outcomes with a used pair, grouped by (task_type, difficulty, model, effort), for one task_type (all difficulties). */
 	cellStats(taskType: TaskType): CellStat[];
-	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */
+	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */
 	linkSession(
 		suggestionId: string,
 		sessionId: string,
 		promptId: string | null,
 		at: number,
+		agentId?: string,
 	): string[];
-	/** Latest suggestion of the session with closed_at null and last_event_at >= now - openWindowMs; else null. */
+	/** Latest suggestion of the selected agent sequence with closed_at null and last_event_at >= now - openWindowMs; else null. */
+	/** Unknown agents use the main sequence. An agent with a closed window does not fall back. */
 	findOpenSuggestion(
 		sessionId: string,
 		now: number,
 		openWindowMs: number,
+		agentId?: string | null,
 	): string | null;
-	/** Time windows [start, end) of the session's suggestions that overlap [from, to]. start = created_at; end = the earlier of closed_at and last_event_at + openWindowMs (inclusive). */
+	/** Time windows [start, end) of the selected agent sequence that overlap [from, to]. start = created_at; end = the earlier of closed_at and last_event_at + openWindowMs (inclusive). */
 	sessionWindows(
 		sessionId: string,
 		from: number,
 		to: number,
 		openWindowMs: number,
+		agentId?: string | null,
 	): { id: string; start: number; end: number }[];
 	/** Set last_event_at. */
 	touch(suggestionId: string, at: number): void;
@@ -132,6 +143,7 @@ export interface Store {
 			session_id: string;
 			source: UsageRecord["source"];
 			scope_key: string;
+			agent_id?: string | null;
 			message_count: number;
 			from: number;
 			last_at: number;
@@ -180,6 +192,11 @@ export interface SuggestInput {
 	/** Raw --models value, e.g. "claude-opus-5-5:low+medium+high,gpt-6-sol:medium". */
 	models: string;
 	dryRun: boolean;
+	scope?: RoutingScope;
+	source?: Agent;
+	session?: string;
+	turn?: string;
+	agentId?: string;
 }
 
 export interface ReportInput {
@@ -187,16 +204,40 @@ export interface ReportInput {
 	model: string;
 	effort: string;
 	result: ReportResult;
+	source?: "claude-code-mod";
+	turn?: string;
 	rounds?: number;
 	note?: string;
 }
 
+export interface UsageInput {
+	suggestionId: string;
+	model: string;
+	effort?: string;
+	source: "claude-code-mod";
+	turn: string;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheCreation: number;
+}
+
+export interface LinkInput {
+	suggestionId: string;
+	agentId: string;
+	session: string;
+}
+
 export interface StatsInput {
+	by?: "scope";
 	type?: TaskType;
 }
 
 export interface SpatzApi {
 	suggest(input: SuggestInput): Promise<Suggestion>;
+	usage(input: UsageInput): Promise<UsageRecord>;
+	/** Gives a suggestion made before its subagent existed the real agent id and the session. Idempotent. */
+	link(input: LinkInput): Promise<void>;
 	report(input: ReportInput): Promise<Outcome | null>;
 	/** Never throws; swallows every error (hooks must not block the session). */
 	handleHook(event: string, stdin: string): Promise<void>;

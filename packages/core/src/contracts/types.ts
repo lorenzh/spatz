@@ -1,7 +1,7 @@
 // Shared data contracts for spatz. Owned by nobody: change only by agreement.
 // Spec: scratchpad/spatz-spec.md. Field names follow the spec (snake_case where the spec uses it).
 
-// ---------- Taxonomy (spec "Klassifikation mit Jev") ----------
+// ---------- Taxonomy (spec "Classification with Jev") ----------
 
 export const TASK_TYPES = [
 	"code.bugfix",
@@ -15,8 +15,8 @@ export const TASK_TYPES = [
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
 
-/** Rubric order matters: Jev score key "0" = leicht, "1" = mittel, "2" = schwer. */
-export const DIFFICULTIES = ["leicht", "mittel", "schwer"] as const;
+/** Rubric order matters: Jev score key "0" = easy, "1" = medium, "2" = hard. */
+export const DIFFICULTIES = ["easy", "medium", "hard"] as const;
 export type Difficulty = (typeof DIFFICULTIES)[number];
 
 export const CRITICALITIES = [
@@ -35,7 +35,7 @@ export const DEFAULT_EFFORTS: readonly Effort[] = ["low", "medium", "high"];
 
 export const JEV_MODEL = "jev-1.13.0";
 
-// ---------- Startwerte (spec: all are tunable start values) ----------
+// ---------- Initial values (spec: all are tunable start values) ----------
 
 export interface Tuning {
 	/** Learned choice: minimum n per candidate in the cell. Default 5. */
@@ -52,7 +52,7 @@ export interface Tuning {
 	exploreRate: number;
 	/** Jev timeout per request in ms. Default 1000. */
 	jevTimeoutMs: number;
-	/** If the top difficulty probability is below this, round up one level (ends at schwer). Default 0.5. */
+	/** If the top difficulty probability is below this, round up one level (ends at hard). Default 0.5. */
 	difficultyMinProbability: number;
 	/** A suggestion stays open for hook events until this much idle time. Default 2 h. */
 	openWindowMs: number;
@@ -79,7 +79,7 @@ export const DEFAULT_TUNING: Tuning = {
 	successQuality: 0.8,
 };
 
-// ---------- Candidates and catalog (spec "Kandidaten und Metadaten") ----------
+// ---------- Candidates and catalog (spec "Candidates and metadata") ----------
 
 /** One entry of --models after parsing, before OpenRouter lookup. */
 export interface RequestedModel {
@@ -168,7 +168,7 @@ export interface CellStat {
 	sum_quality: number;
 }
 
-// ---------- Suggestion (spec "Ausgabe") ----------
+// ---------- Suggestion (spec "Output") ----------
 
 export type StrategyName = "learned" | "jev-choice" | "rules" | "strongest";
 
@@ -222,9 +222,15 @@ export const SIGNAL_WEIGHTS: Record<SignalKind, number> = {
 	build: 0.8,
 };
 
-export type SignalSource = "report" | "PostToolUse" | "PostToolUseFailure";
+export type SignalSource =
+	| "report"
+	| "PostToolUse"
+	| "PostToolUseFailure"
+	| "claude-code-mod";
 
 export interface SignalRecord {
+	turn_id?: string | null;
+	agent_id?: string | null;
 	suggestion_id: string;
 	kind: SignalKind;
 	value: number;
@@ -234,17 +240,24 @@ export interface SignalRecord {
 	observed_at: number;
 }
 
-/** report = spatz report; transcript = Stop (main session); subagent = SubagentStop; agent_tool = PostToolUse on Agent (resolvedModel, 0 tokens). */
-export type UsageSource = "report" | "transcript" | "subagent" | "agent_tool";
+/** report = spatz report; transcript = Stop (main session); subagent = SubagentStop; agent_tool = PostToolUse on Agent (resolvedModel, 0 tokens); claude-code-mod = direct turn usage. */
+export type UsageSource =
+	| "report"
+	| "transcript"
+	| "subagent"
+	| "agent_tool"
+	| "claude-code-mod";
 
 export interface UsageRecord {
+	turn_id?: string | null;
+	agent_id?: string | null;
 	suggestion_id: string;
 	/** Canonical OpenRouter id. */
 	model: string;
 	/** null when effort.level was missing. */
 	effort: Effort | null;
 	source: UsageSource;
-	/** Dedup key: prompt_id (transcript), agent_id (subagent/agent_tool), "" (report). Upsert on (suggestion_id, source, scope_key, model). */
+	/** Dedup key: prompt_id (transcript), agent_id (subagent/agent_tool), turn_id (claude-code-mod or direct report), "" (legacy report). Upsert on (suggestion_id, source, scope_key, model). */
 	scope_key: string;
 	input_tokens: number;
 	output_tokens: number;
@@ -267,8 +280,23 @@ export interface Outcome {
 	effort: Effort | null;
 }
 
+export const SCOPES = [
+	"step",
+	"turn",
+	"subagent",
+	"session",
+	"escalate",
+] as const;
+export type RoutingScope = (typeof SCOPES)[number];
+export const AGENTS = ["claude-code", "claude-code-mod", "codex"] as const;
+export type Agent = (typeof AGENTS)[number];
+
 /** Row of table `suggestions`. No task text is ever stored. */
 export interface SuggestionRecord {
+	scope: RoutingScope | null;
+	agent: Agent | null;
+	turn_id: string | null;
+	agent_id: string | null;
 	id: string;
 	/** Epoch ms. */
 	created_at: number;
@@ -288,7 +316,7 @@ export interface SuggestionRecord {
 	is_test: boolean;
 	/** Epoch ms of the last linked event; drives the 2 h open window. */
 	last_event_at: number;
-	/** Epoch ms when closed (next spatz call in the session, or spatz report), else null. */
+	/** Epoch ms when closed (next spatz call in the same session and agent, or spatz report), else null. */
 	closed_at: number | null;
 }
 
@@ -313,7 +341,22 @@ export interface TypeStats {
 	output_tokens: number;
 }
 
+export interface ScopeStats {
+	scope: RoutingScope | null;
+	/** Number of outcomes, as in TypeStats. */
+	n: number;
+	/** null without outcomes. */
+	success_rate: number | null;
+	input_tokens: number;
+	output_tokens: number;
+	cache_read_tokens: number;
+	cache_creation_tokens: number;
+	/** cache_read / (input + cache_read + cache_creation), or 0 with no input. */
+	cache_read_share: number;
+}
+
 export interface StatsReport {
+	by_scope?: ScopeStats[];
 	by_type: TypeStats[];
 	/** Share of non-test suggestions with an outcome. */
 	coverage: number;

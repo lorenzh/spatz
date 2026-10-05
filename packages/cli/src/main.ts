@@ -1,15 +1,17 @@
 // Thin CLI: argument parsing (node:util parseArgs) and output formatting only. No domain logic.
-// Spec: "CLI-Schnittstelle".
+// Spec: "CLI interface".
 import { parseArgs } from "node:util";
 import type {
+	Agent,
 	Outcome,
 	ReportResult,
+	RoutingScope,
 	SpatzApi,
 	StatsReport,
 	Suggestion,
 	TaskType,
 } from "@spatz/core";
-import { TASK_TYPES } from "@spatz/core";
+import { AGENTS, SCOPES, TASK_TYPES } from "@spatz/core";
 import pkg from "../package.json";
 
 declare const SPATZ_VERSION: string | undefined;
@@ -23,10 +25,12 @@ export interface CliIO {
 
 const USAGE = `usage:
   spatz --version
-  spatz "<task>" --models <list> [--json] [--dry-run]
-  spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--json]
+  spatz "<task>" --models <list> [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
+  spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
+  spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
   spatz hook <event> [--agent codex]
-  spatz stats [--type <t>] [--json]`;
+  spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
+  spatz stats [--type <t>] [--by scope] [--json]`;
 
 const RESULTS: readonly string[] = ["pass", "partial", "fail"];
 
@@ -56,6 +60,13 @@ function formatOutcome(id: string, o: Outcome | null): string {
 }
 
 function formatStats(r: StatsReport): string {
+	if (r.by_scope)
+		return r.by_scope
+			.map(
+				(s) =>
+					`${s.scope ?? "unscoped"}  n=${s.n}  success=${s.success_rate === null ? "-" : pct(s.success_rate)}  input_tokens=${s.input_tokens}  output_tokens=${s.output_tokens}  cache_read_tokens=${s.cache_read_tokens}  cache_creation_tokens=${s.cache_creation_tokens}  cache_read_share=${pct(s.cache_read_share)}`,
+			)
+			.join("\n");
 	const lines = r.by_type.flatMap((t) => [
 		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}`,
 		...t.pairs.map(
@@ -86,6 +97,16 @@ function parse(argv: string[]) {
 				rounds: { type: "string" },
 				note: { type: "string" },
 				type: { type: "string" },
+				scope: { type: "string" },
+				session: { type: "string" },
+				turn: { type: "string" },
+				"agent-id": { type: "string" },
+				source: { type: "string" },
+				input: { type: "string" },
+				output: { type: "string" },
+				"cache-read": { type: "string" },
+				"cache-creation": { type: "string" },
+				by: { type: "string" },
 			},
 		});
 	} catch (e) {
@@ -128,14 +149,63 @@ export async function main(
 			return 0;
 		}
 		json = v.json ?? false;
-		if (cmd === "report") {
+		if (cmd === "usage") {
+			if (v.source !== "claude-code-mod")
+				throw new UsageError("--source must be claude-code-mod");
+			const input = {
+				suggestionId: required(rest[0], "<suggestion_id>"),
+				model: required(v.model, "--model"),
+				...(v.effort !== undefined && { effort: v.effort }),
+				input: toInt(required(v.input, "--input"), "--input"),
+				output: toInt(required(v.output, "--output"), "--output"),
+				cacheRead: toInt(
+					required(v["cache-read"], "--cache-read"),
+					"--cache-read",
+				),
+				cacheCreation: toInt(
+					required(v["cache-creation"], "--cache-creation"),
+					"--cache-creation",
+				),
+				turn: required(v.turn, "--turn"),
+				source: "claude-code-mod" as const,
+			};
+			run = async () => ({
+				result: await api.usage(input),
+				text: () =>
+					`usage recorded: ${input.suggestionId}  turn: ${input.turn}`,
+			});
+		} else if (cmd === "link") {
+			const input = {
+				suggestionId: required(rest[0], "<suggestion_id>"),
+				agentId: required(v["agent-id"], "--agent-id"),
+				session: required(v.session, "--session"),
+			};
+			run = async () => {
+				await api.link(input);
+				return {
+					result: {
+						suggestion_id: input.suggestionId,
+						agent_id: input.agentId,
+					},
+					text: () => `linked: ${input.suggestionId}  agent: ${input.agentId}`,
+				};
+			};
+		} else if (cmd === "report") {
 			const suggestionId = required(rest[0], "<suggestion_id>");
 			const model = required(v.model, "--model");
 			const effort = required(v.effort, "--effort");
 			const result = required(v.result, "--result");
 			if (!RESULTS.includes(result))
 				throw new UsageError("--result must be pass, partial or fail");
+			if (
+				(v.source !== undefined || v.turn !== undefined) &&
+				(v.source !== "claude-code-mod" || !v.turn?.trim())
+			)
+				throw new UsageError(
+					"direct report needs --turn and --source claude-code-mod",
+				);
 			const input = {
+				...(v.source && { source: "claude-code-mod" as const, turn: v.turn }),
 				suggestionId,
 				model,
 				effort,
@@ -154,7 +224,12 @@ export async function main(
 				!(TASK_TYPES as readonly string[]).includes(type)
 			)
 				throw new UsageError(`--type must be one of ${TASK_TYPES.join(", ")}`);
-			const input = type === undefined ? {} : { type: type as TaskType };
+			if (v.by !== undefined && v.by !== "scope")
+				throw new UsageError("--by must be scope");
+			const input = {
+				...(type && { type: type as TaskType }),
+				...(v.by && { by: "scope" as const }),
+			};
 			run = async () => {
 				const r = await api.stats(input);
 				return { result: r, text: () => formatStats(r) };
@@ -162,7 +237,30 @@ export async function main(
 		} else {
 			const task = required(cmd, '"<task>"');
 			const models = required(v.models, "--models");
-			const input = { task, models, dryRun: v["dry-run"] ?? false };
+			if (
+				v.scope !== undefined &&
+				!(SCOPES as readonly string[]).includes(v.scope)
+			)
+				throw new UsageError(`--scope must be one of ${SCOPES.join(", ")}`);
+			if (
+				v.source !== undefined &&
+				!(AGENTS as readonly string[]).includes(v.source)
+			)
+				throw new UsageError(`--source must be one of ${AGENTS.join(", ")}`);
+			const input = {
+				task,
+				models,
+				dryRun: v["dry-run"] ?? false,
+				...(v.scope !== undefined && { scope: v.scope as RoutingScope }),
+				...(v.source !== undefined && { source: v.source as Agent }),
+				...(v.session !== undefined && {
+					session: required(v.session, "--session"),
+				}),
+				...(v.turn !== undefined && { turn: required(v.turn, "--turn") }),
+				...(v["agent-id"] !== undefined && {
+					agentId: required(v["agent-id"], "--agent-id"),
+				}),
+			};
 			run = async () => {
 				const s = await api.suggest(input);
 				return { result: s, text: () => formatSuggestion(s) };
@@ -184,9 +282,9 @@ export async function main(
 	}
 }
 
-function toInt(s: string): number {
+function toInt(s: string, flag = "--rounds"): number {
 	const n = Number(s);
 	if (!/^\d+$/.test(s) || !Number.isSafeInteger(n))
-		throw new UsageError("--rounds must be a non-negative safe integer");
+		throw new UsageError(`${flag} must be a non-negative safe integer`);
 	return n;
 }
