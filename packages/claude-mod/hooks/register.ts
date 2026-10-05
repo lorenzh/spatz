@@ -42,9 +42,15 @@ interface Io {
 	toast(text: string): void;
 }
 
-function bind($: EngineInterface): Io {
+function bind($: EngineInterface, spatz: string): Io {
+	const executable =
+		spatz === "spatz" ? ["sh", `${$.plugin.root}/bin/spatz`] : [spatz];
 	return {
-		run: (argv, init) => $.process.run(argv, init),
+		run: (argv, init) =>
+			$.process.run(
+				argv[0] === spatz ? [...executable, ...argv.slice(1)] : [...argv],
+				init,
+			),
 		sessionId: () => $.session.id().catch(() => undefined),
 		status: (text) => $.ui.status(text),
 		toast: (text) => $.ui.toast(text),
@@ -74,6 +80,16 @@ export function register(on: On, options: PluginOptions = {}) {
 	let hooksPlugin: Promise<boolean> | undefined;
 	let noticed = false;
 	let logged = false;
+	const logFailure = (io: Io, error: unknown) => {
+		if (logged) return;
+		logged = true;
+		try {
+			io.log(`spatz: decision failed, routing unchanged: ${error}`);
+			io.toast(
+				"spatz: CLI call failed, routing unchanged (details: claude --debug)",
+			);
+		} catch {}
+	};
 
 	const show = (io: Io) => {
 		try {
@@ -94,6 +110,7 @@ export function register(on: On, options: PluginOptions = {}) {
 			s.models,
 			{ ...link, session },
 			s.spatz,
+			(error) => logFailure(io, error),
 		);
 		if (!d) return undefined;
 		last = d;
@@ -179,7 +196,7 @@ export function register(on: On, options: PluginOptions = {}) {
 	});
 
 	on("command.run", { command: "spatz" }, async ($, e) => {
-		const io = bind($);
+		const io = bind($, s.spatz);
 		const args = e.args.trim();
 		if (args === "" || args === "status") {
 			const record =
@@ -196,7 +213,7 @@ export function register(on: On, options: PluginOptions = {}) {
 	});
 
 	on("agent.spawn", async ($, e, next) => {
-		const io = bind($);
+		const io = bind($, s.spatz);
 		if (s.mode === "off" || e.fork) return next(e);
 		if (s.scope === "step") {
 			const result = await next(e);
@@ -225,7 +242,7 @@ export function register(on: On, options: PluginOptions = {}) {
 	});
 
 	on("turn.start", async ($, e, next) => {
-		const io = bind($);
+		const io = bind($, s.spatz);
 		currentTurn = e.turnId;
 		if (s.mode !== "off") {
 			try {
@@ -252,17 +269,12 @@ export function register(on: On, options: PluginOptions = {}) {
 	});
 
 	on("turn.step", async function* ($, e, next) {
-		const io = bind($);
+		const io = bind($, s.spatz);
 		let d: Decision | undefined;
 		try {
 			d = s.mode === "off" ? undefined : await pick(io, e);
 		} catch (error) {
-			if (!logged) {
-				logged = true;
-				try {
-					io.log(`spatz: decision failed, step unchanged: ${error}`);
-				} catch {}
-			}
+			logFailure(io, error);
 		}
 		if (d) used.set(e.turnId, d);
 		const result = yield* next(
@@ -288,7 +300,7 @@ export function register(on: On, options: PluginOptions = {}) {
 	});
 
 	on("turn.complete", async ($, e, next) => {
-		const io = bind($);
+		const io = bind($, s.spatz);
 		const result = await next(e);
 		const d = used.get(e.turnId);
 		try {
@@ -310,7 +322,7 @@ export function register(on: On, options: PluginOptions = {}) {
 	});
 
 	on("tool.call", async ($, e, next) => {
-		const io = bind($);
+		const io = bind($, s.spatz);
 		const result = await next(e);
 		try {
 			if (

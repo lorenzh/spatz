@@ -115,7 +115,7 @@ Hooks and the mod can run together. The mod's `record: auto` avoids duplicate us
 ### Install for Claude Code
 
 Use macOS or Linux with a POSIX shell. The plugins do not support native Windows.
-Install the [spatz CLI](#quickstart) first so the hooks and mod can find it on `PATH`.
+The plugins run the CLI through a bundled launcher: an installed `spatz` on `PATH` wins, otherwise it uses Bun or npx from the `PATH` Claude Code starts with.
 The mod needs Claude Code 2.1.287 or newer.
 
 1. Start Claude Code. Add the marketplace and install the hooks:
@@ -180,7 +180,7 @@ After the task, ask the agent to report the actual pair and result with `spatz r
 Run `spatz stats` to see recorded outcomes.
 
 Every plugin ships the `spatz` routing skill. You do not need to edit your agent instructions.
-The hooks plugins can also run without a global CLI through their bundled launcher using Bun or npx.
+Every plugin can run without a global CLI through its bundled launcher using Bun or npx.
 The first run downloads about 60 MB. Codex hooks time out after 10 seconds.
 For this setup, warm the launcher before the first session with `"<plugin root>/bin/spatz" --version`.
 See [Installation](docs/installation.md) for launcher paths and setup without a global CLI.

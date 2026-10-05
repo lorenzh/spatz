@@ -74,9 +74,15 @@ export async function suggest(
 	models: string[],
 	link: Link,
 	spatz = "spatz",
+	onFailure?: (error: unknown) => void,
 ): Promise<Decision | null> {
+	const fail = (error: unknown) => {
+		try {
+			onFailure?.(error);
+		} catch {}
+	};
 	try {
-		const { exitCode, stdout } = await run(
+		const { exitCode, stdout, stderr } = await run(
 			[
 				spatz,
 				task,
@@ -93,7 +99,14 @@ export async function suggest(
 			],
 			{ timeoutMs: SUGGEST_TIMEOUT_MS },
 		);
-		if (exitCode !== 0) return null;
+		if (exitCode !== 0) {
+			fail(
+				new Error(
+					`CLI exited ${exitCode}${stderr ? `: ${stderr.slice(0, 200)}` : ""}`,
+				),
+			);
+			return null;
+		}
 		const result = JSON.parse(stdout);
 		const first = result?.ranking?.[0];
 		const model = claudeModel(first?.model);
@@ -101,15 +114,18 @@ export async function suggest(
 			typeof result?.suggestion_id !== "string" ||
 			!model ||
 			!(EFFORTS as readonly string[]).includes(first?.effort)
-		)
+		) {
+			fail(new Error("invalid suggestion response"));
 			return null;
+		}
 		return {
 			suggestionId: result.suggestion_id,
 			model,
 			effort: first.effort,
 			scope: link.scope,
 		};
-	} catch {
+	} catch (error) {
+		fail(error);
 		return null;
 	}
 }

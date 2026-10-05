@@ -16,6 +16,7 @@ import { register } from "../hooks/register.ts";
 
 type Options = Record<string, string | number | boolean>;
 type Out = { exitCode: number; stdout: string; stderr: string };
+const PLUGIN_ROOT = "/plugins/spatz-mod";
 
 /** One Claude Code process: the hooks a mod registered plus a `$` that logs every call. */
 function session(
@@ -42,6 +43,7 @@ function session(
 	const commands: string[] = [];
 	let n = 0;
 	const $ = {
+		plugin: { root: PLUGIN_ROOT },
 		session: {
 			id: () => {
 				if (over.sessionIdThrows) throw new Error("no session");
@@ -54,9 +56,10 @@ function session(
 				timeouts.push(init.timeoutMs);
 				if (argv[0] === "claude")
 					return over.plugins ?? { exitCode: 0, stdout: "[]", stderr: "" };
-				if (argv[1] === "usage")
+				const args = argv[0] === "sh" ? argv.slice(2) : argv.slice(1);
+				if (args[0] === "usage")
 					return { exitCode: 0, stdout: "{}", stderr: "" };
-				if (argv[1] === "link")
+				if (args[0] === "link")
 					return over.link ?? { exitCode: 0, stdout: "{}", stderr: "" };
 				n++;
 				if (over.suggestion) return over.suggestion(n);
@@ -85,12 +88,18 @@ function session(
 		},
 	} as unknown as EngineInterface;
 	const hook = <T>(name: string) => registered.get(name) as T;
+	const cliArgs = (argv: string[]) =>
+		argv[0] === "sh" ? argv.slice(2) : argv.slice(1);
 	const suggests = () =>
 		argvs.filter(
-			(a) => a[0] === "spatz" && a[1] !== "usage" && a[1] !== "link",
+			(a) =>
+				!["usage", "link"].includes(cliArgs(a)[0] ?? "") && a[0] !== "claude",
 		);
-	const links = () => argvs.filter((a) => a[1] === "link");
-	const usages = () => argvs.filter((a) => a[1] === "usage");
+	const links = () => argvs.filter((a) => cliArgs(a)[0] === "link");
+	const usages = () =>
+		argvs
+			.filter((a) => cliArgs(a)[0] === "usage")
+			.map((a) => ["spatz", ...cliArgs(a)]);
 	const flag = (argv: string[], name: string) => argv[argv.indexOf(name) + 1];
 
 	const spawn = (
@@ -274,10 +283,61 @@ describe("subagent scope (default)", () => {
 		expect(argv).not.toContain("--agent-id");
 		expect(argv).not.toContain("--session");
 		expect(s.links()).toEqual([
-			["spatz", "link", "s1", "--agent-id", "a1", "--session", "sess1"],
+			[
+				"sh",
+				`${PLUGIN_ROOT}/bin/spatz`,
+				"link",
+				"s1",
+				"--agent-id",
+				"a1",
+				"--session",
+				"sess1",
+			],
 		]);
 		const { seen } = await s.step({ turnId: "t1", agentId: "a1" });
 		expect(seen).toMatchObject(SONNET_MEDIUM);
+	});
+
+	test("the default executable uses the plugin launcher through sh", async () => {
+		const s = session({ ...apply });
+		await s.spawn({});
+		expect(s.suggests()[0]?.slice(0, 2)).toEqual([
+			"sh",
+			`${PLUGIN_ROOT}/bin/spatz`,
+		]);
+	});
+
+	test("a custom executable passes through unchanged", async () => {
+		const s = session({ ...apply, spatz: "/opt/bin/spatz-custom" });
+		await s.spawn({});
+		expect(s.suggests()[0]?.[0]).toBe("/opt/bin/spatz-custom");
+	});
+
+	test("failed recommendation calls log once and keep forwarding", async () => {
+		const spawn = session(
+			{ ...apply },
+			{ suggestion: () => ({ exitCode: 127, stdout: "", stderr: "missing" }) },
+		);
+		const first = await spawn.spawn({});
+		const second = await spawn.spawn({});
+		expect(first.result.model).toBe("inherited");
+		expect(second.result.model).toBe("inherited");
+		expect(spawn.logs).toHaveLength(1);
+		expect(spawn.toasts).toEqual([
+			"spatz: CLI call failed, routing unchanged (details: claude --debug)",
+		]);
+
+		const step = session(
+			{ ...apply, scope: "step", main: true },
+			{ suggestion: () => ({ exitCode: 127, stdout: "", stderr: "missing" }) },
+		);
+		await step.start("t1", LONG);
+		for (const index of [0, 1])
+			expect((await step.step({ turnId: "t1", index })).seen.model).toBe(
+				"inherited",
+			);
+		expect(step.logs).toHaveLength(1);
+		expect(step.toasts).toHaveLength(1);
 	});
 
 	test("a model without an alias leaves the spawn alone and still applies it on steps", async () => {
