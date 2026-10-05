@@ -10,7 +10,11 @@ keywords: [mod, plugin, scope, step, turn, subagent, session, escalate, apply, s
 The `spatz` plugin is the Claude Code mod in `packages/claude-mod`.
 It asks the `spatz` CLI for a recommendation.
 In `show` mode it shows the recommendation. In `apply` mode it also changes model and effort.
-The mod needs Claude Code 2.1.287 or newer and the `spatz` CLI on your `PATH`.
+The mod needs Claude Code 2.1.287 or newer.
+Its `spatz` executable option defaults to `spatz` on `PATH`.
+To avoid a separate CLI install, set it to the installed plugin's absolute `bin/spatz` path.
+The launcher needs Node.js (npx) or Bun. Run it with `--version` before using the mod's six-second calls.
+See [installation](installation.md) for cache warm-up and update limits.
 
 Install the CLI through the [installation guide](installation.md), then run these commands in Claude Code:
 

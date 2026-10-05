@@ -17,7 +17,7 @@ spatz supports Claude Code and Codex CLI. For the command reference see [cli.md]
 
 ### Marketplace plugin
 
-Install the CLI through the [installation guide](installation.md), then run these commands in Claude Code:
+Run these commands in Claude Code. See the [installation guide](installation.md) for runtime requirements:
 
 ```text
 /plugin marketplace add lorenzh/spatz
@@ -25,7 +25,10 @@ Install the CLI through the [installation guide](installation.md), then run thes
 ```
 
 The plugin runs the four commands below with the same matchers and `async: true`.
-It resolves plain `spatz` through Claude Code's `PATH`. It has no executable setting.
+It calls `"${CLAUDE_PLUGIN_ROOT}/bin/spatz"` using [Claude Code's plugin-root variable](https://code.claude.com/docs/en/hooks#reference-scripts-by-path).
+The launcher prefers an installed `spatz` on `PATH`, then Bun, then Node's npx.
+No separate CLI install is needed when either package runner is available.
+The first run downloads about 60 MB. Package runners use the plugin's version.
 Remove hand-written `spatz hook` entries from `~/.claude/settings.json` and project settings to avoid duplicate calls.
 Keep unrelated hooks.
 With the `spatz` mod, leave `record: auto` so the hooks plugin handles recording.
@@ -123,7 +126,7 @@ See [cli.md](cli.md) for the flags.
 Without explicit linking, the `PostToolUse` hook makes the link:
 
 1. The agent runs `spatz "<task>" --models <list>` with the Bash tool.
-2. The `PostToolUse` hook sees a Bash command whose segment starts with `spatz` or `<path>/spatz`. The first argument is not `report`, `usage`, `hook` or `stats`.
+2. The `PostToolUse` hook sees a Bash command whose segment starts with `spatz`, `<path>/spatz`, `npx [-y] @spatz/cli[@version]`, or `bunx @spatz/cli[@version]`. The first argument is not a subcommand or option.
 3. spatz reads the suggestion id from the output. Text output gives the line `suggestion_id: <uuid>`. JSON output gives the field `"suggestion_id"`.
 4. spatz stores `session_id` and `prompt_id` with the suggestion. Subagent events also supply `agent_id`.
 
@@ -148,7 +151,10 @@ sequenceDiagram
     S->>D: report signal, close suggestion
 ```
 
-Bash detection works only when the command starts with `spatz` or a path that ends in `/spatz`. Without `--session`, these calls are not linked:
+Detection also accepts `rtk` and `rtk proxy` before these forms.
+Plugin launcher paths can be quoted, including paths with spaces.
+Keep suggestion output unfiltered so hooks can read the ID.
+Without `--session`, these calls are not linked:
 
 - `SPATZ_NO_JEV=1 spatz "<task>" ...` (an environment assignment before `spatz`)
 - `bunx spatz "<task>" ...`
@@ -210,7 +216,7 @@ When you install the hooks plugin, remove equivalent hand-written entries from `
 
 ## Codex CLI
 
-Install the `spatz-hooks` Codex plugin after installing the CLI:
+Install the `spatz-hooks` Codex plugin:
 
 ```text
 codex plugin marketplace add lorenzh/spatz
@@ -218,16 +224,21 @@ codex plugin add spatz-hooks@spatz
 ```
 
 The plugin runs these hooks synchronously with a 10-second timeout. Codex skips plugin hooks until you review and trust them through `/hooks`.
+[Codex supplies `PLUGIN_ROOT`](https://learn.chatgpt.com/docs/hooks#plugin-bundled-hooks), which points to the installed plugin directory.
+The launcher uses the same PATH, Bun, then npx order as the Claude hooks.
+Before the first hook, run `npx -y @spatz/cli --version` once.
+The first download can exceed the timeout. If the plugin version differs, also warm that exact `@<version>`.
+If Bun is available, warm `bunx @spatz/cli@<version> --version` because the launcher prefers Bun.
 
 ```json
 {
 	"hooks": {
 		"PostToolUse": [{
 			"matcher": "Bash",
-			"hooks": [{ "type": "command", "command": "spatz hook PostToolUse --agent codex", "timeout": 10 }]
+			"hooks": [{ "type": "command", "command": "\"${PLUGIN_ROOT}/bin/spatz\" hook PostToolUse --agent codex", "timeout": 10 }]
 		}],
 		"Stop": [{
-			"hooks": [{ "type": "command", "command": "spatz hook Stop --agent codex", "timeout": 10 }]
+			"hooks": [{ "type": "command", "command": "\"${PLUGIN_ROOT}/bin/spatz\" hook Stop --agent codex", "timeout": 10 }]
 		}]
 	}
 }

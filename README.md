@@ -53,13 +53,19 @@ spatz works without a key. Without a key, spatz uses the keyword rules. These ru
 
 ## Install
 
-Install the CLI with Node.js 18 or newer:
+For standalone CLI use, install with Node.js 18 or newer:
 
 ```bash
 npm i -g @spatz/cli
 ```
 
 For nightlies, run `npm i -g @spatz/cli@nightly`. Or download release binaries with `gh release download --repo lorenzh/spatz --pattern 'spatz-cli-*'`.
+
+Plugins include a CLI launcher and the `spatz` routing skill.
+Hooks and skills need no separate CLI install when Node.js (npx) or Bun is available.
+An installed `spatz` on PATH wins. Otherwise the launcher tries Bun, then npx, at the plugin's version.
+The first run downloads about 60 MB.
+The mod keeps its executable setting: use `spatz` on PATH or set the installed plugin's absolute `bin/spatz` path.
 
 In Claude Code, run `/plugin marketplace add lorenzh/spatz`, then install:
 
@@ -68,6 +74,8 @@ In Claude Code, run `/plugin marketplace add lorenzh/spatz`, then install:
 - Install both to route and record together; keep `record: auto`.
 
 In Codex, run `codex plugin marketplace add lorenzh/spatz`, then `codex plugin add spatz-hooks@spatz`. Review and trust the hooks with `/hooks` before they run.
+Codex hooks have a 10-second timeout: run `npx -y @spatz/cli --version` once beforehand.
+For another plugin version or Bun's cache, follow the [warm-up instructions](docs/installation.md#use-with-codex).
 
 For TypeSafe AI task classification, set `TYPESAFE_AI_API_KEY` in the CLI environment:
 

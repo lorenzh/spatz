@@ -7,7 +7,11 @@ keywords: [install, npm, nightly, binary, release, marketplace, plugin, hooks, m
 
 # Installing spatz
 
-The plugins call the `spatz` CLI. Install the CLI first.
+The plugins include a `bin/spatz` launcher and the `spatz` routing skill.
+Hooks and skills work without a separate CLI install when Node.js (npx) or Bun is available.
+The launcher uses an installed `spatz` on `PATH` first, then `bunx`, then `npx -y`.
+Both package runners use the plugin's exact version. The first run downloads about 60 MB.
+The POSIX launcher needs a Unix shell. Windows hooks remain untested.
 
 ## Install the CLI
 
@@ -27,9 +31,12 @@ Keep the executable and DuckDB libraries together, then put the executable on `P
 See the [binary installation commands](../README.md#releases).
 Linux binaries need glibc. Windows binaries are experimental. We have not tested Windows hooks.
 
-Claude Code must find `spatz` in its environment. A shell alias is not enough.
-The hooks plugin runs plain `spatz` from `PATH` and has no executable setting.
-The mod also defaults to `spatz`, but accepts an executable path through its `spatz` option.
+A shell alias does not count as an installed executable.
+The mod keeps its `spatz` executable option and defaults to `spatz` on `PATH`.
+Its function-hook API has no plugin-root resolver that this plugin uses.
+To use the mod without a CLI install, set that option to the installed plugin's absolute `bin/spatz` path.
+Run that launcher with `--version` first: the mod's CLI calls time out after six seconds.
+After a plugin update, check the option because the install path can change.
 
 ## Configure classification
 
@@ -108,7 +115,7 @@ Use `spatz-claude-hooks-<version>.zip` for the hooks plugin.
 `--plugin-dir` loads an extracted plugin for that session.
 If you load both plugins manually, set `/spatz record off`.
 Automatic detection checks installed plugins.
-The ZIPs do not include the CLI.
+The ZIPs include the launcher and skill. The launcher downloads the CLI when needed.
 
 ## Use with Codex
 
@@ -120,5 +127,23 @@ codex plugin add spatz-hooks@spatz
 ```
 
 Review and trust the new hooks with `/hooks` before they run. Codex stores plugin hooks separately from manually configured hooks.
-The plugin runs `spatz` from `PATH`, so install the CLI first.
+Codex supplies `PLUGIN_ROOT` to plugin hooks, so the hooks call `"${PLUGIN_ROOT}/bin/spatz"`.
+Before the first hook, warm the npm cache:
+
+```bash
+npx -y @spatz/cli --version
+```
+
+Codex hooks have a 10-second timeout. A cold download can exceed it.
+If the plugin pins a different release, also run `npx -y @spatz/cli@<version> --version` for that version.
+If Bun is installed, warm `bunx @spatz/cli@<version> --version` instead: the launcher prefers Bun over npx.
 See [Codex hooks](hooks.md#codex-cli) for the events and limits.
+
+## Routing skill
+
+Each plugin ships the same `spatz` skill under `skills/spatz/SKILL.md`.
+It asks agents to rank available model and effort pairs before delegation.
+It also covers reviews by the other model family and explicit outcome reports.
+The skill requests agent behavior. It does not add dispatch tools or switch models itself.
+When both Claude plugins are enabled, use either copy for a dispatch, not both.
+The mod's `/spatz` status command remains separate from the namespaced plugin skill.
