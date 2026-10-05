@@ -1,8 +1,8 @@
 ---
 title: Releasing spatz
-description: How to publish tagged releases and build nightly CLI archives.
+description: How to publish release archives and npm packages, and control nightly builds.
 tags: [spatz, cli, releases]
-keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, download]
+keywords: [release, nightly, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing]
 ---
 
 # Releasing spatz
@@ -26,7 +26,11 @@ Versions such as `v0.2.0-rc.1` produce prereleases.
 Build metadata alone does not make a prerelease: `v0.2.0+build.1` remains a stable release.
 
 The nightly workflow runs daily at 03:00 UTC and accepts manual runs from GitHub Actions.
-If the existing nightly release records the same commit as `main`, the workflow skips the build.
+The workflow builds its triggering commit (`github.sha`) and compares it with the previous nightly commit.
+Changes under `packages/`, `scripts/`, `package.json`, `bun.lock`, or `.github/workflows/` trigger a build.
+Documentation-only changes do not trigger a build.
+If Git cannot resolve the previous commit, the workflow builds.
+For a manual rebuild, enable the boolean `force` input. Its default is `false`.
 Its version is `<package version>-nightly.<YYYYMMDD>+<shortsha>`.
 The workflow replaces any existing build metadata.
 After all builds pass, it replaces the fixed `nightly` tag and prerelease.
@@ -47,3 +51,82 @@ Use your host's OS and architecture in the archive name. The build script suppor
 The smoke test checks the checksum, version, dry-run suggestion, and DuckDB statistics outside the checkout.
 It uses the preinstalled DuckDB SQLite extension and sets dead HTTP proxies.
 See [README.md](README.md#releases) for download and installation instructions.
+
+## npm packages
+
+`.github/workflows/npm-publish.yml` publishes the verified GitHub release archives to npm.
+It runs after a successful `Release` or `Nightly` workflow from the same repository.
+`Release` runs must use `release.yml` with a `push` event.
+`Nightly` runs must use `nightly.yml` with a `schedule` or `workflow_dispatch` event.
+The originating run must have a successful `release` job.
+For nightlies, the release commit must also match that run's `head_sha`.
+Even when the commit matches, a skipped nightly build does not publish to npm.
+The workflow checks the release ID before and after downloading to detect replacement during download.
+It checks `SHA256SUMS` before it extracts any archive.
+
+The packages are:
+
+- `@spatz/cli`: the `spatz` launcher, with exact-version optional dependencies.
+- `@spatz/cli-linux-x64` and `@spatz/cli-linux-arm64`.
+- `@spatz/cli-darwin-arm64` and `@spatz/cli-darwin-x64`.
+- `@spatz/cli-win32-x64`: experimental and optional.
+
+If the Windows archive is absent, the workflow omits its npm package.
+
+Platform packages keep DuckDB sidecars beside the executable. Linux packages require glibc.
+The launcher needs Node.js 18 or newer. Users do not need a separate Bun installation.
+
+### Trusted publishing setup
+
+The owner created all six npm packages as `0.0.0` placeholders for the first publish.
+For each package, configure an npm GitHub Actions trusted publisher with these values:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `lorenzh` |
+| Repository | `spatz` |
+| Workflow filename | `npm-publish.yml` |
+| Environment | Leave empty |
+
+The publish job lives directly in that file. It does not use a reusable publish workflow.
+It uses Node.js 24, npm 11.5.1 or newer, and `id-token: write` for authentication.
+The workflow needs no npm token. Each publish includes provenance.
+See [npm's trusted publishing instructions](https://docs.npmjs.com/trusted-publishers/) for the package settings.
+Merge this workflow into `main` before expecting automatic runs.
+
+### Versions and retries
+
+| GitHub release version | npm version | npm dist-tag |
+| --- | --- | --- |
+| `v1.2.3` | `1.2.3` | `latest` |
+| `v1.2.3-rc.1` | `1.2.3-rc.1` | `next` |
+| `1.2.3-nightly.20261005+0123456` | `1.2.3-nightly.20261005.g0123456` | `nightly` |
+
+The `g` prefix keeps numeric SHAs with leading zeros valid in npm versions.
+For non-nightly versions, npm drops `+build` metadata. Such releases share the same npm version.
+Platform packages publish first. The main package publishes last.
+Publish jobs run one at a time. Stable releases compare their version with `@spatz/cli`'s current `latest` version.
+Older stable releases use `v<major>.<minor>-latest` instead. A missing `latest` or the `0.0.0` placeholder counts as the lowest version.
+Retries skip any package version already on npm, so a partial publish can resume.
+Retries also skip E403 errors that say the version was already published.
+They do not replace existing versions or move dist-tags for skipped packages.
+A forced nightly on the same UTC date and commit has the same npm version.
+The workflow skips that existing version.
+
+To retry, open **Actions → Publish npm packages → Run workflow** on `main`.
+Set `tag` to the GitHub release tag, such as `v0.2.0` or `nightly`.
+The CLI equivalent is:
+
+```bash
+gh workflow run npm-publish.yml --ref main -f tag=nightly
+```
+
+To assemble packages locally, pass the archive folder, release version, and a new output folder:
+
+```bash
+bun scripts/npm-packages.ts dist 0.2.0 /tmp/spatz-npm-packages
+```
+
+The script requires all four Linux/macOS archives. Windows is optional.
+For a local smoke test with only a host archive, append its target, such as `linux-x64`.
+The publish workflow always requires the complete Linux/macOS set.
