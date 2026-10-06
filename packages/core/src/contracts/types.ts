@@ -3,17 +3,48 @@
 
 // ---------- Taxonomy (spec "Classification with Jev") ----------
 
+/** Taxonomy v2 (GitHub issue #72): a superset of v1, so old rows stay valid. Learning stays per type. */
 export const TASK_TYPES = [
 	"code.bugfix",
 	"code.feature",
 	"code.refactor",
+	"code.test",
 	"code.explain",
+	"investigation",
 	"review",
 	"spec",
 	"planning",
+	"ops",
+	"design.ui",
+	"design.visual",
+	"design.3d",
+	"writing",
+	"research",
+	"data",
 	"other",
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
+
+/** Family per type; it only drives pooling (Tuning.familyPooling). */
+export const TASK_FAMILY: Record<TaskType, string> = {
+	"code.bugfix": "code",
+	"code.feature": "code",
+	"code.refactor": "code",
+	"code.test": "code",
+	"code.explain": "code",
+	investigation: "code",
+	review: "review",
+	spec: "planning",
+	planning: "planning",
+	ops: "ops",
+	"design.ui": "design",
+	"design.visual": "design",
+	"design.3d": "design",
+	writing: "prose",
+	research: "prose",
+	data: "data",
+	other: "other",
+};
 
 /** Rubric order matters: Jev score key "0" = easy, "1" = medium, "2" = hard. */
 export const DIFFICULTIES = ["easy", "medium", "hard"] as const;
@@ -70,6 +101,8 @@ export interface Tuning {
 	openRouterTimeoutMs: number;
 	/** Success means quality >= this. Default 0.8. */
 	successQuality: number;
+	/** Thin cells pool over the same family at the same level after the type levels. Default false until the offline replay shows no harm; env SPATZ_FAMILY_POOLING=1. */
+	familyPooling: boolean;
 }
 
 export const DEFAULT_TUNING: Tuning = {
@@ -85,6 +118,7 @@ export const DEFAULT_TUNING: Tuning = {
 	openRouterCacheMs: 24 * 60 * 60 * 1000,
 	openRouterTimeoutMs: 3000,
 	successQuality: 0.8,
+	familyPooling: false,
 };
 
 // ---------- Candidates and catalog (spec "Candidates and metadata") ----------

@@ -18,6 +18,7 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | `TYPESAFE_AI_API_KEY` | not set | API key for Jev (TypeSafe AI). When it is not set, spatz classifies with keyword rules (`fallback_used: true`). |
 | `SPATZ_NO_NETWORK` | not set | When exactly `1`, suggestions skip harness catalog, OpenRouter and Jev requests. Cached and bundled data still work. |
 | `SPATZ_NO_JEV` | not set | When the value is exactly `1`, spatz never sends the task text to Jev. Other values have no effect. |
+| `SPATZ_FAMILY_POOLING` | not set | When the value is exactly `1`, a thin cell also pools over the same task-type family at the same difficulty. Off by default. See [recommendation.md](recommendation.md). |
 | `SPATZ_DEBUG` | not set | When the value is exactly `1`, hooks write fixed diagnostics to stderr. Hook commands still exit with code 0. |
 | `SPATZ_SUGGESTION_ID` | not set | Read only by Codex hooks. At Stop, record that turn's usage and test/build signals against this existing suggestion instead of using session attribution. An unknown ID records a hook failure. See [Link a dispatched Codex run](hooks.md#link-a-dispatched-codex-run). |
 | `OPENROUTER_API_KEY` | not set | When set, spatz sends it as `Authorization: Bearer <key>` with the OpenRouter model-list request. The request works without it. |

@@ -60,6 +60,8 @@ If the cell has too little data, spatz pools the outcomes of the same task type 
 
 Success on a harder task is evidence for an easier task. The reverse is not true. Pooled data uses the same "enough data" rule.
 
+With `SPATZ_FAMILY_POOLING=1`, a level that still has too little data pools next over all types of the same family (see [how-it-works.md](how-it-works.md#task-types)) at the same difficulty. spatz never pools across families. The flag is off by default until an offline replay shows that family pooling does not hurt.
+
 ## Decision order
 
 spatz applies the first rule that matches. The values are the start values in `DEFAULT_TUNING` (`packages/core/src/contracts/types.ts`).

@@ -391,6 +391,35 @@ describe("extended level", () => {
 	});
 });
 
+describe("family pooling", () => {
+	const family = [stat(c0, 5, 5, "easy", "code.feature")];
+	const on = (over: Partial<Classification> = {}): StrategyContext => ({
+		...ctx(LEARNED, over),
+		tuning: { ...DEFAULT_TUNING, familyPooling: true },
+	});
+
+	test("is off by default", () => {
+		expect(recommend(ctx(LEARNED), CATALOG, family).strategy).toBe(
+			"jev-choice",
+		);
+	});
+
+	test("pools the same family at the same level after the type levels", () => {
+		const d = recommend(on(), CATALOG, family);
+		expect(d.strategy).toBe("learned");
+		expect(pick(d)).toMatchObject({ model: c0.model, n: 5 });
+		expect(d.reason).toContain("code family");
+	});
+
+	test("never pools across families or other levels", () => {
+		const other = [
+			stat(c0, 5, 5, "easy", "review"),
+			stat(c0, 5, 5, "medium", "code.feature"),
+		];
+		expect(recommend(on(), CATALOG, other).strategy).toBe("jev-choice");
+	});
+});
+
 describe("jev-choice and rules", () => {
 	test("too little data uses Jev's best candidate", () => {
 		const d = recommend(ctx(LEARNED), CATALOG, [stat(c0, 1, 1)]);

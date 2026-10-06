@@ -30,19 +30,39 @@ export function createJevClient(apiKey: string): JevClient {
 /** One-line descriptions per option, translated from the spec tables (Jev uses them as option boundaries). */
 export const TASK_TYPE_DESCRIPTIONS: Record<TaskType, string> = {
 	"code.bugfix": "Find and fix a bug in existing code.",
-	"code.feature": "Add a feature with new code.",
-	"code.refactor": "Change the code structure without changing its behavior.",
-	"code.explain": "Explain code without changing it.",
-	review: "Review or verify someone else's work.",
-	spec: "Write or change a specification.",
-	planning: "Plan steps, architecture or an approach without writing code.",
+	"code.feature": "Add behaviour with new code.",
+	"code.refactor": "Change the code structure without changing its behaviour.",
+	"code.test":
+		"Write or fix tests for existing code without changing the code under test.",
+	"code.explain":
+		"Answer a question about existing code without producing a document or a change.",
+	investigation:
+		"Find the cause of a fault or unexpected behaviour without fixing it; the result is a diagnosis.",
+	review:
+		"Review or verify someone else's work: code, design, document or data.",
+	spec: "Write or change requirements, acceptance criteria or an interface contract that others implement.",
+	planning:
+		"Decide the steps, architecture or approach for this project without producing the work.",
+	ops: "Change or diagnose infrastructure, CI, deployment or configuration.",
+	"design.ui":
+		"Design or build a user interface: screens, layouts, components, flows or interactive prototypes.",
+	"design.visual":
+		"Create visual assets without interaction: graphics, illustrations, logos, diagrams, slides or image edits.",
+	"design.3d":
+		"Create or change 3D content: models, meshes, scenes, materials or animations.",
+	writing:
+		"Write or edit prose for people: documentation, articles, reports, messages or marketing text.",
+	research:
+		"Find, compare and summarise information or options; the result is knowledge, not a change.",
+	data: "Analyse data: query, aggregate, chart or interpret a dataset; the result is a finding or a figure.",
 	other: "None of the other options fits.",
 };
 
+/** Type-neutral rubric (taxonomy v2). */
 const DIFFICULTY_RUBRIC = [
-	"easy: A clear task with little context. One place or one topic.",
-	"medium: Several places or topics. The approach needs some analysis.",
-	"hard: Many parts, an unclear cause, a design decision or much context.",
+	"easy: One clear deliverable with little context.",
+	"medium: Several places, parts or constraints; some analysis.",
+	"hard: Many parts, an open goal, a design decision, an unclear cause or much context.",
 ] as const;
 
 const CRITICALITY_DESCRIPTIONS: Record<Criticality, string> = {
@@ -60,7 +80,7 @@ export function buildJevRequest(task: string, catalog: Catalog): JevRequest {
 		questions: {
 			task_type: {
 				type: "choice",
-				instructions: "What kind of task is this for a coding agent?",
+				instructions: "What kind of task is this for an agent?",
 				criteria: TASK_TYPE_DESCRIPTIONS,
 			},
 			difficulty: {

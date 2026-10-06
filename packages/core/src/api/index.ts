@@ -37,6 +37,8 @@ import {
 	SCOPES,
 	SIGNAL_WEIGHTS,
 	type StatsReport,
+	TASK_FAMILY,
+	TASK_TYPES,
 	type UsageRecord,
 } from "../contracts/types.ts";
 import { recommend } from "../recommend/index.ts";
@@ -718,7 +720,11 @@ export function createApi(
 				const d = recommend(
 					{ classification: c, random: deps.random(), tuning: cfg.tuning },
 					catalog,
-					store.cellStats(c.task_type, cfg.tuning.successQuality),
+					cfg.tuning.familyPooling
+						? TASK_TYPES.filter(
+								(t) => TASK_FAMILY[t] === TASK_FAMILY[c.task_type],
+							).flatMap((t) => store.cellStats(t, cfg.tuning.successQuality))
+						: store.cellStats(c.task_type, cfg.tuning.successQuality),
 				);
 				const id = deps.newId();
 				const now = deps.clock.now();

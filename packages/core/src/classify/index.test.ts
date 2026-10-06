@@ -119,21 +119,41 @@ describe("buildJevRequest", () => {
 		]);
 	});
 
-	test("task_type is a choice over the 8 options with the spec descriptions", () => {
+	test("task_type is a choice over the 17 options with the spec descriptions", () => {
 		const q = request.questions.task_type;
 		expect(q.type).toBe("choice");
-		// Literal copy of the spec table "task_type | Description for Jev".
+		// Literal copy of the v2 table in GitHub issue #72.
 		const spec = {
 			"code.bugfix": "Find and fix a bug in existing code.",
-			"code.feature": "Add a feature with new code.",
+			"code.feature": "Add behaviour with new code.",
 			"code.refactor":
-				"Change the code structure without changing its behavior.",
-			"code.explain": "Explain code without changing it.",
-			review: "Review or verify someone else's work.",
-			spec: "Write or change a specification.",
-			planning: "Plan steps, architecture or an approach without writing code.",
+				"Change the code structure without changing its behaviour.",
+			"code.test":
+				"Write or fix tests for existing code without changing the code under test.",
+			"code.explain":
+				"Answer a question about existing code without producing a document or a change.",
+			investigation:
+				"Find the cause of a fault or unexpected behaviour without fixing it; the result is a diagnosis.",
+			review:
+				"Review or verify someone else's work: code, design, document or data.",
+			spec: "Write or change requirements, acceptance criteria or an interface contract that others implement.",
+			planning:
+				"Decide the steps, architecture or approach for this project without producing the work.",
+			ops: "Change or diagnose infrastructure, CI, deployment or configuration.",
+			"design.ui":
+				"Design or build a user interface: screens, layouts, components, flows or interactive prototypes.",
+			"design.visual":
+				"Create visual assets without interaction: graphics, illustrations, logos, diagrams, slides or image edits.",
+			"design.3d":
+				"Create or change 3D content: models, meshes, scenes, materials or animations.",
+			writing:
+				"Write or edit prose for people: documentation, articles, reports, messages or marketing text.",
+			research:
+				"Find, compare and summarise information or options; the result is knowledge, not a change.",
+			data: "Analyse data: query, aggregate, chart or interpret a dataset; the result is a finding or a figure.",
 			other: "None of the other options fits.",
 		};
+		expect(Object.keys(q.criteria)).toHaveLength(17);
 		expect(q.criteria).toEqual(spec);
 		expect(TASK_TYPE_DESCRIPTIONS).toEqual(spec);
 	});
@@ -144,15 +164,15 @@ describe("buildJevRequest", () => {
 		expect(q.criteria).toHaveLength(3);
 		expect(q.criteria[0]).toStartWith("easy");
 		expect(q.criteria[0]).toContain(
-			"A clear task with little context. One place or one topic.",
+			"One clear deliverable with little context.",
 		);
 		expect(q.criteria[1]).toStartWith("medium");
 		expect(q.criteria[1]).toContain(
-			"Several places or topics. The approach needs some analysis.",
+			"Several places, parts or constraints; some analysis.",
 		);
 		expect(q.criteria[2]).toStartWith("hard");
 		expect(q.criteria[2]).toContain(
-			"Many parts, an unclear cause, a design decision or much context.",
+			"Many parts, an open goal, a design decision, an unclear cause or much context.",
 		);
 	});
 

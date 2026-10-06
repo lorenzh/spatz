@@ -141,7 +141,7 @@ The first line is always `suggestion_id: <uuid>`. The Claude Code hook reads thi
 | `ranking[].n` | number | Count of outcomes for this pair on the level that made the decision. That level is the cell (one pair of `task_type` and `difficulty`). If a learned choice used pooled data, it is the pooled level (same task type, same and harder difficulties). See [recommendation.md](recommendation.md). |
 | `ranking[].estimate` | number | Estimated success rate on the same level as `n`: `(1 + successes) / (2 + n)`, where a success is an outcome with quality `≥ 0.8`. With no data it is `0.5`. |
 | `reason` | string | One sentence that explains the choice. |
-| `classification.task_type` | string | `code.bugfix`, `code.feature`, `code.refactor`, `code.explain`, `review`, `spec`, `planning` or `other`. |
+| `classification.task_type` | string | `code.bugfix`, `code.feature`, `code.refactor`, `code.test`, `code.explain`, `investigation`, `review`, `spec`, `planning`, `ops`, `design.ui`, `design.visual`, `design.3d`, `writing`, `research`, `data` or `other`. |
 | `classification.difficulty` | string | `easy`, `medium` or `hard`. |
 | `classification.criticality` | string | `none`, `business_logic`, `security` or `data_integrity`. |
 | `fallback_used` | boolean | `true` when keyword rules classified the task instead of Jev. |
@@ -396,7 +396,7 @@ This command shows how well each pair worked, per task type. It reads the databa
 
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.explain`, `review`, `spec`, `planning`, `other`. Another value gives exit code 2. |
+| `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.test`, `code.explain`, `investigation`, `review`, `spec`, `planning`, `ops`, `design.ui`, `design.visual`, `design.3d`, `writing`, `research`, `data`, `other`. Another value gives exit code 2. |
 | `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 
