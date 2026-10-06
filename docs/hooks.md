@@ -270,13 +270,18 @@ These signals use source `Stop` and the turn ID. Replayed events do not add dupl
 Codex has no `SubagentStop` or `PostToolUseFailure` hook.
 
 Codex usage comes from the last `token_usage_record` for the turn.
+An explicit `turn_token_usage` takes priority over `token_count` totals, which can lag after compaction.
 If turn totals are absent, spatz uses the change in thread totals or sums per-response `usage` records.
 Older rollouts use `event_msg` records with type `token_count`.
 For these records, spatz takes the change in `info.total_token_usage` for the turn.
-Input, cache-read and cache-write counters stay separate. `output_tokens` already includes `reasoning_output_tokens`, so spatz counts reasoning once.
+If any stored counter has a negative delta, spatz treats usage as unavailable.
+For Codex, OpenAI `input_tokens` already includes `cached_input_tokens`. Claude reports these separately.
+Spatz stores the inclusive input count in `input_tokens` and the cached subset in `cache_read_tokens` without subtraction.
+It stores `cache_write_input_tokens` in `cache_creation_tokens`.
+`output_tokens` already includes `reasoning_output_tokens`, so spatz counts reasoning once.
 A rollout without usage does not replace an existing usage row.
-Codex rows recorded before the fix for [#60](https://github.com/lorenzh/spatz/issues/60) undercount tokens.
-The fix does not change those historical rows.
+The zero-token Codex rows in [#60](https://github.com/lorenzh/spatz/issues/60) came from `spatz report`, which records no tokens by design.
+Those report rows are tracked separately from transcript usage. The earlier Codex transcript rows were correct.
 
 ### Hook diagnostics
 

@@ -76,6 +76,7 @@ export function parseCodexRollout(
 	)?.payload;
 	if (!turn || typeof turn.model !== "string") return null;
 	let usage: CodexUsage | null = null;
+	let turnUsage: CodexUsage | null = null;
 	let threadUsage: CodexUsage = {};
 	let beforeTurn: CodexUsage = {};
 	const calls = new Map<string, string>();
@@ -96,22 +97,16 @@ export function parseCodexRollout(
 					: undefined;
 		if ((p?.turn_id ?? currentTurn) === turnId) {
 			if (type === "token_usage_record" && p?.turn_token_usage) {
-				usage = p.turn_token_usage;
-				if (total)
-					beforeTurn = Object.fromEntries(
-						CODEX_TOKEN_FIELDS.map((key) => [
-							key,
-							(total[key] ?? 0) - (usage?.[key] ?? 0),
-						]),
-					);
-			} else if (total) {
-				// token_count mirrors the thread total. Replace, never add, mirrored snapshots.
+				usage = turnUsage = p.turn_token_usage;
+			} else if (total && !turnUsage) {
+				// After compaction, token_count can lag behind explicit turn totals.
 				usage = Object.fromEntries(
 					CODEX_TOKEN_FIELDS.map((key) => [
 						key,
-						Math.max(0, (total[key] ?? 0) - (beforeTurn[key] ?? 0)),
+						(total[key] ?? 0) - (beforeTurn[key] ?? 0),
 					]),
 				);
+				if (Object.values(usage).some((value) => value < 0)) usage = null;
 			} else if (type === "token_usage_record" && p?.usage) {
 				// With no totals, each usage object describes one response in the turn.
 				usage = Object.fromEntries(
