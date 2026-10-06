@@ -45,6 +45,10 @@
 - No AI attribution, generated-by lines or `Co-Authored-By` trailers.
 - Changes reach `main` and `release/*` only through pull requests.
 
+## Working on an Issue
+- Branch as `<prefix>/<issue>-<slug>` (e.g. `feat/42-store-cache`) and put `Closes #<issue>` in the PR body.
+- The "spatz dev board" Status then updates itself (`.github/workflows/board-status.yml`); do not set it by hand.
+
 ## External References
 | Need | File |
 |------|------|

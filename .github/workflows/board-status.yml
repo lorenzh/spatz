@@ -1,0 +1,137 @@
+# Keeps the Status of the "spatz dev board" project (user lorenzh, number 4) in sync.
+# The same file lives in lorenzh/spatz and lorenzh/spatz-testbench.
+#
+#   branch <prefix>/<issue>-<slug> created          -> In progress
+#   PR opened/reopened/ready_for_review             -> In review (draft: In progress)
+#   PR converted to draft                           -> In progress
+#   PR merged                                       -> Done
+#   PR closed unmerged                              -> In progress if a branch for the issue exists, else Ready
+#   issue closed                                    -> Done
+#   issue reopened                                  -> Ready
+#
+# PR events act on the issues the PR closes ("Closes #N" or GitHub's closing references).
+# Branch and PR events skip issues that are already closed, except a merge.
+# Needs the BOARD_TOKEN secret: a fine-grained PAT with Projects read/write on the
+# user account and Issues + Pull requests read on both repos. Without it, the job exits 0.
+name: Board status
+
+on:
+  create:
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+  issues:
+    types: [closed, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: board-status-${{ github.event.issue.number || github.event.pull_request.number || github.event.ref }}
+  cancel-in-progress: false
+
+jobs:
+  status:
+    if: github.event_name != 'create' || github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          BOARD_TOKEN: ${{ secrets.BOARD_TOKEN }}
+        with:
+          script: |
+            const OWNER = 'lorenzh';
+            const NUMBER = 4;
+            const STATUSES = ['Backlog', 'Ready', 'In progress', 'In review', 'Done'];
+            if (!process.env.BOARD_TOKEN) {
+              core.notice('BOARD_TOKEN is not set; board status not updated.');
+              return;
+            }
+            const board = getOctokit(process.env.BOARD_TOKEN).graphql;
+            const { owner, repo } = context.repo;
+            const branchIssue = (name) => name.match(/^[^/]+\/(\d+)-/)?.[1];
+
+            // Returns { id, number, state } or null; issue numbers only, not PRs.
+            async function issue(number) {
+              const r = await board(
+                `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){issueOrPullRequest(number:$n){__typename ... on Issue{id number state}}}}`,
+                { owner, repo, n: Number(number) },
+              );
+              const node = r.repository.issueOrPullRequest;
+              return node?.__typename === 'Issue' ? node : null;
+            }
+
+            async function prIssues(pr) {
+              const r = await board(
+                `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){closingIssuesReferences(first:25){nodes{id number state repository{nameWithOwner}}}}}}`,
+                { owner, repo, n: pr.number },
+              );
+              const found = new Map();
+              for (const i of r.repository.pullRequest.closingIssuesReferences.nodes) {
+                if (i.repository.nameWithOwner === `${owner}/${repo}`) found.set(i.number, i);
+              }
+              const keyword = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b/gi;
+              for (const [, n] of (pr.body ?? '').matchAll(keyword)) {
+                if (!found.has(Number(n))) {
+                  const i = await issue(n);
+                  if (i) found.set(i.number, i);
+                }
+              }
+              return [...found.values()];
+            }
+
+            // Uses the workflow token (contents: read); the PAT does not need Contents access.
+            async function branchExists(number) {
+              const r = await github.graphql(
+                `query($owner:String!,$repo:String!,$q:String!){repository(owner:$owner,name:$repo){refs(refPrefix:"refs/heads/",query:$q,first:100){nodes{name}}}}`,
+                { owner, repo, q: `/${number}-` },
+              );
+              return r.repository.refs.nodes.some((b) => branchIssue(b.name) === String(number));
+            }
+
+            const { user } = await board(
+              `query($login:String!,$n:Int!){user(login:$login){projectV2(number:$n){id field(name:"Status"){... on ProjectV2SingleSelectField{id options{id name}}}}}}`,
+              { login: OWNER, n: NUMBER },
+            );
+            const project = user.projectV2;
+            if (!project?.field?.options) throw new Error(`Project ${OWNER}/${NUMBER} or its Status field not found`);
+
+            async function setStatus(item, status) {
+              const option = project.field.options.find((o) => o.name === status);
+              if (!STATUSES.includes(status) || !option) {
+                core.warning(`Status "${status}" is not a board option; #${item.number} not changed.`);
+                return;
+              }
+              const added = await board(
+                `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}`,
+                { p: project.id, c: item.id },
+              );
+              await board(
+                `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}`,
+                { p: project.id, i: added.addProjectV2ItemById.item.id, f: project.field.id, o: option.id },
+              );
+              core.info(`#${item.number} -> ${status}`);
+            }
+
+            const p = context.payload;
+            if (context.eventName === 'create') {
+              const n = branchIssue(p.ref);
+              const i = n && (await issue(n));
+              if (i?.state === 'OPEN') await setStatus(i, 'In progress');
+              else core.info(`Branch ${p.ref} names no open issue.`);
+            } else if (context.eventName === 'issues') {
+              await setStatus({ id: p.issue.node_id, number: p.issue.number }, p.action === 'closed' ? 'Done' : 'Ready');
+            } else {
+              const pr = p.pull_request;
+              for (const i of await prIssues(pr)) {
+                if (p.action === 'closed' && pr.merged) {
+                  await setStatus(i, 'Done');
+                } else if (i.state !== 'OPEN') {
+                  core.info(`#${i.number} is closed; not changed.`);
+                } else if (p.action === 'closed') {
+                  await setStatus(i, (await branchExists(i.number)) ? 'In progress' : 'Ready');
+                } else {
+                  await setStatus(i, pr.draft || p.action === 'converted_to_draft' ? 'In progress' : 'In review');
+                }
+              }
+            }
