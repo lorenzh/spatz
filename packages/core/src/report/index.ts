@@ -89,6 +89,13 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			`SELECT COUNT(o.suggestion_id) / NULLIF(COUNT(*), 0) AS coverage
 			FROM s LEFT JOIN db.outcomes o ON o.suggestion_id = s.id`,
 		);
+		const fallbacks = await rows<{ reason: string; n: number }>(
+			`SELECT COALESCE(fallback_reason, 'unknown') AS reason, COUNT(*)::INTEGER AS n
+			FROM s WHERE fallback_used = 1 GROUP BY ALL ORDER BY reason`,
+		);
+		const failures = await rows<{ kind: "parse" | "hook"; n: number }>(
+			"SELECT kind, COUNT(*)::INTEGER AS n FROM db.failures GROUP BY ALL",
+		);
 		// Learned picks (strategy learned, no exploration) vs the control group, per cell (task_type, difficulty)
 		// with both groups, weighted by the cell's count of these outcomes. Exploration, jev-choice and rules are no learned pick.
 		const [cmp] = await rows<{
@@ -130,6 +137,12 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				: undefined;
 
 		return {
+			fallbacks: Object.fromEntries(fallbacks.map((f) => [f.reason, f.n])),
+			failures: {
+				parse: failures.find((f) => f.kind === "parse")?.n ?? 0,
+				hook: failures.find((f) => f.kind === "hook")?.n ?? 0,
+				launcher: 0, // Filled by the API from the launcher's marker file.
+			},
 			...(scopes && { by_scope: scopes }),
 			by_type: types
 				.filter((t) => !type || t.task_type === type)

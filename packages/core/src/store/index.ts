@@ -145,7 +145,19 @@ const SCHEMA_V4 = [
 	'mittel+schwer level', 'medium+hard level')`,
 ];
 
-const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
+const SCHEMA_V5 = [
+	"ALTER TABLE suggestions ADD COLUMN fallback_reason TEXT",
+	`CREATE TABLE failures (
+		kind TEXT NOT NULL,
+		event TEXT NOT NULL,
+		observed_at INTEGER NOT NULL,
+		session_id TEXT,
+		turn_id TEXT,
+		UNIQUE (kind, event, session_id, turn_id)
+	)`,
+];
+
+const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /** Opens the db with WAL and busy_timeout 5000 and migrates to SCHEMA_VERSION. */
@@ -203,11 +215,20 @@ export function openStore(
 			? agent
 			: null;
 	const store: Store = {
+		recordFailure(kind, event, at, sessionId, turnId) {
+			db.query("INSERT OR IGNORE INTO failures VALUES (?, ?, ?, ?, ?)").run(
+				kind,
+				event,
+				at,
+				sessionId,
+				turnId,
+			);
+		},
 		insertSuggestion(r) {
 			db.query(
 				`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
 				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
-				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id)`,
+				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason)`,
 			).run({
 				...r,
 				difficulty: normalizeDifficulty(r.difficulty),

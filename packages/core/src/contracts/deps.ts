@@ -91,6 +91,14 @@ export type RandomFn = () => number;
 // ---------- Store (implemented by store module with bun:sqlite) ----------
 
 export interface Store {
+	/** Count once per kind, event, session and turn; count each call when either id is absent. */
+	recordFailure(
+		kind: "parse" | "hook",
+		event: string,
+		at: number,
+		sessionId: string | null,
+		turnId: string | null,
+	): void;
 	insertSuggestion(
 		record: Omit<SuggestionRecord, "difficulty"> & {
 			difficulty: DifficultyInput;

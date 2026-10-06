@@ -333,6 +333,8 @@ export interface SuggestionRecord {
 	explored: boolean;
 	control: boolean;
 	fallback_used: boolean;
+	/** Null without fallback and for rows older than schema v5. */
+	fallback_reason: FallbackReason | null;
 	is_test: boolean;
 	/** Epoch ms of the last linked event; drives the 2 h open window. */
 	last_event_at: number;
@@ -376,6 +378,10 @@ export interface ScopeStats {
 }
 
 export interface StatsReport {
+	/** Global non-test fallback counts; unknown means a legacy row without a reason. */
+	fallbacks: Record<string, number>;
+	/** Global failure counts, independent of suggestion filters. */
+	failures: { parse: number; hook: number; launcher: number };
 	by_scope?: ScopeStats[];
 	by_type: TypeStats[];
 	/** Share of non-test suggestions with an outcome. */

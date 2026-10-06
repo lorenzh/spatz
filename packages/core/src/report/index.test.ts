@@ -7,6 +7,7 @@ import type { Store } from "../contracts/deps.ts";
 import type {
 	Difficulty,
 	Effort,
+	FallbackReason,
 	ReportResult,
 	RoutingScope,
 	StrategyName,
@@ -37,6 +38,8 @@ afterEach(() => {
 });
 
 interface SugOpts {
+	fallback_used?: boolean;
+	fallback_reason?: FallbackReason | null;
 	scope?: RoutingScope;
 	task_type?: TaskType;
 	difficulty?: Difficulty;
@@ -69,7 +72,8 @@ function sug(id: string, o: SugOpts = {}) {
 		reason: "r",
 		explored: o.explored ?? false,
 		control: o.control ?? false,
-		fallback_used: false,
+		fallback_used: o.fallback_used ?? false,
+		fallback_reason: o.fallback_reason ?? null,
 		is_test: o.is_test ?? false,
 		last_event_at: 1,
 		closed_at: null,
@@ -174,6 +178,8 @@ test("empty db: no types, coverage 0, no comparison", async () => {
 		coverage: 0,
 		learned_success: null,
 		control_success: null,
+		fallbacks: {},
+		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
 });
 
@@ -313,6 +319,8 @@ test("only dry-run suggestions: counts nothing", async () => {
 		coverage: 0,
 		learned_success: null,
 		control_success: null,
+		fallbacks: {},
+		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
 });
 
@@ -403,6 +411,8 @@ test("learned vs control cells are (task_type, difficulty), not difficulty alone
 	expect(await stats()).toMatchObject({
 		learned_success: null,
 		control_success: null,
+		fallbacks: {},
+		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
 	// shared cell code.feature/hard: learned fails, control passes
 	sug("y1", { task_type: "code.feature", difficulty: "hard" });
@@ -505,4 +515,20 @@ test("scope stats count outcomes once and include cache tokens, unscoped and usa
 		onSql: noInstall,
 	});
 	expect(filtered.by_scope).toEqual(r.by_scope?.slice(0, 1));
+});
+
+test("stats groups non-test fallback reasons and global failure counts", async () => {
+	sug("timeout", { fallback_used: true, fallback_reason: "timeout" });
+	sug("legacy", { fallback_used: true, fallback_reason: null });
+	sug("dry", { fallback_used: true, fallback_reason: "secret", is_test: true });
+	sug("ok", { fallback_used: false, fallback_reason: null });
+	store.recordFailure("parse", "Stop", 1, "session", "turn");
+	store.recordFailure("parse", "Stop", 2, "session", "turn");
+	store.recordFailure("hook", "Stop", 3, null, null);
+	const r = await stats();
+	expect(r.fallbacks).toEqual({ timeout: 1, unknown: 1 });
+	expect(r.failures).toEqual({ parse: 1, hook: 1, launcher: 0 });
+	const filtered = await stats("other");
+	expect(filtered.fallbacks).toEqual(r.fallbacks);
+	expect(filtered.failures).toEqual(r.failures);
 });

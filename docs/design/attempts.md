@@ -9,7 +9,7 @@ keywords: [attempt, identity, retry, escalation, outcome, migration, prompt, tur
 
 Design only for [#34](https://github.com/lorenzh/spatz/issues/34) and [#35](https://github.com/lorenzh/spatz/issues/35). [#41](https://github.com/lorenzh/spatz/issues/41) consumes the cost data.
 
-Schema v4 combines all signals for a suggestion in its [outcomes view](../../packages/core/src/store/index.ts). This design gives each execution its own outcome. Current behavior remains documented in [How spatz works](../how-it-works.md) and [Hooks](../hooks.md).
+Schema v4 (and v5, which only added `fallback_reason` and the `failures` table) combines all signals for a suggestion in its [outcomes view](../../packages/core/src/store/index.ts). This design gives each execution its own outcome. Current behavior remains documented in [How spatz works](../how-it-works.md) and [Hooks](../hooks.md).
 
 ## Attempts and reports
 
@@ -180,7 +180,9 @@ The store evaluates chain completion after a report or finalized Stop/SubagentSt
 
 Chain statistics use the root suggestion's `task_type × difficulty`, learned/control flags and first actual pair. Each execution keeps its own tokens. Decision cost sums the chain once under the root pair. Costs `10 → 20 → 70` produce root cost `100`, not repeated charges on each outcome. Failed completed chains also contribute cost. Orchestration usage (null attempt, suggestion totals) counts in the chain's decision cost and is also reported separately as orchestration overhead, like review cost. Divide by successful chains. Zero successes gives null. Incomplete Codex pair costs still belong to chain tokens through the suggestion total; mark only per-attempt execution cost and its dollar slice incomplete, so #41 cost per success is not biased low. #41 owns dollar conversion and confidence intervals.
 
-## Migration from v4
+## Migration from v5
+
+The outcomes view is unchanged since v4; v5 only added `suggestions.fallback_reason` and the `failures` table. The attempt migration is therefore v5 → v6.
 
 Close and mark all existing suggestions as legacy in one migration. Keep signals, usages, rowids and usage watermarks unchanged. Recheck `user_version` inside the existing `IMMEDIATE` transaction. Each migration array entry is one SQL statement.
 
