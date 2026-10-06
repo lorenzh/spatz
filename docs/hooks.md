@@ -269,6 +269,15 @@ The latest test and build results for that turn replace earlier results when Sto
 These signals use source `Stop` and the turn ID. Replayed events do not add duplicate signals.
 Codex has no `SubagentStop` or `PostToolUseFailure` hook.
 
+Codex usage comes from the last `token_usage_record` for the turn.
+If turn totals are absent, spatz uses the change in thread totals or sums per-response `usage` records.
+Older rollouts use `event_msg` records with type `token_count`.
+For these records, spatz takes the change in `info.total_token_usage` for the turn.
+Input, cache-read and cache-write counters stay separate. `output_tokens` already includes `reasoning_output_tokens`, so spatz counts reasoning once.
+A rollout without usage does not replace an existing usage row.
+Codex rows recorded before the fix for [#60](https://github.com/lorenzh/spatz/issues/60) undercount tokens.
+The fix does not change those historical rows.
+
 ### Hook diagnostics
 
 Set `SPATZ_DEBUG=1` in the environment that starts Codex or Claude Code.

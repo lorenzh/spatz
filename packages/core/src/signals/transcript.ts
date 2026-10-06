@@ -14,9 +14,26 @@ export interface ModelUsage {
 export interface CodexRollout {
 	model: string;
 	effort: string | null;
-	usage: TranscriptUsage;
+	usage: TranscriptUsage | null;
 	calls: { command: string; exit_code: number }[];
 }
+
+type CodexUsage = {
+	input_tokens?: number;
+	cached_input_tokens?: number;
+	cache_write_input_tokens?: number;
+	/** Includes reasoning_output_tokens; do not add them again. */
+	output_tokens?: number;
+	reasoning_output_tokens?: number;
+	total_tokens?: number;
+};
+
+const CODEX_TOKEN_FIELDS = [
+	"input_tokens",
+	"cached_input_tokens",
+	"cache_write_input_tokens",
+	"output_tokens",
+] as const;
 
 type RolloutRecord = {
 	type?: string;
@@ -25,18 +42,10 @@ type RolloutRecord = {
 		turn_id?: string;
 		model?: string;
 		effort?: string;
-		turn_token_usage?: {
-			input_tokens?: number;
-			cached_input_tokens?: number;
-			cache_write_input_tokens?: number;
-			output_tokens?: number;
-		};
-		usage?: {
-			input_tokens?: number;
-			cached_input_tokens?: number;
-			cache_write_input_tokens?: number;
-			output_tokens?: number;
-		};
+		turn_token_usage?: CodexUsage;
+		thread_token_usage?: CodexUsage;
+		usage?: CodexUsage;
+		info?: { total_token_usage?: CodexUsage };
 		call_id?: string;
 		input?: string;
 		output?: { text?: string }[];
@@ -66,18 +75,54 @@ export function parseCodexRollout(
 		(r) => r.type === "turn_context" && r.payload?.turn_id === turnId,
 	)?.payload;
 	if (!turn || typeof turn.model !== "string") return null;
-	const usageRow = rows
-		.filter(
-			(r) => r.type === "token_usage_record" && r.payload?.turn_id === turnId,
-		)
-		.at(-1)?.payload;
-	const usage = usageRow?.turn_token_usage ?? {};
+	let usage: CodexUsage | null = null;
+	let threadUsage: CodexUsage = {};
+	let beforeTurn: CodexUsage = {};
 	const calls = new Map<string, string>();
 	const exits = new Map<string, number>();
 	const completed = new Map<string, CodexRollout["calls"][number]>();
 	let currentTurn: string | undefined;
 	for (const { type, payload: p } of rows) {
-		if (type === "turn_context") currentTurn = p?.turn_id;
+		if (type === "turn_context") {
+			if (p?.turn_id === turnId && currentTurn !== turnId)
+				beforeTurn = threadUsage;
+			currentTurn = p?.turn_id;
+		}
+		const total =
+			type === "token_usage_record"
+				? p?.thread_token_usage
+				: type === "event_msg" && p?.type === "token_count"
+					? p.info?.total_token_usage
+					: undefined;
+		if ((p?.turn_id ?? currentTurn) === turnId) {
+			if (type === "token_usage_record" && p?.turn_token_usage) {
+				usage = p.turn_token_usage;
+				if (total)
+					beforeTurn = Object.fromEntries(
+						CODEX_TOKEN_FIELDS.map((key) => [
+							key,
+							(total[key] ?? 0) - (usage?.[key] ?? 0),
+						]),
+					);
+			} else if (total) {
+				// token_count mirrors the thread total. Replace, never add, mirrored snapshots.
+				usage = Object.fromEntries(
+					CODEX_TOKEN_FIELDS.map((key) => [
+						key,
+						Math.max(0, (total[key] ?? 0) - (beforeTurn[key] ?? 0)),
+					]),
+				);
+			} else if (type === "token_usage_record" && p?.usage) {
+				// With no totals, each usage object describes one response in the turn.
+				usage = Object.fromEntries(
+					CODEX_TOKEN_FIELDS.map((key) => [
+						key,
+						(usage?.[key] ?? 0) + (p.usage?.[key] ?? 0),
+					]),
+				);
+			}
+		}
+		if (total) threadUsage = total;
 		if (!p || (p.turn_id ?? currentTurn) !== turnId) continue;
 		if (type === "event_msg" && p.type === "item_completed") {
 			const item = p.item;
@@ -131,12 +176,14 @@ export function parseCodexRollout(
 	return {
 		model: turn.model,
 		effort: typeof turn.effort === "string" ? turn.effort : null,
-		usage: {
-			input_tokens: usage.input_tokens ?? 0,
-			cache_read_input_tokens: usage.cached_input_tokens ?? 0,
-			cache_creation_input_tokens: usage.cache_write_input_tokens ?? 0,
-			output_tokens: usage.output_tokens ?? 0,
-		},
+		usage: usage
+			? {
+					input_tokens: usage.input_tokens ?? 0,
+					cache_read_input_tokens: usage.cached_input_tokens ?? 0,
+					cache_creation_input_tokens: usage.cache_write_input_tokens ?? 0,
+					output_tokens: usage.output_tokens ?? 0,
+				}
+			: null,
 		// CommandExecution is authoritative when available; do not count its legacy mirror twice.
 		calls: completed.size
 			? [...completed.values()]
