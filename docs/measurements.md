@@ -68,7 +68,7 @@ On the eight tasks labeled easy (not the full 24-task easy dataset), the three l
 | sonnet-5-5/medium | 40 | 100% | $0.036 | $0.036 |
 | opus-5-5/medium | 38 | 100% | $0.074 | $0.072 |
 
-On easy-difficulty tasks, sonnet at low or medium effort achieves the same pass rate as opus at half the cost. At whole-dataset level, sonnet/low is 93.3% ($0.052/pass) versus opus/low at 96.7% ($0.095/pass).
+On the eight easy-difficulty tasks, Sonnet at low and medium effort passed 40 of 40 runs, as did Opus at medium (38 of 38), at about half the cost per pass ($0.035 and $0.036 vs $0.074). This is an observed result on a small sample, not proof of equal quality. At whole-dataset level, sonnet/low is 93.3% ($0.052/pass) versus opus/low at 96.7% ($0.095/pass).
 
 ### Bench2 pass stability
 
@@ -101,7 +101,7 @@ A separate simulator evaluated 35 strategy variants on four synthetic worlds, wi
 
 Results rank by normalized regret (regret divided by current policy's regret; lower is better):
 
-- Thompson threshold + escalate: normalized regret −0.03 ± 0.01 at T=5,000 (top ranked, meaning 3% better than current)
+- Thompson threshold + escalate: normalized regret −0.03 ± 0.01 at T=5,000 (top ranked; the current policy scores 1.00 and lower is better, so −0.03 means its regret is below zero relative to the current policy, about 103% lower on this scale, not a success-rate gain)
 - Control traffic shows small effects in this experiment (control 0% regret 0.98 vs current 1.00)
 - Exploration rates and pooling choices show small effects
 - Decay and UCB variants rank lower
