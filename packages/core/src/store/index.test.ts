@@ -156,7 +156,12 @@ describe("schema", () => {
 			);
 			for (const [i, table] of tables.entries())
 				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
-					before[i] as object[],
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
 				);
 			const row = migrated
 				.query<{ probabilities: string; reason: string }, []>(
@@ -264,7 +269,12 @@ describe("schema", () => {
 			});
 			for (const [i, table] of tables.entries()) {
 				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
-					before[i] as object[],
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
 				);
 			}
 			expect(
@@ -415,6 +425,7 @@ describe("suggestions", () => {
 		});
 		store.insertSuggestion(record);
 		expect(store.getSuggestion("abc")).toEqual({
+			is_legacy: 0,
 			...record,
 			price_snapshot: {},
 			price_date: null,
@@ -445,14 +456,25 @@ function signal(
 ) {
 	const weight = { report: 1.0, test: 1.0, build: 0.8 }[kind];
 	const source = kind === "report" ? "report" : "PostToolUse";
-	store.insertSignal({
-		suggestion_id,
-		kind,
-		value,
-		weight,
-		source,
-		observed_at,
-	});
+	const suggestion = store.getSuggestion(suggestion_id);
+	const attempt = store.outcome(suggestion_id)?.attempt_id;
+	if (!suggestion || !attempt) throw new Error("missing signal attempt");
+	store.recordAttemptEvents([
+		{
+			harness: suggestion.agent === "codex" ? "codex" : "claude-code",
+			session_key: suggestion.session_id ?? `suggestion:${suggestion_id}`,
+			agent_key: suggestion.agent_id ?? "",
+			event_id: `signal:${source}:${observed_at}:${kind}`,
+			revision: observed_at,
+			attempt_id: attempt,
+			kind,
+			value,
+			weight,
+			source,
+			occurred_at: observed_at,
+			received_at: observed_at,
+		},
+	]);
 }
 
 function usage(over: Partial<UsageRecord> = {}): UsageRecord {
@@ -517,17 +539,17 @@ describe("outcomes", () => {
 		expect(store.outcome("s1")?.quality).toBe(0);
 	});
 
-	test("no signal -> no outcome row", () => {
+	test("no signal leaves implicit attempt quality null", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		store.upsertUsage(usage());
-		expect(store.outcome("s1")).toBeNull();
+		expect(store.outcome("s1")?.quality).toBeNull();
 		expect(store.outcome("missing")).toBeNull();
 	});
 });
 
 describe("used pair", () => {
-	test("a report usage wins", () => {
+	test("a changed report pair opens an unscored attempt", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		signal(store, "test", 1, 10);
@@ -543,15 +565,15 @@ describe("used pair", () => {
 				note: "ok",
 			}),
 		);
-		expect(store.outcome("s1")).toEqual({
+		expect(store.outcome("s1")).toMatchObject({
 			suggestion_id: "s1",
-			quality: 1,
+			quality: null,
 			model: "openai/gpt-6-sol",
 			effort: "medium",
 		});
 	});
 
-	test("otherwise the model with most summed output tokens and its latest non-null effort", () => {
+	test("changed execution pairs remain separate with their own tokens", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		signal(store, "test", 1, 10);
@@ -586,9 +608,9 @@ describe("used pair", () => {
 				reported_at: 3,
 			}),
 		);
-		expect(store.outcome("s1")).toEqual({
+		expect(store.outcome("s1")).toMatchObject({
 			suggestion_id: "s1",
-			quality: 1,
+			quality: null,
 			model: "anthropic/claude-sonnet-5.5",
 			effort: "medium",
 		});
@@ -598,7 +620,7 @@ describe("used pair", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		signal(store, "test", 1, 10);
-		expect(store.outcome("s1")).toEqual({
+		expect(store.outcome("s1")).toMatchObject({
 			suggestion_id: "s1",
 			quality: 1,
 			model: null,
@@ -614,7 +636,7 @@ describe("used pair", () => {
 		// Second Stop for the same prompt: same key, updated totals.
 		store.upsertUsage(usage({ output_tokens: 100 }));
 		store.upsertUsage(usage({ output_tokens: 120 }));
-		expect(store.outcome("s1")?.model).toBe("openai/gpt-6-sol");
+		expect(store.outcome("s1")?.model).toBe("anthropic/claude-opus-5.5");
 		store.upsertUsage(usage({ output_tokens: 200 }));
 		expect(store.outcome("s1")?.model).toBe("anthropic/claude-opus-5.5");
 	});
@@ -741,7 +763,6 @@ describe("session link and open window", () => {
 		// The async hook of the newer call arrives first.
 		store.linkSession("newer", "sess", "p1", 300);
 		store.linkSession("older", "sess", "p1", 310);
-		expect(store.findOpenSuggestion("sess", 400, H2)).toBe("newer");
 		expect(store.getSuggestion("newer")?.closed_at).toBeNull();
 		// The older one ends where the newer one starts.
 		expect(store.getSuggestion("older")?.closed_at).toBe(200);
@@ -749,42 +770,14 @@ describe("session link and open window", () => {
 		// Duplicate links change nothing and never reopen.
 		store.linkSession("newer", "sess", "p1", 320);
 		store.linkSession("older", "sess", "p1", 330);
-		expect(store.findOpenSuggestion("sess", 400, H2)).toBe("newer");
 		expect(store.getSuggestion("older")?.closed_at).toBe(200);
 		store.closeSuggestion("newer", 340);
 		store.linkSession("newer", "sess", "p1", 350);
 		expect(store.getSuggestion("newer")?.closed_at).toBe(340);
 		// A delayed link never moves last_event_at backwards.
-		store.touch("newer", 500);
+		store.linkSession("newer", "sess", "p1", 1500);
 		store.linkSession("newer", "sess", "p1", 360);
-		expect(store.getSuggestion("newer")?.last_event_at).toBe(500);
-	});
-
-	test("findOpenSuggestion returns the latest open suggestion within the window", () => {
-		const store = open();
-		store.insertSuggestion(suggestion({ id: "a", created_at: 1 }));
-		store.insertSuggestion(suggestion({ id: "b", created_at: 2 }));
-		store.linkSession("a", "sess", null, 1000);
-		store.linkSession("b", "sess", null, 1000);
-		expect(store.findOpenSuggestion("sess", 1000 + H2, H2)).toBe("b");
-		expect(store.findOpenSuggestion("sess", 1000 + H2 + 1, H2)).toBeNull();
-		expect(store.findOpenSuggestion("nope", 1000, H2)).toBeNull();
-	});
-
-	test("findOpenSuggestion prefers the newest created_at, then the later rowid", () => {
-		const store = open();
-		const add = (id: string, created_at: number) =>
-			store.insertSuggestion(
-				suggestion({ id, created_at, session_id: "sess", last_event_at: 1000 }),
-			);
-		// Several open suggestions in one session, inserted out of created_at order.
-		add("mid", 2);
-		add("newest", 3);
-		add("oldest", 1);
-		expect(store.findOpenSuggestion("sess", 1000, H2)).toBe("newest");
-		// Same created_at as "newest": the later insert (higher rowid) wins.
-		add("tie", 3);
-		expect(store.findOpenSuggestion("sess", 1000, H2)).toBe("tie");
+		expect(store.getSuggestion("newer")?.last_event_at).toBe(1500);
 	});
 
 	test("sessionWindows ends at idle expiry even when the next recommendation closes it later", () => {
@@ -810,103 +803,13 @@ describe("session link and open window", () => {
 		]);
 	});
 
-	test("linkSession returns the shrunk windows; usageScopes and rewriteScope work per session scope", () => {
+	test("linkSession returns the shrunk windows", () => {
 		const store = open();
 		store.insertSuggestion(suggestion({ id: "a", created_at: 1 }));
 		store.insertSuggestion(suggestion({ id: "b", created_at: 2 }));
-		store.insertSuggestion(suggestion({ id: "x", created_at: 3 }));
 		expect(store.linkSession("a", "sess", "p1", 10)).toEqual([]);
-		store.linkSession("x", "other", "p1", 10);
-		store.upsertUsage(usage({ suggestion_id: "a" }));
-		store.upsertUsage(usage({ suggestion_id: "x" }));
-		store.upsertUsage(
-			usage({ suggestion_id: "a", source: "subagent", scope_key: "a1" }),
-		);
-		store.upsertUsage(
-			usage({ suggestion_id: "a", source: "agent_tool", scope_key: "a1" }),
-		);
 		expect(store.linkSession("b", "sess", "p1", 10)).toEqual(["a"]);
 		expect(store.linkSession("b", "sess", "p1", 11)).toEqual([]);
-		expect(store.usageScopes(["a"])).toEqual([
-			{ source: "subagent", scope_key: "a1", effort: "high" },
-			{ source: "transcript", scope_key: "p1", effort: "high" },
-		]);
-		const scope = {
-			session_id: "sess",
-			source: "transcript",
-			scope_key: "p1",
-			message_count: 2,
-			from: 1,
-			last_at: 5,
-			openWindowMs: H2,
-		} as const;
-		let seen: unknown;
-		expect(
-			store.rewriteScope(scope, (windows) => {
-				seen = windows;
-				return [];
-			}),
-		).toBe(true);
-		expect(seen).toEqual([
-			{ id: "a", start: 1, end: 2 },
-			{ id: "b", start: 2, end: 1000 + H2 + 1 },
-		]);
-		// An older snapshot (fewer messages or an earlier last message) is skipped.
-		const never = () => {
-			throw new Error("not called");
-		};
-		expect(store.rewriteScope({ ...scope, message_count: 1 }, never)).toBe(
-			false,
-		);
-		expect(store.rewriteScope({ ...scope, last_at: 4 }, never)).toBe(false);
-		expect(store.usageScopes(["a", "x"])).toEqual([
-			{ source: "subagent", scope_key: "a1", effort: "high" },
-			{ source: "transcript", scope_key: "p1", effort: "high" },
-		]);
-		expect(store.usageScopes(["a"])).toHaveLength(1);
-		expect(store.usageScopes([])).toEqual([]);
-	});
-
-	test("rewriteScope watermark: the last message timestamp decides, then the message count", () => {
-		const store = open();
-		const scope = {
-			session_id: "sess",
-			source: "transcript",
-			scope_key: "p1",
-			message_count: 3,
-			from: 1,
-			last_at: 5,
-			openWindowMs: H2,
-		} as const;
-		const none = () => [];
-		const never = () => {
-			throw new Error("not called");
-		};
-		expect(store.rewriteScope(scope, none)).toBe(true);
-		// An equal snapshot rewrites (link reconciliation depends on it).
-		expect(store.rewriteScope(scope, none)).toBe(true);
-		expect(store.rewriteScope({ ...scope, last_at: 4 }, never)).toBe(false);
-		expect(store.rewriteScope({ ...scope, message_count: 2 }, never)).toBe(
-			false,
-		);
-		// A compacted transcript: fewer messages, but a newer last message.
-		expect(
-			store.rewriteScope({ ...scope, message_count: 1, last_at: 6 }, none),
-		).toBe(true);
-		// Its watermark now wins over the longer, older snapshot.
-		expect(store.rewriteScope(scope, never)).toBe(false);
-	});
-
-	test("touch extends the window; closeSuggestion ends it", () => {
-		const store = open();
-		store.insertSuggestion(suggestion());
-		store.linkSession("s1", "sess", "p1", 1000);
-		store.touch("s1", 5000);
-		expect(store.getSuggestion("s1")?.last_event_at).toBe(5000);
-		expect(store.findOpenSuggestion("sess", 1000 + H2 + 1, H2)).toBe("s1");
-		store.closeSuggestion("s1", 6000);
-		expect(store.getSuggestion("s1")?.closed_at).toBe(6000);
-		expect(store.findOpenSuggestion("sess", 6000, H2)).toBeNull();
 	});
 });
 
@@ -935,8 +838,6 @@ test("agent windows are independent and late links only close their own scope", 
 	expect(store.getSuggestion("main")?.closed_at).toBe(40);
 	expect(store.getSuggestion("a1")?.closed_at).toBe(30);
 	expect(store.getSuggestion("b1")?.closed_at).toBeNull();
-	expect(store.findOpenSuggestion("sess", 50, 100)).toBe("main2");
-	expect(store.findOpenSuggestion("sess", 50, 100, "a")).toBe("a2");
 	expect(store.sessionWindows("sess", 0, 50, 100, "a")).toEqual([
 		{ id: "a1", start: 20, end: 30 },
 		{ id: "a2", start: 30, end: 151 },
@@ -984,17 +885,6 @@ test("none-only models normalize missing usage effort and pool legacy null rows"
 		},
 	]);
 });
-test("usage scopes select the highest ranked effort, not lexical maximum", () => {
-	const store = open();
-	for (const [i, effort] of (
-		["none", "medium", "high", "max", "xhigh", "ultra"] as const
-	).entries()) {
-		store.upsertUsage(usage({ model: `m/${i}`, effort }));
-		expect(store.usageScopes(["s1"])[0]?.effort).toBe(i === 4 ? "max" : effort);
-	}
-	expect(store.usageScopes([])).toEqual([]);
-});
-
 describe("v5 diagnostics", () => {
 	test("migrates a populated v4 fixture without losing rows or outcomes", async () => {
 		const path = join(mkdtempSync(join(tmpdir(), "spatz-v4-")), "v4.db");
@@ -1018,7 +908,14 @@ describe("v5 diagnostics", () => {
 			for (const [i, table] of tables.entries()) {
 				const rows = migrated.query(`SELECT * FROM ${table}`).all();
 				expect(rows).toHaveLength(before[i]?.length ?? 0);
-				expect(rows).toMatchObject(before[i] as object[]);
+				expect(rows).toMatchObject(
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
+				);
 			}
 			expect(
 				migrated.query("SELECT fallback_reason FROM suggestions").all(),
@@ -1105,7 +1002,14 @@ describe("normalized usage and cost", () => {
 			for (const [i, table] of tables.entries())
 				expect(
 					migrated.query(`SELECT rowid, * FROM ${table}`).all(),
-				).toMatchObject(before[i] as object[]);
+				).toMatchObject(
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
+				);
 			expect(migrated.query("SELECT * FROM outcomes").all()).toEqual(outcomes);
 			expect(
 				migrated
@@ -1252,7 +1156,14 @@ test("Claude measured dollars and equivalent Codex normalized tokens agree", () 
 		["codex", codex],
 	] as const) {
 		const [tokens] = sumByModel([
-			{ model: fixture.model, at: 1, usage: raw ?? {} },
+			{
+				id: "message",
+				source_seq: 0,
+				calls: [],
+				model: fixture.model,
+				at: 1,
+				usage: raw ?? {},
+			},
 		]);
 		store.upsertUsage(
 			usage({ ...tokens, model: fixture.model, scope_key: source }),
@@ -1290,6 +1201,7 @@ test("dispatch upsert only fills missing fields and isolates sessions", () => {
 		expect(
 			db.query("SELECT * FROM dispatches WHERE session_id = 's'").get(),
 		).toEqual({
+			attempt_id: null,
 			...first,
 			answered_model: "sonnet",
 			tool_use_id: "call",

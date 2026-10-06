@@ -176,7 +176,7 @@ test.each([250, 50])(
 				rows.map((r) => JSON.stringify(r)).join("\n"),
 				"current",
 			)?.usage,
-		).toEqual({
+		).toMatchObject({
 			input_tokens: null,
 			cache_read_input_tokens: null,
 			cache_creation_input_tokens: null,
@@ -273,7 +273,7 @@ test.each([false, true])(
 				rows.map((r) => JSON.stringify(r)).join("\n"),
 				"current",
 			)?.usage,
-		).toEqual({
+		).toMatchObject({
 			input_tokens: 120,
 			cache_read_input_tokens: 50,
 			cache_creation_input_tokens: 30,
@@ -289,7 +289,7 @@ test.each([false, true])(
 						.join("\n"),
 					"current",
 				)?.usage,
-			).toEqual({
+			).toMatchObject({
 				input_tokens: 120,
 				cache_read_input_tokens: 50,
 				cache_creation_input_tokens: 30,
@@ -357,7 +357,7 @@ test.each(["token_usage_record", "event_msg"])(
 						.map((r) => JSON.stringify(r))
 						.join("\n");
 		const codex = parseCodexRollout(jsonl, "current")?.usage;
-		expect(codex).toEqual({
+		expect(codex).toMatchObject({
 			input_tokens: claude?.input_tokens,
 			cache_read_input_tokens: claude?.cache_read_tokens,
 			cache_creation_input_tokens: claude?.cache_creation_tokens,
@@ -437,7 +437,7 @@ test("Codex response-only aggregates preserve missing counters", () => {
 	]
 		.map((r) => JSON.stringify(r))
 		.join("\n");
-	expect(parseCodexRollout(jsonl, "current")?.usage).toEqual({
+	expect(parseCodexRollout(jsonl, "current")?.usage).toMatchObject({
 		input_tokens: 100,
 		cache_read_input_tokens: 50,
 		cache_creation_input_tokens: 20,
@@ -480,7 +480,7 @@ test("Codex cumulative deltas preserve counters absent from either snapshot", ()
 	]
 		.map((r) => JSON.stringify(r))
 		.join("\n");
-	expect(parseCodexRollout(jsonl, "current")?.usage).toEqual({
+	expect(parseCodexRollout(jsonl, "current")?.usage).toMatchObject({
 		input_tokens: null,
 		cache_read_input_tokens: 10,
 		cache_creation_input_tokens: null,
@@ -498,13 +498,15 @@ test.each(["cached_input_tokens", "cache_write_input_tokens"])(
 			output_tokens: 10,
 		};
 		delete usage[field];
-		expect(parseCodexRollout(codexTurn(usage), "current")?.usage).toEqual({
-			input_tokens: null,
-			cache_read_input_tokens: field === "cached_input_tokens" ? null : 40,
-			cache_creation_input_tokens:
-				field === "cache_write_input_tokens" ? null : 20,
-			output_tokens: 10,
-		});
+		expect(parseCodexRollout(codexTurn(usage), "current")?.usage).toMatchObject(
+			{
+				input_tokens: null,
+				cache_read_input_tokens: field === "cached_input_tokens" ? null : 40,
+				cache_creation_input_tokens:
+					field === "cache_write_input_tokens" ? null : 20,
+				output_tokens: 10,
+			},
+		);
 	},
 );
 
@@ -526,7 +528,7 @@ test.each([-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
 				},
 			}),
 		);
-		expect(claude[0]).toEqual({
+		expect(claude[0]).toMatchObject({
 			model: "claude-sonnet-5-5",
 			input_tokens: null,
 			output_tokens: 0,
@@ -543,7 +545,7 @@ test.each([-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
 				}),
 				"current",
 			)?.usage,
-		).toEqual({
+		).toMatchObject({
 			input_tokens: null,
 			cache_read_input_tokens: 0,
 			cache_creation_input_tokens: 0,
@@ -563,7 +565,7 @@ test("Codex rejects overlapping cache counts that exceed total input", () => {
 			}),
 			"current",
 		)?.usage,
-	).toEqual({
+	).toMatchObject({
 		input_tokens: null,
 		cache_read_input_tokens: 8,
 		cache_creation_input_tokens: 8,

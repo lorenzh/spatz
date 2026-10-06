@@ -1,12 +1,14 @@
 import type { EngineInterface, On, PluginOptions } from "claude-code";
 import {
 	aliasFor,
+	attemptCommand,
 	type Decision,
 	type Link,
 	linkAgent,
 	type Run,
 	recordUsage,
 	type Scope,
+	type StepUsage,
 	stronger,
 	suggest,
 	type Tokens,
@@ -90,17 +92,19 @@ export function register(on: On, options: PluginOptions = {}) {
 		string,
 		Pick<Link, "requested" | "requestedAgent">
 	>();
-	/** The decision each turn or agent run actually used, for usage recording. */
-	const used = new Map<string, Decision>();
-	const totals = new Map<string, Tokens>();
+	type Segment = Omit<StepUsage, "attempt"> & {
+		attempt: Promise<string | undefined>;
+		turn: string;
+		model: string;
+		suggestionId: string;
+	};
+	const active = new Map<string, Segment>();
 	const failures = new Map<string, number>();
 	let lastTurn: Decision | undefined;
 	let sessionDecision: Decision | undefined;
 	let sessionTried = false;
 	let currentTurn: string | undefined;
 	let last: Decision | undefined;
-	let hooksPlugin: Promise<boolean> | undefined;
-	let noticed = false;
 	let logged = false;
 	const logFailure = (io: Io, error: unknown) => {
 		if (logged) return;
@@ -170,37 +174,6 @@ export function register(on: On, options: PluginOptions = {}) {
 		return s.scope === "subagent" ? undefined : turns.get(e.turnId);
 	}
 
-	async function recording(io: Io, agentId?: string): Promise<boolean> {
-		// #86: only the mod has complete subagent output counters.
-		if (agentId) return s.record !== "off";
-		if (s.record !== "auto") return s.record === "on";
-		hooksPlugin ??= io
-			.run(["claude", "plugin", "list", "--json"], {
-				timeoutMs: 3000,
-			})
-			.then(({ exitCode, stdout }) =>
-				exitCode === 0
-					? (JSON.parse(stdout) as { id?: string; enabled?: boolean }[]).some(
-							(p) =>
-								p.enabled &&
-								(p.id?.startsWith("spatz@") ||
-									p.id?.startsWith("spatz-hooks@")),
-						)
-					: false,
-			)
-			.catch(() => false);
-		if (!(await hooksPlugin)) return true;
-		if (!noticed) {
-			noticed = true;
-			try {
-				io.toast(
-					"spatz: hooks record main usage; the mod records subagent usage",
-				);
-			} catch {}
-		}
-		return false;
-	}
-
 	const tokens = (u: {
 		input_tokens: number;
 		output_tokens: number;
@@ -229,10 +202,7 @@ export function register(on: On, options: PluginOptions = {}) {
 		const io = bind($, s.spatz);
 		const args = e.args.trim();
 		if (args === "" || args === "status") {
-			const record =
-				s.record === "auto"
-					? `auto (${(await recording(io)) ? "on" : "main off, subagents on; spatz is enabled"})`
-					: s.record;
+			const record = s.record === "auto" ? "auto (on)" : s.record;
 			return {
 				text: `spatz\nmode: ${s.mode}\nscope: ${s.scope}\nmain: ${s.main ? "on" : "off"}\nrecord: ${record}\nlast: ${describeDecision(last)}`,
 			};
@@ -323,29 +293,80 @@ export function register(on: On, options: PluginOptions = {}) {
 		} catch (error) {
 			logFailure(io, error);
 		}
-		if (d) used.set(e.turnId, d);
-		const result = yield* next(
+		const sent =
 			d && applies(e.agentId)
 				? {
 						...e,
 						model: d.model,
 						...(d.effort !== "none" && { effort: d.effort }),
 					}
-				: e,
-		);
+				: e;
+		let identity: Segment | undefined;
+		const agentKey = e.agentId ?? "";
+		if (!d || s.record === "off") active.delete(agentKey);
 		try {
-			if (d && result.usage && (await recording(io, e.agentId))) {
-				const t =
-					d.scope === "step"
-						? tokens(result.usage)
-						: sum(totals, e.turnId, tokens(result.usage));
+			if (d && s.record !== "off") {
+				const session = await io.sessionId();
+				const key = `${e.turnId}:${e.index}`;
+				const effort =
+					d && applies(e.agentId) && d.effort === "none" ? "none" : sent.effort;
+				if (session) {
+					const previous = active.get(agentKey);
+					const samePair =
+						previous?.suggestionId === d.suggestionId &&
+						previous.model === sent.model &&
+						previous.effort === effort;
+					if (!samePair) active.delete(agentKey);
+					const attempt = samePair
+						? previous.attempt
+						: attemptCommand(
+								io.run,
+								[
+									"start",
+									d.suggestionId,
+									"--key",
+									key,
+									"--model",
+									sent.model,
+									...(effort ? ["--effort", effort] : []),
+									"--session",
+									session,
+									"--turn",
+									e.turnId,
+									...(e.agentId ? ["--agent-id", e.agentId] : []),
+									"--owns-usage",
+									"--json",
+								],
+								s.spatz,
+							);
+					identity = {
+						attempt,
+						key,
+						session,
+						agentId: e.agentId,
+						effort,
+						turn: e.turnId,
+						model: sent.model,
+						suggestionId: d.suggestionId,
+					};
+					active.set(agentKey, identity);
+				}
+			}
+		} catch {}
+		const result = yield* next(sent);
+		try {
+			const attempt = await identity?.attempt;
+			if (identity && !attempt && active.get(agentKey) === identity)
+				active.delete(agentKey);
+			if (d && result.usage && identity && attempt) {
 				await recordUsage(
 					io.run,
 					d.suggestionId,
 					result.usage.model,
 					e.turnId,
-					t,
+					tokens(result.usage),
 					s.spatz,
+					{ ...identity, attempt },
 				);
 			}
 		} catch {}
@@ -355,25 +376,20 @@ export function register(on: On, options: PluginOptions = {}) {
 	on("turn.complete", async ($, e, next) => {
 		const io = bind($, s.spatz);
 		const result = await next(e);
-		const d = used.get(e.turnId);
-		try {
-			if (
-				d &&
-				d.scope !== "step" &&
-				e.usage &&
-				(await recording(io, e.agentId))
-			)
-				await recordUsage(
-					io.run,
-					d.suggestionId,
-					e.usage.model,
-					e.turnId,
-					tokens(e.usage),
-					s.spatz,
-				);
-		} catch {}
-		used.delete(e.turnId);
-		totals.delete(e.turnId);
+		const key = e.agentId ?? "";
+		const identity = active.get(key);
+		if (identity?.turn === e.turnId && (await identity.attempt)) {
+			await attemptCommand(
+				io.run,
+				[
+					"finalize",
+					"--session",
+					identity.session,
+					...(e.agentId ? ["--agent-id", e.agentId] : []),
+				],
+				s.spatz,
+			);
+		}
 		prompts.delete(e.turnId);
 		failures.delete(e.agentId ?? e.turnId);
 		return result;
@@ -381,6 +397,25 @@ export function register(on: On, options: PluginOptions = {}) {
 
 	on("tool.call", async ($, e, next) => {
 		const io = bind($, s.spatz);
+		const identity = active.get(e.agentId ?? "");
+		if (identity && s.mode !== "off" && s.record !== "off")
+			void identity.attempt.then(
+				(attempt) =>
+					attempt &&
+					attemptCommand(
+						io.run,
+						[
+							"bind",
+							attempt,
+							"--call",
+							e.tool_use_id,
+							"--session",
+							identity.session,
+							...(e.agentId ? ["--agent-id", e.agentId] : []),
+						],
+						s.spatz,
+					),
+			);
 		const result = await next(e);
 		try {
 			if (
@@ -422,21 +457,4 @@ export function register(on: On, options: PluginOptions = {}) {
 		show(io);
 		io.toast(`spatz: escalating to ${d.model}:${d.effort}`);
 	}
-}
-
-function sum(totals: Map<string, Tokens>, key: string, add: Tokens): Tokens {
-	const t = totals.get(key) ?? {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheCreation: 0,
-	};
-	const next = {
-		input: t.input + add.input,
-		output: t.output + add.output,
-		cacheRead: t.cacheRead + add.cacheRead,
-		cacheCreation: t.cacheCreation + add.cacheCreation,
-	};
-	totals.set(key, next);
-	return next;
 }

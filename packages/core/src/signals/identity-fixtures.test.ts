@@ -5,9 +5,11 @@ import modRouted from "./fixtures/mod-routed-step-identity.json";
 import subagent from "./fixtures/subagent-identity.json";
 import { isIgnoredHookInput, parseHookInput } from "./index.ts";
 import {
+	mainTurnMessages,
 	parseCodexRollout,
 	parseMainTranscript,
 	parseSubagentTranscript,
+	subagentMessages,
 } from "./transcript.ts";
 
 describe("identity fixtures", () => {
@@ -218,7 +220,7 @@ describe("identity fixtures", () => {
 				legacy.map((row) => JSON.stringify(row)).join("\n"),
 				turn.payload.turn_id,
 			),
-		).toEqual({
+		).toMatchObject({
 			...expected,
 			calls: [{ command: "[redacted]", exit_code: 0 }],
 			usage: null,
@@ -229,7 +231,7 @@ describe("identity fixtures", () => {
 				rows.map((row) => JSON.stringify(row)).join("\n"),
 				turn.payload.turn_id,
 			),
-		).toEqual({
+		).toMatchObject({
 			...expected,
 			calls: [{ command: "[redacted]", exit_code: 0 }],
 			usage: {
@@ -241,4 +243,65 @@ describe("identity fixtures", () => {
 			},
 		});
 	});
+});
+
+test.each(["main", "subagent"])(
+	"%s parser preserves stable message and tool identities",
+	async (variant) => {
+		const text = await Bun.file(
+			`${import.meta.dir}/fixtures/${variant}-identity-transcript.jsonl`,
+		).text();
+		const messages =
+			variant === "main"
+				? mainTurnMessages(text, main.hook.prompt_id)
+				: subagentMessages(text);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toMatchObject({
+			id: expect.stringMatching(/^msg_/),
+			source_seq: 1,
+			calls: [{ id: expect.stringMatching(/^toolu_/), name: "Bash" }],
+		});
+	},
+);
+
+test("Codex preserves separate completed and legacy identities and snapshot source order", () => {
+	const parse = (records: unknown[]) =>
+		parseCodexRollout(
+			records.map((row) => JSON.stringify(row)).join("\n"),
+			codexExec.turn.payload.turn_id,
+		);
+	const legacy = parse([
+		codexExec.turn,
+		codexExec.call,
+		codexExec.callOutput,
+		codexExec.tokenUsage,
+	]);
+	const completed = parse([
+		codexExec.turn,
+		codexExec.call,
+		codexExec.callOutput,
+		codexExec.tokenUsage,
+		codexExec.completed,
+	]);
+	expect(legacy?.calls[0]).toMatchObject({
+		id: `legacy:${codexExec.call.payload.call_id}`,
+		source_seq: 1,
+	});
+	expect(completed?.calls[0]).toMatchObject({
+		id: `completed:${codexExec.completed.payload.item.id}`,
+		source_seq: 4,
+		at: Date.parse(codexExec.completed.timestamp),
+	});
+	expect(completed).toMatchObject({
+		usage_revision: 3,
+		usage_at: Date.parse(codexExec.tokenUsage.timestamp),
+		mixed_pair: false,
+	});
+	const changed = {
+		...codexExec.turn,
+		payload: { ...codexExec.turn.payload, effort: "low" },
+	};
+	expect(
+		parse([codexExec.turn, changed, codexExec.tokenUsage])?.mixed_pair,
+	).toBe(true);
 });

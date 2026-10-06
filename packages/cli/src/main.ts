@@ -26,8 +26,12 @@ export interface CliIO {
 const USAGE = `usage:
   spatz --version
   spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
-  spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
-  spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--cost-usd <n>] [--json]
+  spatz suggest "<task>" [--retry-of <suggestion_id>] [suggestion options]
+  spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--owns-usage] [--json]
+  spatz attempt bind <attempt_id> --call <id> --session <id> [--agent-id <id>]
+  spatz attempt finalize --session <id> [--agent-id <id>]
+  spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
+  spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--attempt <id>] [--key <turn:index>] [--session <id>] [--agent-id <id>] [--cost-usd <n>] [--json]
   spatz import-rollout <file> --suggestion <id> [--json]
   spatz hook <event> [--agent codex]
   spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
@@ -79,7 +83,7 @@ function formatStats(r: StatsReport): string {
 			.concat(diagnostics)
 			.join("\n");
 	const lines = r.by_type.flatMap((t) => [
-		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cost_usd=${t.cost_usd ?? "-"}`,
+		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cache_read_tokens=${t.cache_read_tokens}  cache_creation_tokens=${t.cache_creation_tokens}  cost_usd=${t.cost_usd ?? "-"}`,
 		...t.pairs.map(
 			(p) =>
 				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}`,
@@ -98,6 +102,13 @@ function parse(argv: string[]) {
 			args: argv,
 			allowPositionals: true,
 			options: {
+				"retry-of": { type: "string" },
+				attempt: { type: "string" },
+				correct: { type: "boolean" },
+				confirm: { type: "boolean" },
+				key: { type: "string" },
+				call: { type: "string" },
+				"owns-usage": { type: "boolean" },
 				suggestion: { type: "string" },
 				version: { type: "boolean" },
 				json: { type: "boolean" },
@@ -165,7 +176,52 @@ export async function main(
 			return 0;
 		}
 		json = v.json ?? false;
-		if (cmd === "import-rollout") {
+		if (cmd === "attempt") {
+			const context = {
+				session: required(v.session, "--session"),
+				...(v["agent-id"] !== undefined && {
+					agentId: required(v["agent-id"], "--agent-id"),
+				}),
+			};
+			if (rest[0] === "start") {
+				const input = {
+					...context,
+					suggestionId: required(rest[1], "<suggestion_id>"),
+					key: required(v.key, "--key"),
+					model: required(v.model, "--model"),
+					...(v.effort !== undefined && {
+						effort: required(v.effort, "--effort"),
+					}),
+					...(v.turn !== undefined && { turn: required(v.turn, "--turn") }),
+					ownsUsage: v["owns-usage"] ?? false,
+				};
+				run = async () => {
+					const result = await api.startAttempt(input);
+					return { result, text: () => `attempt_id: ${result.id}` };
+				};
+			} else if (rest[0] === "bind") {
+				const input = {
+					...context,
+					attempt: required(rest[1], "<attempt_id>"),
+					call: required(v.call, "--call"),
+				};
+				run = async () => {
+					await api.bindAttempt(input);
+					return {
+						result: { attempt_id: input.attempt },
+						text: () => `bound: ${input.attempt}`,
+					};
+				};
+			} else if (rest[0] === "finalize") {
+				run = async () => {
+					await api.finalizeAttempts(context);
+					return {
+						result: { session_id: context.session },
+						text: () => `finalized: ${context.session}`,
+					};
+				};
+			} else throw new UsageError("attempt needs start, bind or finalize");
+		} else if (cmd === "import-rollout") {
 			const input = {
 				file: required(rest[0], "<file>"),
 				suggestionId: required(v.suggestion, "--suggestion"),
@@ -184,6 +240,16 @@ export async function main(
 			const input = {
 				suggestionId: required(rest[0], "<suggestion_id>"),
 				model: required(v.model, "--model"),
+				...(v.attempt !== undefined && {
+					attempt: required(v.attempt, "--attempt"),
+				}),
+				...(v.key !== undefined && { key: required(v.key, "--key") }),
+				...(v.session !== undefined && {
+					session: required(v.session, "--session"),
+				}),
+				...(v["agent-id"] !== undefined && {
+					agentId: required(v["agent-id"], "--agent-id"),
+				}),
 				...(v.effort !== undefined && { effort: v.effort }),
 				input: toInt(required(v.input, "--input"), "--input"),
 				output: toInt(required(v.output, "--output"), "--output"),
@@ -236,6 +302,11 @@ export async function main(
 				);
 			const input = {
 				...(v.source && { source: "claude-code-mod" as const, turn: v.turn }),
+				...(v.attempt !== undefined && {
+					attempt: required(v.attempt, "--attempt"),
+				}),
+				...(v.correct !== undefined && { correct: v.correct }),
+				...(v.confirm !== undefined && { confirm: v.confirm }),
 				suggestionId,
 				model,
 				effort,
@@ -265,7 +336,7 @@ export async function main(
 				return { result: r, text: () => formatStats(r) };
 			};
 		} else {
-			const task = required(cmd, '"<task>"');
+			const task = required(cmd === "suggest" ? rest[0] : cmd, '"<task>"');
 			if (
 				v.scope !== undefined &&
 				!(SCOPES as readonly string[]).includes(v.scope)
@@ -278,6 +349,9 @@ export async function main(
 				throw new UsageError(`--source must be one of ${AGENTS.join(", ")}`);
 			const input = {
 				task,
+				...(v["retry-of"] !== undefined && {
+					retryOf: required(v["retry-of"], "--retry-of"),
+				}),
 				...(v.requested !== undefined && {
 					requested: required(v.requested, "--requested"),
 				}),

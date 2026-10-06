@@ -17,7 +17,7 @@ import {
 	type StatsReport,
 } from "../contracts/types.ts";
 import codexExec from "../signals/fixtures/codex-exec-identity.json";
-import { openStore } from "../store/index.ts";
+import { openStore, SCHEMA_VERSION } from "../store/index.ts";
 import { createApi } from "./index.ts";
 
 const OPENROUTER_FIXTURE = join(
@@ -40,13 +40,14 @@ const MODELS = "claude-opus-5-5:high,gpt-6-luna:low";
 const T0 = 1_800_000_000_000;
 const HOUR = 60 * 60 * 1000;
 const WRITES = [
+	"startAttempt",
+	"bindAttempt",
+	"reportAttempt",
+	"recordAttemptEvents",
 	"insertSuggestion",
 	"linkSession",
-	"touch",
 	"closeSuggestion",
-	"insertSignal",
 	"upsertUsage",
-	"rewriteScope",
 ];
 
 const config = (over: Partial<Config> = {}): Config => ({
@@ -113,15 +114,6 @@ function spyStore(): { store: Store; calls: Call[] } {
 			(...args: unknown[]) => {
 				calls.push([name, args]);
 				if (name === "dispose") return undefined;
-				if (name === "rewriteScope") {
-					// The real store upserts these rows internally: record them as upsertUsage calls.
-					const [scope, rows] = args as Parameters<Store["rewriteScope"]>;
-					return real.rewriteScope(scope, (windows) => {
-						const out = rows(windows);
-						for (const u of out) calls.push(["upsertUsage", [u]]);
-						return out;
-					});
-				}
 				return (fn as (...a: unknown[]) => unknown)(...args);
 			},
 		]),
@@ -379,40 +371,25 @@ describe("report", () => {
 			note: "needed a second try",
 		});
 
-		expect(s.argsOf("upsertUsage")).toEqual([
+		expect(s.argsOf("reportAttempt")).toEqual([
 			[
 				{
 					suggestion_id: ID1,
 					model: "anthropic/claude-opus-5.5",
 					effort: "high",
-					source: "report",
-					scope_key: "",
-					input_tokens: null,
-					output_tokens: null,
-					cache_read_tokens: null,
-					cache_creation_tokens: null,
-					is_sidechain: false,
+					result: "partial",
+					at: T0 + 1000,
+					attempt_id: undefined,
+					correct: undefined,
+					confirm: undefined,
 					rounds: 2,
 					note: "needed a second try",
-					reported_at: T0 + 1000,
+					turn_id: undefined,
 				},
 			],
 		]);
-		expect(s.argsOf("insertSignal")).toEqual([
-			[
-				{
-					suggestion_id: ID1,
-					kind: "report",
-					value: 0.5,
-					weight: 1,
-					source: "report",
-					observed_at: T0 + 1000,
-				},
-			],
-		]);
-		expect(s.argsOf("closeSuggestion")).toEqual([[ID1, T0 + 1000]]);
 		expect(s.store.getSuggestion(ID1)?.closed_at).toBe(T0 + 1000);
-		expect(outcome).toEqual({
+		expect(outcome).toMatchObject({
 			suggestion_id: ID1,
 			quality: 0.5,
 			model: "anthropic/claude-opus-5.5",
@@ -434,13 +411,10 @@ describe("report", () => {
 				effort: "low",
 				result,
 			});
-			const [[signal]] = s.argsOf("insertSignal") as [[{ value: number }]];
-			expect(signal.value).toBe(value);
-			const [[usage]] = s.argsOf("upsertUsage") as [[object]];
-			expect(usage).toMatchObject({
+			expect(s.store.outcome(ID1)).toMatchObject({
+				quality: value,
 				model: "openai/gpt-6-luna",
-				rounds: null,
-				note: null,
+				ordinal: 1,
 			});
 		},
 	);
@@ -556,850 +530,222 @@ const assistant = (
 	});
 
 describe("handleHook", () => {
-	// Copied from a real rollout: only model, effort, token counters and anonymised turn IDs remain.
-	test.each([
-		"records",
-		"counts",
-		"thread totals",
-		"response usage",
-		"mirrors",
-	])(
-		"Codex stores per-turn tokens from %s, including reasoning exactly once",
-		async (format) => {
-			const dbPath = join(dir, "tokens.db");
+	for (const sub of [false, true]) {
+		test(`${sub ? "subagent" : "main"} stable messages and calls bind together; a replay cannot double tokens`, async () => {
+			const dbPath = join(dir, "identity.db");
 			const s = setup({ openStore: () => openStore(dbPath) });
-			const id = await linked(s);
-			const fixture = await Bun.file(
-				`${import.meta.dir}/../signals/fixtures/codex-token-usage.jsonl`,
-			).text();
-			const rows = fixture
-				.trim()
-				.split("\n")
-				.map((line) => JSON.parse(line));
-			const rollout = rows
-				.filter((row) => {
-					if (format === "counts") return row.type !== "token_usage_record";
-					return format === "mirrors" || row.type !== "event_msg";
-				})
-				.map((row) => {
-					if (format === "thread totals" || format === "response usage")
-						delete row.payload.turn_token_usage;
-					if (format === "response usage")
-						delete row.payload.thread_token_usage;
-					return JSON.stringify(row);
-				})
-				.join("\n");
-			const path = join(dir, "tokens.jsonl");
-			await Bun.write(path, rollout);
-			const stop = JSON.stringify({
-				session_id: SESSION,
-				turn_id: "turn-2",
-				transcript_path: path,
-				hook_event_name: "Stop",
+			await s.api.suggest({
+				...suggestInput(),
+				session: SESSION,
+				agentId: sub ? "worker" : undefined,
 			});
-			await s.api.handleHook("codex:Stop", stop);
-			await s.api.handleHook("codex:Stop", stop);
+			const path = join(dir, "identity.jsonl");
+			const row = JSON.parse(assistant("m1", "gpt-6-luna", 100));
+			row.message.content = [{ type: "tool_use", id: "call1", name: "Bash" }];
+			await Bun.write(
+				path,
+				[
+					JSON.stringify({ type: "user", promptId: PROMPT }),
+					JSON.stringify(row),
+					JSON.stringify({ ...row, uuid: "duplicate" }),
+				].join("\n"),
+			);
+			const context = base({
+				transcript_path: path,
+				...(sub ? { agent_id: "worker", agent_transcript_path: path } : {}),
+			});
+			const signal = {
+				...context,
+				hook_event_name: "PostToolUse",
+				tool_name: "Bash",
+				tool_use_id: "call1",
+				tool_input: { command: "bun test" },
+				tool_response: { stdout: "ok" },
+			};
+			const stop = {
+				...context,
+				hook_event_name: sub ? "SubagentStop" : "Stop",
+			};
+			for (const event of [signal, stop, signal, stop])
+				await s.api.handleHook(event.hook_event_name, JSON.stringify(event));
+			const db = new Database(dbPath);
+			try {
+				expect(
+					db
+						.query("SELECT SUM(output_tokens) AS tokens FROM usage_totals")
+						.get(),
+				).toEqual({ tokens: 100 });
+				expect(
+					db
+						.query("SELECT COUNT(*) AS n FROM attempt_events WHERE kind='test'")
+						.get(),
+				).toEqual({ n: 1 });
+				expect(
+					db.query("SELECT quality,model,effort FROM attempt_outcomes").get(),
+				).toEqual({
+					quality: 1,
+					model: "openai/gpt-6-luna",
+					effort: sub ? null : "high",
+				});
+			} finally {
+				db.close();
+			}
+		});
+
+		test(`${sub ? "subagent" : "main"} known old prompt never falls through to the new window`, async () => {
+			const dbPath = join(dir, "known.db");
+			const s = setup({ openStore: () => openStore(dbPath) });
+			const agentId = sub ? "worker" : undefined;
+			await s.api.suggest({ ...suggestInput(), session: SESSION, agentId });
+			await s.api.handleHook(
+				"PostToolUse",
+				JSON.stringify({ ...JSON.parse(linkHook(ID1)), agent_id: agentId }),
+			);
+			s.setNow(T0 + 1000);
+			await s.api.suggest({ ...suggestInput(), session: SESSION, agentId });
+			await s.api.handleHook(
+				"PostToolUse",
+				JSON.stringify({
+					...JSON.parse(linkHook(ID2)),
+					prompt_id: "new-prompt",
+					agent_id: agentId,
+				}),
+			);
+			const path = join(dir, "late.jsonl");
+			const row = JSON.parse(
+				assistant("old-message", "gpt-6-luna", 10, {}, T0 + 2000),
+			);
+			row.message.content = [
+				{ type: "tool_use", id: "old-call", name: "Bash" },
+			];
+			await Bun.write(
+				path,
+				[
+					JSON.stringify({ type: "user", promptId: PROMPT }),
+					JSON.stringify(row),
+				].join("\n"),
+			);
+			await s.api.handleHook(
+				"PostToolUseFailure",
+				JSON.stringify({
+					...JSON.parse(bash("bun test", "", "PostToolUseFailure")),
+					agent_id: agentId,
+					transcript_path: path,
+					tool_use_id: "old-call",
+				}),
+			);
+			const store = openStore(dbPath);
+			try {
+				expect(store.outcome(ID2)?.quality).toBeNull();
+			} finally {
+				store.dispose();
+			}
+		});
+
+		test(`${sub ? "subagent" : "main"} late link relocates window signals and usage atomically`, async () => {
+			const dbPath = join(dir, "repair.db");
+			const s = setup({ openStore: () => openStore(dbPath) });
+			const agentId = sub ? "worker" : undefined;
+			await s.api.suggest({ ...suggestInput(), session: SESSION, agentId });
+			s.setNow(T0 + 1000);
+			await s.api.suggest(suggestInput());
+			const path = join(dir, "repair.jsonl");
+			const row = JSON.parse(
+				assistant("repair-message", "gpt-6-luna", 200, {}, T0 + 2000),
+			);
+			row.message.content = [
+				{ type: "tool_use", id: "repair-call", name: "Bash" },
+			];
+			await Bun.write(
+				path,
+				[
+					JSON.stringify({ type: "user", promptId: "followup" }),
+					JSON.stringify(row),
+				].join("\n"),
+			);
+			const context = base({
+				transcript_path: path,
+				prompt_id: "followup",
+				agent_id: agentId,
+				agent_transcript_path: path,
+			});
+			await s.api.handleHook(
+				"PostToolUse",
+				JSON.stringify({
+					...context,
+					hook_event_name: "PostToolUse",
+					tool_name: "Bash",
+					tool_use_id: "repair-call",
+					tool_input: { command: "bun test" },
+					tool_response: { stdout: "ok" },
+				}),
+			);
+			await s.api.handleHook(
+				sub ? "SubagentStop" : "Stop",
+				JSON.stringify({
+					...context,
+					hook_event_name: sub ? "SubagentStop" : "Stop",
+				}),
+			);
+			await s.api.handleHook(
+				"PostToolUse",
+				JSON.stringify({ ...JSON.parse(linkHook(ID2)), ...context }),
+			);
 			const db = new Database(dbPath);
 			try {
 				expect(
 					db
 						.query(
-							"SELECT suggestion_id, scope_key, model, effort, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens FROM usages",
+							"SELECT DISTINCT suggestion_id FROM attempt_events WHERE kind IN ('test','usage')",
 						)
 						.all(),
-				).toEqual([
-					{
-						suggestion_id: id,
-						scope_key: "turn-2",
-						model: "openai/gpt-6.1-sol",
-						effort: "medium",
-						input_tokens: 11862,
-						output_tokens: 818, // Includes 47 reasoning tokens; the last response has only 72 output tokens.
-						cache_read_tokens: 241792,
-						cache_creation_tokens: 0,
-					},
-				]);
-				// A rollout without usage must not erase an already recorded row.
-				await Bun.write(
-					path,
-					rows
-						.filter((row) => row.type === "turn_context")
-						.map((row) => JSON.stringify(row))
-						.join("\n"),
-				);
-				s.setNow(T0 + 1000);
-				await s.api.handleHook("codex:Stop", stop);
-				expect(db.query("SELECT output_tokens FROM usages").all()).toEqual([
-					{ output_tokens: 818 },
-				]);
+				).toEqual([{ suggestion_id: ID2 }]);
+				expect(
+					db
+						.query(
+							"SELECT SUM(output_tokens) AS tokens FROM usage_totals WHERE suggestion_id=?",
+						)
+						.get(ID2),
+				).toEqual({ tokens: 200 });
 			} finally {
 				db.close();
 			}
-		},
-	);
-	test("Codex command events create outcomes without a report and replay without duplicate signals", async () => {
-		const dbPath = join(dir, "recording.db");
-		const s = setup({ openStore: () => openStore(dbPath) });
-		const id = await linked(s);
-		const rollout = await Bun.file(
-			`${import.meta.dir}/../signals/fixtures/codex-command-events.jsonl`,
-		).text();
-		const path = join(dir, "commands.jsonl");
-		await Bun.write(path, rollout);
-		const stop = JSON.stringify({
-			session_id: SESSION,
-			turn_id: "todo-turn",
-			transcript_path: path,
-			hook_event_name: "Stop",
 		});
-		await s.api.handleHook("codex:Stop", stop);
-		const db = new Database(dbPath);
-		try {
-			expect(
-				db
-					.query("SELECT quality FROM outcomes WHERE suggestion_id = ?")
-					.get(id),
-			).toEqual({ quality: 0.8 / 1.8 });
-			// A later check succeeds. Replaying the updated snapshot replaces this turn's result.
-			await Bun.write(path, rollout.replace('"exit_code":1', '"exit_code":0'));
-			s.setNow(T0 + 1000);
-			await s.api.handleHook("codex:Stop", stop);
-			await s.api.handleHook("codex:Stop", stop);
-			expect(
-				db
-					.query("SELECT kind, value, turn_id FROM signals ORDER BY kind")
-					.all(),
-			).toEqual([
-				{ kind: "build", value: 1, turn_id: "todo-turn" },
-				{ kind: "test", value: 1, turn_id: "todo-turn" },
-			]);
-			expect(
-				db.query("SELECT * FROM outcomes WHERE suggestion_id = ?").get(id),
-			).toEqual({
-				suggestion_id: id,
-				quality: 1,
-				model: "openai/gpt-6-luna",
-				effort: "low",
-			});
-			expect(db.query("SELECT output_tokens FROM usages").all()).toEqual([
-				{ output_tokens: 674 },
-			]);
-		} finally {
-			db.close();
-		}
-	});
-	test("hook diagnostics are opt-in and do not expose input or errors", async () => {
-		const stderr = spyOn(console, "error").mockImplementation(() => {});
-		try {
-			const openStore = () => {
-				throw new Error("private database path and secret");
-			};
-			await setup({ openStore }).api.handleHook(
-				"codex:Stop",
-				'{"hook_event_name":"Stop"}',
-			);
-			expect(stderr).not.toHaveBeenCalled();
-			await setup({ openStore, env: { SPATZ_DEBUG: "1" } }).api.handleHook(
-				"codex:Stop",
-				'{"hook_event_name":"Stop"}',
-			);
-			expect(stderr.mock.calls).toEqual([
-				[
-					"spatz hook: Recording failed; check hook input, transcript access and database permissions.",
-				],
-			]);
-			stderr.mockClear();
-			const path = join(dir, "unknown.jsonl");
-			await Bun.write(path, '{"type":"future_rollout_format"}');
-			await setup({ env: { SPATZ_DEBUG: "1" } }).api.handleHook(
-				"codex:Stop",
-				JSON.stringify({
-					session_id: SESSION,
-					turn_id: "missing",
-					transcript_path: path,
-					hook_event_name: "Stop",
-				}),
-			);
-			expect(stderr.mock.calls).toEqual([
-				[
-					"spatz hook: Codex rollout has no matching turn context; check the rollout format.",
-				],
-			]);
-		} finally {
-			stderr.mockRestore();
-		}
-	});
-	test("Codex PostToolUse links suggestion with turn_id as prompt id", async () => {
-		const s = setup();
-		const id = (await s.api.suggest(suggestInput())).suggestion_id;
-		await s.api.handleHook(
-			"codex:PostToolUse",
-			JSON.stringify({
-				session_id: SESSION,
-				turn_id: PROMPT,
-				transcript_path: "/nope",
-				hook_event_name: "PostToolUse",
-				tool_name: "Bash",
-				tool_input: { command: `spatz "fix it" --models ${MODELS}` },
-				tool_response: `suggestion_id: ${id}`,
-			}),
-		);
-		expect(s.argsOf("linkSession")).toEqual([[id, SESSION, PROMPT, T0]]);
-	});
-	test("Codex Stop records rollout shell outcomes and cumulative tokens", async () => {
-		const s = setup();
-		const id = await linked(s);
-		const path = `${import.meta.dir}/../signals/fixtures/codex-rollout.jsonl`;
-		const rollout = (await Bun.file(path).text()).replace(
-			'cmd:\\"false\\"',
-			'cmd:\\"bun test\\"',
-		);
-		const testPath = join(dir, "codex.jsonl");
-		await Bun.write(testPath, rollout);
-		await s.api.handleHook(
-			"codex:Stop",
-			JSON.stringify({
-				session_id: SESSION,
-				turn_id: "11111111-1111-1111-1111-111111111111",
-				transcript_path: testPath,
-				hook_event_name: "Stop",
-			}),
-		);
-		expect(s.argsOf("insertSignal").map(([x]) => x)).toEqual([
-			{
-				suggestion_id: id,
-				kind: "test",
-				value: 0,
-				weight: 1,
-				source: "Stop",
-				turn_id: "11111111-1111-1111-1111-111111111111",
-				observed_at: T0,
-			},
-		]);
-		expect(s.argsOf("rewriteScope")[0]?.[0]).toMatchObject({
-			source: "transcript",
-			scope_key: "11111111-1111-1111-1111-111111111111",
-		});
-		const rows = s.argsOf("rewriteScope")[0]?.[1] as (
-			windows: { id: string; start: number; end: number }[],
-		) => unknown[];
-		expect(rows([{ id, start: T0, end: T0 + HOUR }])).toMatchObject([
-			{
-				suggestion_id: id,
-				model: "openai/gpt-6-luna",
-				effort: "low",
-				input_tokens: 13583,
-				output_tokens: 124,
-				cache_read_tokens: 48128,
-			},
-		]);
-	});
-	test("never throws: invalid JSON, unknown event, missing transcript, store errors", async () => {
-		const s = setup();
-		await expect(
-			s.api.handleHook("Stop", "{not json"),
-		).resolves.toBeUndefined();
-		await expect(
-			s.api.handleHook(
-				"Bogus",
-				JSON.stringify(base({ hook_event_name: "Bogus" })),
-			),
-		).resolves.toBeUndefined();
-		await linked(s);
-		await expect(
-			s.api.handleHook(
-				"Stop",
-				JSON.stringify(
-					base({ hook_event_name: "Stop", stop_hook_active: false }),
-				),
-			),
-		).resolves.toBeUndefined();
-
-		const broken = setup({
-			openStore: () => {
-				throw new Error("disk full");
-			},
-		});
-		await expect(
-			broken.api.handleHook("PostToolUse", bash("bun test")),
-		).resolves.toBeUndefined();
-
-		const failing = setup();
-		failing.store.findOpenSuggestion = () => {
-			throw new Error("SQLITE_BUSY");
-		};
-		await expect(
-			failing.api.handleHook("PostToolUse", bash("bun test")),
-		).resolves.toBeUndefined();
-	});
-
-	test("PostToolUse Bash with a spatz suggest call links the session and closes the previous open suggestion", async () => {
-		const s = setup();
-		const first = await linked(s);
-		expect(s.argsOf("linkSession")).toEqual([[first, SESSION, PROMPT, T0]]);
-
-		s.setNow(T0 + 5000);
-		const second = await linked(s);
-		expect(s.argsOf("linkSession")[1]).toEqual([
-			second,
-			SESSION,
-			PROMPT,
-			T0 + 5000,
-		]);
-		expect(s.store.getSuggestion(first)?.closed_at).toBe(T0 + 5000);
-		expect(s.store.findOpenSuggestion(SESSION, T0 + 5000, HOUR)).toBe(second);
-	});
-
-	test.each([
-		["PostToolUse", "bun test packages/core", "test", 1, 1],
-		["PostToolUseFailure", "bun test packages/core", "test", 0, 1],
-		["PostToolUse", "bun run build", "build", 1, 0.8],
-		["PostToolUseFailure", "bun run build", "build", 0, 0.8],
-	] as const)(
-		"%s Bash %p -> signal %s value %d weight %d on the open suggestion, touch",
-		async (event, command, kind, value, weight) => {
-			const s = setup();
-			const id = await linked(s);
-			s.setNow(T0 + 1000);
-			await s.api.handleHook(event, bash(command, "", event));
-			expect(s.argsOf("findOpenSuggestion")).toContainEqual([
-				SESSION,
-				T0 + 1000,
-				7_200_000,
-			]);
-			expect(s.argsOf("insertSignal")).toEqual([
-				[
-					{
-						suggestion_id: id,
-						kind,
-						value,
-						weight,
-						source: event,
-						observed_at: T0 + 1000,
-					},
-				],
-			]);
-			expect(s.argsOf("touch")).toContainEqual([id, T0 + 1000]);
-			expect(s.store.getSuggestion(id)?.last_event_at).toBe(T0 + 1000);
-		},
-	);
-
-	test("no open suggestion (none linked, or idle > 2 h) -> nothing written", async () => {
-		const s = setup();
-		await s.api.handleHook("PostToolUse", bash("bun test"));
-		expect(s.writes()).toEqual([]);
-
-		await linked(s);
-		const before = s.writes().length;
-		s.setNow(T0 + 2 * HOUR + 1);
-		await s.api.handleHook("PostToolUse", bash("bun test"));
-		expect(s.writes()).toHaveLength(before);
-	});
-
-	test("timeout boundary: exactly 2 h idle is still open", async () => {
-		const s = setup();
-		const id = await linked(s);
-		s.setNow(T0 + 2 * HOUR);
-		await s.api.handleHook("PostToolUse", bash("bun test"));
-		expect(s.argsOf("insertSignal")).toEqual([
-			[expect.objectContaining({ suggestion_id: id, kind: "test" })],
-		]);
-		expect(s.argsOf("touch")).toContainEqual([id, T0 + 2 * HOUR]);
-	});
-
-	test("Bash commands that are neither spatz, test nor build only refresh the window", async () => {
-		const s = setup();
-		const id = await linked(s);
-		const before = s.writes().length;
-		s.setNow(T0 + 1000);
-		await s.api.handleHook("PostToolUse", bash("echo ok", "ok"));
-		expect(s.writes().slice(before)).toEqual([["touch", [id, T0 + 1000]]]);
-	});
-
-	test("events without a signal keep the suggestion open (2 h counts from the last event)", async () => {
-		const s = setup();
-		const id = await linked(s);
-		s.setNow(T0 + HOUR);
-		await s.api.handleHook("PostToolUse", bash("echo ok", "ok"));
-		s.setNow(T0 + 2 * HOUR + 1);
-		await s.api.handleHook("PostToolUse", bash("bun test"));
-		expect(s.argsOf("insertSignal")).toEqual([
-			[expect.objectContaining({ suggestion_id: id, kind: "test" })],
-		]);
-	});
-
-	test("handback events do not refresh the window", async () => {
+	}
+	test("receipt-only hooks cannot extend an idle window", async () => {
 		const s = setup();
 		await linked(s);
 		s.setNow(T0 + HOUR);
 		await s.api.handleHook(
 			"UserPromptSubmit",
 			JSON.stringify(
-				base({
-					hook_event_name: "UserPromptSubmit",
-					prompt: "<agent-message from a1>done",
-				}),
+				base({ hook_event_name: "UserPromptSubmit", prompt: "work" }),
 			),
 		);
-		await s.api.handleHook(
-			"PostToolUse",
-			JSON.stringify(
-				base({
-					hook_event_name: "PostToolUse",
-					tool_name: "SubagentHandback",
-					tool_input: {},
-					tool_response: {},
-					tool_use_id: "t",
-				}),
-			),
-		);
-		s.setNow(T0 + 2 * HOUR + 1);
-		await s.api.handleHook("PostToolUse", bash("bun test"));
-		expect(s.argsOf("insertSignal")).toEqual([]);
+		expect(s.store.getSuggestion(ID1)?.last_event_at).toBe(T0);
 	});
-
-	test("Stop -> usage per canonical model from the main transcript turn", async () => {
+	test("handbacks produce no events", async () => {
 		const s = setup();
-		const id = await linked(s);
-		const path = join(dir, "main.jsonl");
-		await Bun.write(
-			path,
-			[
-				JSON.stringify({ type: "user", promptId: "other-prompt" }),
-				assistant("m0", "claude-opus-5-5", 999),
-				JSON.stringify({ type: "user", promptId: PROMPT }),
-				assistant("m1", "claude-sonnet-5-5", 10),
-				assistant("m1", "claude-sonnet-5-5", 10),
-				assistant("m2", "gpt-6-luna", 5),
-				// same canonical model under its OpenRouter name: must add up, not overwrite
-				assistant("m3", "anthropic/claude-sonnet-5.5", 20),
-				"not json",
-			].join("\n"),
-		);
-		s.setNow(T0 + 1000);
-		await s.api.handleHook(
-			"Stop",
-			JSON.stringify(
-				base({
-					hook_event_name: "Stop",
-					transcript_path: path,
-					stop_hook_active: false,
-				}),
-			),
-		);
-		const row = {
-			suggestion_id: id,
-			effort: "high",
-			source: "transcript",
-			scope_key: PROMPT,
-			is_sidechain: false,
-			rounds: null,
-			note: null,
-			reported_at: T0 + 1000,
-		};
-		expect(s.argsOf("upsertUsage")).toEqual([
-			[
-				{
-					...row,
-					model: "anthropic/claude-sonnet-5.5",
-					input_tokens: 6,
-					output_tokens: 30,
-					cache_read_tokens: 200,
-					cache_creation_tokens: 14,
-				},
-			],
-			[
-				{
-					...row,
-					model: "openai/gpt-6-luna",
-					input_tokens: 3,
-					output_tokens: 5,
-					cache_read_tokens: 100,
-					cache_creation_tokens: 7,
-				},
-			],
-		]);
-		expect(s.argsOf("touch")).toContainEqual([id, T0 + 1000]);
-		expect(s.store.outcome(id)).toBeNull(); // usage alone is no outcome
-	});
-
-	test("SubagentStop -> usage from the agent transcript, source subagent, sidechain", async () => {
-		const s = setup();
-		const id = await linked(s);
-		const path = join(dir, "agent-a1.jsonl");
-		const sub = { isSidechain: true, agentId: "a1" };
-		await Bun.write(
-			path,
-			[
-				assistant("s1", "claude-sonnet-5-5", 10, sub),
-				assistant("s2", "anthropic/claude-sonnet-5.5", 30, sub),
-			].join("\n"),
-		);
-		await s.api.handleHook(
-			"SubagentStop",
-			JSON.stringify(
-				base({
-					hook_event_name: "SubagentStop",
-					agent_id: "a1",
-					agent_type: "general-purpose",
-					stop_hook_active: false,
-					agent_transcript_path: path,
-					effort: undefined,
-				}),
-			),
-		);
-		expect(s.argsOf("upsertUsage")).toEqual([
-			[
-				expect.objectContaining({
-					suggestion_id: id,
-					model: "anthropic/claude-sonnet-5.5",
-					effort: null,
-					source: "subagent",
-					scope_key: "a1",
-					input_tokens: 6,
-					output_tokens: 40,
-					is_sidechain: true,
-				}),
-			],
-		]);
-		expect(s.argsOf("touch")).toContainEqual([id, T0]);
-	});
-
-	const stopHook = (path: string) =>
-		JSON.stringify(
-			base({
-				hook_event_name: "Stop",
-				transcript_path: path,
-				stop_hook_active: false,
-			}),
-		);
-	const subagentStopHook = (path: string) =>
-		JSON.stringify(
-			base({
-				hook_event_name: "SubagentStop",
-				agent_id: "a1",
-				agent_type: "general-purpose",
-				stop_hook_active: false,
-				agent_transcript_path: path,
-			}),
-		);
-	const outputBy = (s: ReturnType<typeof setup>, id: string) =>
-		Object.fromEntries(
-			s
-				.argsOf("upsertUsage")
-				.map(
-					([u]) =>
-						u as {
-							suggestion_id: string;
-							model: string;
-							output_tokens: number;
-						},
-				)
-				.filter((u) => u.suggestion_id === id)
-				.map((u) => [u.model, u.output_tokens]),
-		);
-
-	test("Stop counts only usage inside the recommendation's time window", async () => {
-		const s = setup();
-		const id = await linked(s);
-		const path = join(dir, "main.jsonl");
-		await Bun.write(
-			path,
-			[
-				JSON.stringify({ type: "user", promptId: PROMPT }),
-				// same turn, but before spatz created the recommendation
-				assistant("m0", "claude-opus-5-5", 999, {}, T0 - 1000),
-				assistant("m1", "claude-sonnet-5-5", 10, {}, T0 + 1000),
-			].join("\n"),
-		);
-		s.setNow(T0 + 2000);
-		await s.api.handleHook("Stop", stopHook(path));
-		expect(outputBy(s, id)).toEqual({ "anthropic/claude-sonnet-5.5": 10 });
-	});
-
-	test("two recommendations in one turn each get their own slice (main and subagent)", async () => {
-		const s = setup();
-		const first = await linked(s);
-		s.setNow(T0 + 5000);
-		const second = await linked(s);
-		const main = join(dir, "main.jsonl");
-		const agent = join(dir, "agent-a1.jsonl");
-		await Bun.write(
-			main,
-			[
-				JSON.stringify({ type: "user", promptId: PROMPT }),
-				assistant("m1", "claude-opus-5-5", 999, {}, T0 + 1000),
-				assistant("m2", "claude-sonnet-5-5", 10, {}, T0 + 6000),
-			].join("\n"),
-		);
-		const sub = { isSidechain: true, agentId: "a1" };
-		await Bun.write(
-			agent,
-			[
-				assistant("s1", "gpt-6-luna", 7, sub, T0 + 2000),
-				assistant("s2", "gpt-6-sol", 3, sub, T0 + 7000),
-			].join("\n"),
-		);
-		s.setNow(T0 + 8000);
-		await s.api.handleHook("SubagentStop", subagentStopHook(agent));
-		await s.api.handleHook("Stop", stopHook(main));
-		expect(outputBy(s, first)).toEqual({
-			"anthropic/claude-opus-5.5": 999,
-			"openai/gpt-6-luna": 7,
-		});
-		expect(outputBy(s, second)).toEqual({
-			"anthropic/claude-sonnet-5.5": 10,
-			"openai/gpt-6-sol": 3,
-		});
-	});
-
-	test("Stop before a delayed link: the link moves later usage from the earlier recommendation to the newer one", async () => {
-		const s = setup();
-		const first = await linked(s);
-		s.setNow(T0 + 5000);
-		const { suggestion_id: second } = await s.api.suggest(suggestInput());
-		// Claude Code layout: <dir>/<session>.jsonl and <dir>/<session>/subagents/agent-<id>.jsonl
-		const main = join(dir, `${SESSION}.jsonl`);
-		const agent = join(dir, SESSION, "subagents", "agent-a1.jsonl");
-		await Bun.write(
-			main,
-			[
-				JSON.stringify({ type: "user", promptId: PROMPT }),
-				assistant("m1", "claude-opus-5-5", 10, {}, T0 + 1000),
-				assistant("m2", "claude-sonnet-5-5", 999, {}, T0 + 6000),
-			].join("\n"),
-		);
-		const sub = { isSidechain: true, agentId: "a1" };
-		await Bun.write(
-			agent,
-			[
-				assistant("s1", "gpt-6-luna", 7, sub, T0 + 2000),
-				assistant("s2", "gpt-6-sol", 2000, sub, T0 + 6500),
-			].join("\n"),
-		);
-		s.setNow(T0 + 7000);
-		const stop = JSON.stringify({
-			...JSON.parse(stopHook(main)),
-			transcript_path: main,
-		});
-		await s.api.handleHook("Stop", stop);
-		await s.api.handleHook("SubagentStop", subagentStopHook(agent));
-		// The async link hook of the second call arrives after Stop.
-		s.setNow(T0 + 8000);
-		await s.api.handleHook(
-			"PostToolUse",
-			JSON.stringify({
-				...JSON.parse(linkHook(second)),
-				transcript_path: main,
-			}),
-		);
-		const pairOf = (id: string) => {
-			s.store.insertSignal({
-				suggestion_id: id,
-				kind: "test",
-				value: 1,
-				weight: 1,
-				source: "PostToolUse",
-				observed_at: T0 + 9000,
-			});
-			return s.store.outcome(id)?.model;
-		};
-		expect(pairOf(first)).toBe("anthropic/claude-opus-5.5");
-		expect(pairOf(second)).toBe("openai/gpt-6-sol");
-
-		// Replaying Stop and SubagentStop after the link keeps the same assignment.
-		s.setNow(T0 + 9000);
-		await s.api.handleHook("Stop", stop);
-		await s.api.handleHook("SubagentStop", subagentStopHook(agent));
-		expect(s.store.outcome(first)?.model).toBe("anthropic/claude-opus-5.5");
-		expect(s.store.outcome(second)?.model).toBe("openai/gpt-6-sol");
-	});
-
-	test("a failing rewrite of a scope rolls back and keeps the earlier usage", async () => {
-		const dbPath = join(dir, "spatz.db");
-		const s = setup({ dbPath, openStore });
 		await linked(s);
-		const path = join(dir, "main.jsonl");
-		await Bun.write(
-			path,
-			[
-				JSON.stringify({ type: "user", promptId: PROMPT }),
-				assistant("m1", "claude-sonnet-5-5", 10),
-			].join("\n"),
-		);
-		await s.api.handleHook("Stop", stopHook(path));
-		const raw = new Database(dbPath);
-		const count = () =>
-			raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usages").get()?.n;
-		expect(count()).toBe(1);
-		// Every insert into usages fails from now on, like a full disk.
-		raw.run(
-			"CREATE TRIGGER fail BEFORE INSERT ON usages BEGIN SELECT RAISE(ABORT, 'disk full'); END",
-		);
-		await s.api.handleHook("Stop", stopHook(path));
-		expect(count()).toBe(1);
-		raw.close();
-	});
-
-	test("a compacted transcript (fewer messages, newer last one) rewrites the scope, and a delayed link then moves its later usage", async () => {
-		const s = setup();
-		const first = await linked(s);
-		s.setNow(T0 + 5000);
-		const { suggestion_id: second } = await s.api.suggest(suggestInput());
-		const user = JSON.stringify({ type: "user", promptId: PROMPT });
-		const long = join(dir, "long.jsonl");
-		const compacted = join(dir, "compacted.jsonl");
-		await Bun.write(
-			long,
-			[
-				user,
-				assistant("m1", "claude-opus-5-5", 10, {}, T0 + 1000),
-				assistant("m2", "claude-opus-5-5", 10, {}, T0 + 2000),
-				assistant("m3", "claude-opus-5-5", 10, {}, T0 + 3000),
-			].join("\n"),
-		);
-		await Bun.write(
-			compacted,
-			[user, assistant("m4", "claude-sonnet-5-5", 999, {}, T0 + 6000)].join(
-				"\n",
-			),
-		);
-		s.setNow(T0 + 7000);
-		await s.api.handleHook("Stop", stopHook(long));
-		await s.api.handleHook("Stop", stopHook(compacted));
-		expect(outputBy(s, first)).toEqual({
-			"anthropic/claude-opus-5.5": 30,
-			"anthropic/claude-sonnet-5.5": 999,
-		});
-		// The delayed link of the second call reconciles from the compacted transcript.
-		s.setNow(T0 + 8000);
-		await s.api.handleHook(
-			"PostToolUse",
-			JSON.stringify({
-				...JSON.parse(linkHook(second)),
-				transcript_path: compacted,
-			}),
-		);
-		const pairOf = (id: string) => {
-			s.store.insertSignal({
-				suggestion_id: id,
-				kind: "test",
-				value: 1,
-				weight: 1,
-				source: "PostToolUse",
-				observed_at: T0 + 9000,
-			});
-			return s.store.outcome(id)?.model;
-		};
-		expect(pairOf(second)).toBe("anthropic/claude-sonnet-5.5");
-		expect(pairOf(first)).not.toBe("anthropic/claude-sonnet-5.5");
-	});
-
-	test("an older transcript snapshot that commits last does not replace a newer one", async () => {
-		const s = setup();
-		const id = await linked(s);
-		const turn = [
-			JSON.stringify({ type: "user", promptId: PROMPT }),
-			assistant("m1", "claude-opus-5-5", 10, {}, T0 + 1000),
-		];
-		const older = join(dir, "older.jsonl");
-		const newer = join(dir, "newer.jsonl");
-		await Bun.write(older, turn.join("\n"));
-		await Bun.write(
-			newer,
-			[...turn, assistant("m2", "claude-sonnet-5-5", 999, {}, T0 + 2000)].join(
-				"\n",
-			),
-		);
-		// Two hook processes of the same turn: the one with the newer snapshot commits first.
-		await s.api.handleHook("Stop", stopHook(newer));
-		await s.api.handleHook("Stop", stopHook(older));
-		s.store.insertSignal({
-			suggestion_id: id,
-			kind: "test",
-			value: 1,
-			weight: 1,
-			source: "PostToolUse",
-			observed_at: T0 + 3000,
-		});
-		expect(s.store.outcome(id)?.model).toBe("anthropic/claude-sonnet-5.5");
-	});
-
-	test("PostToolUse on Agent -> usage source agent_tool with the resolved model and unknown tokens", async () => {
-		const s = setup();
-		const id = await linked(s);
-		await s.api.handleHook(
-			"PostToolUse",
-			JSON.stringify(
-				base({
-					hook_event_name: "PostToolUse",
-					tool_name: "Agent",
-					tool_input: { prompt: "secret prompt text" },
-					tool_response: {
-						status: "completed",
-						agentId: "a1",
-						resolvedModel: "claude-sonnet-5-5",
-						content: "agent output text",
-					},
-					tool_use_id: "toolu_2",
-				}),
-			),
-		);
-		expect(s.argsOf("upsertUsage")).toEqual([
-			[
-				{
-					suggestion_id: id,
-					model: "anthropic/claude-sonnet-5.5",
-					effort: null,
-					source: "agent_tool",
-					scope_key: "a1",
-					input_tokens: null,
-					output_tokens: null,
-					cache_read_tokens: null,
-					cache_creation_tokens: null,
-					is_sidechain: true,
-					rounds: null,
-					note: null,
-					reported_at: T0,
-				},
-			],
-		]);
-		const stored = JSON.stringify(s.calls);
-		expect(stored).not.toContain("secret prompt text");
-		expect(stored).not.toContain("agent output text");
-	});
-
-	test.each([
-		["SessionStart", { source: "startup", prompt_id: undefined }, true],
-		["UserPromptSubmit", { prompt: "do the thing" }, true],
-		["UserPromptSubmit", { prompt: "<agent-message from a1>done" }, false],
-		["SubagentStart", { agent_id: "a1", agent_type: "general-purpose" }, true],
-		[
-			"PostToolUse",
+		s.calls.length = 0;
+		for (const event of [
 			{
-				tool_name: "SubagentHandback",
-				tool_input: {},
-				tool_response: {},
-				tool_use_id: "t",
+				hook_event_name: "UserPromptSubmit",
+				prompt: "<agent-message from=worker>done",
 			},
-			false,
-		],
-	] as const)(
-		"%s writes at most a touch (%o)",
-		async (event, fields, touches) => {
-			const s = setup();
-			const id = await linked(s);
-			const before = s.writes().length;
-			s.setNow(T0 + 1000);
+			{ hook_event_name: "PostToolUse", tool_name: "SubagentHandback" },
+		])
 			await s.api.handleHook(
-				event,
-				JSON.stringify(base({ hook_event_name: event, ...fields })),
+				event.hook_event_name,
+				JSON.stringify(base(event)),
 			);
-			expect(s.writes().slice(before)).toEqual(
-				touches ? [["touch", [id, T0 + 1000]]] : [],
-			);
-		},
-	);
+		expect(s.calls).toEqual([]);
+	});
+	test("invalid hooks fail open with local diagnostics", async () => {
+		const s = setup();
+		await s.api.handleHook("Stop", "not json");
+		expect(s.argsOf("recordFailure")).toHaveLength(1);
+	});
 });
 
 describe("stats", () => {
@@ -1597,8 +943,8 @@ describe("direct mod attribution", () => {
 				agent_id: "a1",
 			}),
 		);
-		expect(s.store.outcome(first.suggestion_id)?.quality).toBe(1);
-		expect(s.store.outcome(sub.suggestion_id)?.quality).toBe(0);
+		expect(s.store.outcome(first.suggestion_id)?.quality).toBeNull();
+		expect(s.store.outcome(sub.suggestion_id)?.quality).toBeNull();
 	});
 
 	test("direct usage upserts each turn, preserves follow-ups and creates no outcome", async () => {
@@ -1633,7 +979,7 @@ describe("direct mod attribution", () => {
 			expect(
 				db
 					.query(
-						"SELECT model, effort, scope_key, turn_id, agent_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens FROM usages ORDER BY turn_id",
+						"SELECT model, effort, turn_id AS scope_key, turn_id, agent_key AS agent_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens FROM latest_attempt_events WHERE kind='usage' ORDER BY turn_id",
 					)
 					.all(),
 			).toEqual([
@@ -1715,6 +1061,8 @@ describe("direct mod attribution", () => {
 			result: "pass" as const,
 			source: "claude-code-mod" as const,
 			turn: "t1",
+			rounds: 2,
+			note: "direct note",
 		};
 		await s.api.report(input);
 		await s.api.report(input);
@@ -1725,26 +1073,30 @@ describe("direct mod attribution", () => {
 			expect(
 				db
 					.query(
-						"SELECT turn_id, agent_id, source FROM signals ORDER BY turn_id",
+						"SELECT rounds,note,turn_id FROM latest_attempt_events WHERE kind='report' ORDER BY turn_id",
 					)
 					.all(),
 			).toEqual([
-				{ turn_id: "t1", agent_id: "a1", source: "claude-code-mod" },
-				{ turn_id: "t2", agent_id: "a1", source: "claude-code-mod" },
+				{ rounds: 2, note: "direct note", turn_id: "t1" },
+				{ rounds: 2, note: "direct note", turn_id: "t2" },
 			]);
 			expect(
 				db
 					.query(
-						"SELECT scope_key, turn_id, agent_id FROM usages WHERE source = 'report' ORDER BY turn_id",
+						"SELECT ordinal, quality FROM attempt_outcomes ORDER BY ordinal",
 					)
 					.all(),
 			).toEqual([
-				{ scope_key: "t1", turn_id: "t1", agent_id: "a1" },
-				{ scope_key: "t2", turn_id: "t2", agent_id: "a1" },
+				{ ordinal: 1, quality: 1 },
+				{ ordinal: 2, quality: 0 },
 			]);
-			expect(db.query("SELECT quality FROM outcomes").get()).toEqual({
-				quality: 0,
-			});
+			expect(
+				db
+					.query(
+						"SELECT COUNT(*) AS n FROM latest_attempt_events WHERE kind='report'",
+					)
+					.get(),
+			).toEqual({ n: 2 });
 		} finally {
 			db.close();
 		}
@@ -1803,10 +1155,17 @@ test("Agent response belongs to its explicitly linked subagent", async () => {
 			}),
 		),
 	);
-	expect(s.argsOf("upsertUsage")).toEqual([
-		[expect.objectContaining({ suggestion_id, source: "agent_tool" })],
+	expect(s.argsOf("upsertDispatch")).toEqual([
+		[
+			expect.objectContaining({
+				session_id: SESSION,
+				agent_id: "a1",
+				answered_model: "anthropic/claude-sonnet-5.5",
+			}),
+		],
 	]);
 	expect(s.store.getSuggestion(main)?.closed_at).toBeNull();
+	expect(s.store.getSuggestion(suggestion_id)?.agent_id).toBe("a1");
 });
 
 test("transcript rewrites keep main and two agent windows separate", async () => {
@@ -1881,7 +1240,7 @@ test("transcript rewrites keep main and two agent windows separate", async () =>
 	try {
 		const rows = db
 			.query(
-				"SELECT suggestion_id, model, output_tokens FROM usages ORDER BY model",
+				"SELECT suggestion_id, model, output_tokens FROM usage_totals ORDER BY model",
 			)
 			.all();
 		expect(rows).toEqual([
@@ -2112,21 +1471,12 @@ test("missing efforts from mod usage, Claude hooks and Codex hooks use the avail
 		.replace(/,"effort":"[^"]*"/g, "");
 	const codexPath = join(dir, "codex.jsonl");
 	await Bun.write(codexPath, rollout);
-	await s.api.handleHook(
-		"codex:Stop",
-		JSON.stringify({
-			session_id: SESSION,
-			turn_id: "todo-turn",
-			transcript_path: codexPath,
-			hook_event_name: "Stop",
-		}),
-	);
+	await s.api.importRollout({ file: codexPath, suggestionId: id });
 	const db = new Database(dbPath);
 	try {
 		expect(
-			db.query("SELECT model, effort FROM usages ORDER BY model, source").all(),
+			db.query("SELECT model, effort FROM usage_totals ORDER BY model").all(),
 		).toEqual([
-			{ model: "anthropic/claude-haiku-4.5", effort: "none" },
 			{ model: "anthropic/claude-haiku-4.5", effort: "none" },
 			{ model: "openai/gpt-future", effort: "none" },
 		]);
@@ -2194,7 +1544,7 @@ describe("failure diagnostics", () => {
 			"hook",
 			"hook",
 		]);
-		s.store.findOpenSuggestion = () => {
+		s.store.recordAttemptEvents = () => {
 			throw new Error("private");
 		};
 		await s.api.handleHook("PostToolUse", bash("bun test"));
@@ -2327,7 +1677,7 @@ describe("explicit Codex run attribution", () => {
 			const db = new Database(dbPath);
 			try {
 				const query =
-					"SELECT suggestion_id, model, effort, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tokens_schema, tokens_complete FROM usages WHERE source = 'transcript'";
+					"SELECT suggestion_id, model, effort, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tokens_schema, tokens_complete FROM usage_totals";
 				const expected = [
 					{
 						suggestion_id: ID1,
@@ -2351,7 +1701,7 @@ describe("explicit Codex run attribution", () => {
 				expect(
 					db
 						.query(
-							"SELECT suggestion_id, kind, value, turn_id FROM signals WHERE source = 'Stop'",
+							"SELECT suggestion_id, kind, value, turn_id FROM latest_attempt_events WHERE source = 'Stop'",
 						)
 						.all(),
 				).toEqual([
@@ -2371,7 +1721,7 @@ describe("explicit Codex run attribution", () => {
 				await s.api.importRollout({ file, suggestionId: ID1 });
 				expect(db.query(query).all()).toEqual(expected);
 				expect(db.query("PRAGMA user_version").get()).toEqual({
-					user_version: 7,
+					user_version: SCHEMA_VERSION,
 				});
 			} finally {
 				db.close();
@@ -2386,8 +1736,12 @@ describe("explicit Codex run attribution", () => {
 		await s.api.importRollout({ file, suggestionId: ID1 });
 		expect(
 			s
-				.argsOf("upsertUsage")
-				.map(([row]) => (row as { scope_key: string }).scope_key),
+				.argsOf("recordAttemptEvents")
+				.flatMap(([rows]) =>
+					(rows as { kind: string; turn_id: string }[])
+						.filter((row) => row.kind === "usage")
+						.map((row) => row.turn_id),
+				),
 		).toEqual(["turn-1", "turn-2", "turn-3"]);
 		await expect(
 			s.api.importRollout({ file, suggestionId: "unknown" }),
@@ -2720,6 +2074,864 @@ test("Agent hooks persist unlinked dispatches and use the child id, not the pare
 		expect(db.query("SELECT count(*) AS n FROM suggestions").get()).toEqual({
 			n: 0,
 		});
+	} finally {
+		db.close();
+	}
+});
+
+describe("attempt adapter identity", () => {
+	for (const sub of [false, true]) {
+		test(`${sub ? "subagent" : "main"} missing Claude transcript stays pending instead of crediting the newest suggestion`, async () => {
+			const s = setup();
+			const first = await s.api.suggest({
+				...suggestInput(),
+				session: SESSION,
+				agentId: sub ? "worker" : undefined,
+			});
+			await s.api.handleHook(
+				"PostToolUseFailure",
+				JSON.stringify({
+					hook_event_name: "PostToolUseFailure",
+					session_id: SESSION,
+					agent_id: sub ? "worker" : undefined,
+					prompt_id: "unknown-prompt",
+					transcript_path: join(dir, "missing.jsonl"),
+					tool_name: "Bash",
+					tool_use_id: "call-missing",
+					tool_input: { command: "bun test" },
+					tool_response: { stderr: "failed" },
+				}),
+			);
+			expect(s.store.outcome(first.suggestion_id)?.quality).toBeNull();
+			expect(
+				s.argsOf("recordAttemptEvents").flatMap((args) => args[0] as unknown[]),
+			).toContainEqual(
+				expect.objectContaining({
+					call_id: "call-missing",
+					occurred_at: null,
+					agent_key: sub ? "worker" : "",
+				}),
+			);
+		});
+	}
+	test("report returns the selected attempt and explicit correction keeps identity", async () => {
+		const s = setup();
+		const { suggestion_id } = await s.api.suggest(suggestInput());
+		const first = await s.api.report({
+			suggestionId: suggestion_id,
+			model: "gpt-6-luna",
+			effort: "low",
+			result: "fail",
+		});
+		const second = await s.api.report({
+			suggestionId: suggestion_id,
+			model: "gpt-6-luna",
+			effort: "low",
+			result: "pass",
+		});
+		expect(second?.ordinal).toBe(2);
+		expect(second?.attempt_id).not.toBe(first?.attempt_id);
+		const corrected = await s.api.report({
+			suggestionId: suggestion_id,
+			model: "gpt-6-luna",
+			effort: "low",
+			result: "partial",
+			attempt: first?.attempt_id ?? undefined,
+			correct: true,
+		});
+		expect(corrected?.attempt_id).toBe(first?.attempt_id);
+		expect(corrected?.quality).toBe(0.5);
+	});
+});
+
+for (const format of ["legacy", "completed"] as const) {
+	test(`Codex ${format}: late links repair both measurements and signals; known turns never escape`, async () => {
+		const dbPath = join(dir, "codex-binding.db");
+		const s = setup({ dbPath, openStore });
+		await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			source: "codex",
+		});
+		s.setNow(T0 + 1000);
+		await s.api.suggest({ ...suggestInput(), source: "codex" });
+		const fixture = structuredClone(codexExec);
+		fixture.call.payload.input =
+			'text(await tools.exec_command({cmd:"bun test"}));';
+		fixture.completed.payload.item.command[2] = "bun test";
+		const records: unknown[] = [
+			{ timestamp: iso(T0 + 2000), ...fixture.turn },
+			...(format === "legacy"
+				? [{ timestamp: iso(T0 + 2001), ...fixture.call }, fixture.callOutput]
+				: [{ ...fixture.completed, timestamp: iso(T0 + 2001) }]),
+			{
+				...fixture.tokenUsage,
+				timestamp: iso(T0 + 2002),
+				payload: {
+					...fixture.tokenUsage.payload,
+					session_id: SESSION,
+					thread_id: SESSION,
+				},
+			},
+		];
+		const path = join(dir, "codex-binding.jsonl");
+		await Bun.write(path, records.map((r) => JSON.stringify(r)).join("\n"));
+		const stop = {
+			hook_event_name: "Stop",
+			session_id: SESSION,
+			turn_id: fixture.turn.payload.turn_id,
+			transcript_path: path,
+		};
+		await s.api.handleHook("codex:Stop", JSON.stringify(stop));
+		const link = {
+			hook_event_name: "PostToolUse",
+			session_id: SESSION,
+			turn_id: fixture.turn.payload.turn_id,
+			tool_name: "Bash",
+			tool_use_id: "exec-placeholder",
+			tool_input: { command: 'spatz "task" --json' },
+			tool_response: `suggestion_id: ${ID2}`,
+		};
+		await s.api.handleHook("codex:PostToolUse", JSON.stringify(link));
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT DISTINCT suggestion_id FROM latest_attempt_events WHERE kind IN ('test','usage')",
+					)
+					.all(),
+			).toEqual([{ suggestion_id: ID2 }]);
+			expect(
+				db
+					.query(
+						"SELECT SUM(output_tokens) AS tokens FROM usage_totals WHERE suggestion_id=?",
+					)
+					.get(ID2),
+			).toEqual({ tokens: 96 });
+		} finally {
+			db.close();
+		}
+		s.setNow(T0 + 3000);
+		const third = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			source: "codex",
+		});
+		await s.api.handleHook("codex:Stop", JSON.stringify(stop));
+		const store = openStore(dbPath);
+		try {
+			expect(store.outcome(third.suggestion_id)?.quality).toBeNull();
+		} finally {
+			store.dispose();
+		}
+	});
+	test(`Codex ${format}: source without time or linked turn stays pending`, async () => {
+		const dbPath = join(dir, "codex-pending.db");
+		const s = setup({ dbPath, openStore });
+		await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			source: "codex",
+		});
+		const fixture = structuredClone(codexExec);
+		fixture.call.payload.input =
+			'text(await tools.exec_command({cmd:"bun test"}));';
+		fixture.completed.payload.item.command[2] = "bun test";
+		const rows = [
+			fixture.turn,
+			...(format === "legacy"
+				? [fixture.call, fixture.callOutput]
+				: [fixture.completed]),
+			fixture.tokenUsage,
+		].map((row) => {
+			const copy = structuredClone(row) as {
+				timestamp?: string;
+				payload: Record<string, unknown>;
+			};
+			delete copy.timestamp;
+			delete copy.payload.session_id;
+			delete copy.payload.thread_id;
+			return copy;
+		});
+		const path = join(dir, "pending.jsonl");
+		await Bun.write(path, rows.map((row) => JSON.stringify(row)).join("\n"));
+		await s.api.handleHook(
+			"codex:Stop",
+			JSON.stringify({
+				hook_event_name: "Stop",
+				session_id: SESSION,
+				turn_id: fixture.turn.payload.turn_id,
+				transcript_path: path,
+			}),
+		);
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT kind,binding,suggestion_id FROM attempt_events ORDER BY kind",
+					)
+					.all(),
+			).toEqual([
+				{ kind: "test", binding: "pending", suggestion_id: null },
+				{ kind: "usage", binding: "pending", suggestion_id: null },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+}
+
+test("Claude late transcript supplies identity for a formerly pending hook", async () => {
+	const dbPath = join(dir, "late-transcript.db");
+	const s = setup({ dbPath, openStore });
+	await s.api.suggest({ ...suggestInput(), session: SESSION });
+	const path = join(dir, "late-transcript.jsonl");
+	const event = { ...JSON.parse(bash("bun test")), transcript_path: path };
+	await s.api.handleHook("PostToolUse", JSON.stringify(event));
+	const row = JSON.parse(assistant("late-message", "gpt-6-luna", 10));
+	row.message.content = [{ type: "tool_use", id: "toolu_1", name: "Bash" }];
+	await Bun.write(
+		path,
+		[
+			JSON.stringify({ type: "user", promptId: PROMPT }),
+			JSON.stringify(row),
+		].join("\n"),
+	);
+	await s.api.handleHook("PostToolUse", JSON.stringify(event));
+	const store = openStore(dbPath);
+	try {
+		expect(store.outcome(ID1)?.quality).toBe(1);
+	} finally {
+		store.dispose();
+	}
+});
+
+describe("preserved recording regressions", () => {
+	test.each([
+		"records",
+		"counts",
+		"thread totals",
+		"response usage",
+		"mirrors",
+	])(
+		"Codex stores per-turn tokens from %s, including reasoning exactly once",
+		async (format) => {
+			const dbPath = join(dir, "tokens.db");
+			const s = setup({
+				openStore: () => openStore(dbPath),
+				env: { SPATZ_SUGGESTION_ID: ID1 },
+			});
+			const id = await linked(s);
+			const fixture = await Bun.file(
+				`${import.meta.dir}/../signals/fixtures/codex-token-usage.jsonl`,
+			).text();
+			const rows = fixture
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			const rollout = rows
+				.filter((row) => {
+					if (format === "counts") return row.type !== "token_usage_record";
+					return format === "mirrors" || row.type !== "event_msg";
+				})
+				.map((row) => {
+					if (format === "thread totals" || format === "response usage")
+						delete row.payload.turn_token_usage;
+					if (format === "response usage")
+						delete row.payload.thread_token_usage;
+					return JSON.stringify(row);
+				})
+				.join("\n");
+			const path = join(dir, "tokens.jsonl");
+			await Bun.write(path, rollout);
+			const stop = JSON.stringify({
+				session_id: SESSION,
+				turn_id: "turn-2",
+				transcript_path: path,
+				hook_event_name: "Stop",
+			});
+			await s.api.handleHook("codex:Stop", stop);
+			await s.api.handleHook("codex:Stop", stop);
+			const db = new Database(dbPath);
+			try {
+				expect(
+					db
+						.query(
+							"SELECT suggestion_id, turn_id AS scope_key, model, effort, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens FROM latest_attempt_events WHERE kind='usage'",
+						)
+						.all(),
+				).toEqual([
+					{
+						suggestion_id: id,
+						scope_key: "turn-2",
+						model: "openai/gpt-6.1-sol",
+						effort: "medium",
+						input_tokens: 11862,
+						output_tokens: 818, // Includes 47 reasoning tokens; the last response has only 72 output tokens.
+						cache_read_tokens: 241792,
+						cache_creation_tokens: 0,
+					},
+				]);
+				// A rollout without usage must not erase an already recorded row.
+				await Bun.write(
+					path,
+					rows
+						.filter((row) => row.type === "turn_context")
+						.map((row) => JSON.stringify(row))
+						.join("\n"),
+				);
+				s.setNow(T0 + 1000);
+				await s.api.handleHook("codex:Stop", stop);
+				expect(
+					db
+						.query(
+							"SELECT output_tokens FROM latest_attempt_events WHERE kind='usage'",
+						)
+						.all(),
+				).toEqual([{ output_tokens: 818 }]);
+			} finally {
+				db.close();
+			}
+		},
+	);
+});
+
+for (const variant of ["main", "subagent"] as const) {
+	test(`captured ${variant} transcript keeps message usage, unknown effort and stable call identity`, async () => {
+		const identity = await Bun.file(
+			`${import.meta.dir}/../signals/fixtures/${variant === "main" ? "main-turn" : "subagent"}-identity.json`,
+		).json();
+		const text = await Bun.file(
+			`${import.meta.dir}/../signals/fixtures/${variant}-identity-transcript.jsonl`,
+		).text();
+		const rows = text
+			.trim()
+			.split("\n")
+			.map((row) => JSON.parse(row));
+		const first = rows.find((row) => row.type === "assistant");
+		const dbPath = join(dir, "captured.db");
+		const s = setup({ dbPath, openStore });
+		s.setNow(Date.parse(rows[0].timestamp) - 1);
+		await s.api.suggest({
+			...suggestInput(),
+			session: first.sessionId,
+			agentId: variant === "subagent" ? identity.hook.agent_id : undefined,
+		});
+		const path = join(dir, "captured.jsonl");
+		await Bun.write(path, text);
+		const stop = {
+			...identity.hook,
+			session_id: first.sessionId,
+			hook_event_name: variant === "subagent" ? "SubagentStop" : "Stop",
+			transcript_path: path,
+			agent_transcript_path: path,
+		};
+		await s.api.handleHook(stop.hook_event_name, JSON.stringify(stop));
+		await s.api.handleHook(stop.hook_event_name, JSON.stringify(stop));
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT COUNT(*) AS n,SUM(output_tokens) AS output FROM usage_totals",
+					)
+					.get(),
+			).toEqual({ n: 1, output: first.message.usage.output_tokens });
+			expect(
+				db
+					.query(
+						"SELECT message_id,call_id FROM attempt_events WHERE kind='usage'",
+					)
+					.get(),
+			).toEqual({
+				message_id: first.message.id,
+				call_id: identity.hook.tool_use_id,
+			});
+		} finally {
+			db.close();
+		}
+	});
+	test(`${variant} partial or older transcripts cannot erase observed usage`, async () => {
+		const dbPath = join(dir, "snapshots.db");
+		const s = setup({ dbPath, openStore });
+		await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			agentId: variant === "subagent" ? "worker" : undefined,
+		});
+		const path = join(dir, "snapshots.jsonl");
+		const prompt = JSON.stringify({ type: "user", promptId: PROMPT });
+		const first = assistant("one", "gpt-6-luna", 10, {}, T0 + 1000);
+		const second = assistant("two", "gpt-6-luna", 20, {}, T0 + 2000);
+		const third = assistant("three", "gpt-6-luna", 30, {}, T0 + 3000);
+		const stop = base({
+			hook_event_name: variant === "subagent" ? "SubagentStop" : "Stop",
+			transcript_path: path,
+			agent_transcript_path: path,
+			...(variant === "subagent" ? { agent_id: "worker" } : {}),
+		});
+		for (const snapshot of [
+			[prompt, first, second],
+			[prompt, third],
+			[prompt, first],
+		]) {
+			await Bun.write(path, snapshot.join("\n"));
+			await s.api.handleHook(
+				variant === "subagent" ? "SubagentStop" : "Stop",
+				JSON.stringify(stop),
+			);
+		}
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db.query("SELECT SUM(output_tokens) AS output FROM usage_totals").get(),
+			).toEqual({ output: 60 });
+		} finally {
+			db.close();
+		}
+	});
+}
+
+test.each([
+	["bun test packages/core", "PostToolUse", "test", 1, 1],
+	["bun test packages/core", "PostToolUseFailure", "test", 0, 1],
+	["bun run build", "PostToolUse", "build", 1, 0.8],
+	["bun run build", "PostToolUseFailure", "build", 0, 0.8],
+] as const)(
+	"exact prompt links keep %s %s %s signal semantics without touching receipt time",
+	async (command, event, kind, value, weight) => {
+		const s = setup();
+		await linked(s);
+		s.setNow(T0 + HOUR);
+		await s.api.handleHook(event, bash(command, "", event));
+		expect(
+			s.argsOf("recordAttemptEvents").flatMap(([rows]) => rows as object[]),
+		).toContainEqual(
+			expect.objectContaining({
+				kind,
+				value,
+				weight,
+				prompt_id: PROMPT,
+				occurred_at: null,
+			}),
+		);
+		expect(s.store.outcome(ID1)?.quality).toBe(value);
+		expect(s.store.getSuggestion(ID1)?.last_event_at).toBe(T0);
+	},
+);
+
+test("hook diagnostics are opt-in and expose no raw input", async () => {
+	const log = spyOn(console, "error").mockImplementation(() => {});
+	try {
+		const plain = setup();
+		await plain.api.handleHook("Stop", "private malformed input");
+		expect(log).not.toHaveBeenCalled();
+		const debug = setup({ env: { SPATZ_DEBUG: "1" } });
+		await debug.api.handleHook("Stop", "private malformed input");
+		expect(log).toHaveBeenCalled();
+		expect(JSON.stringify(log.mock.calls)).not.toContain(
+			"private malformed input",
+		);
+	} finally {
+		log.mockRestore();
+	}
+});
+
+test("recording transaction failure leaves earlier signals and usage intact", async () => {
+	const s = setup();
+	await linked(s);
+	const real = s.store.recordAttemptEvents;
+	s.store.recordAttemptEvents = () => {
+		throw new Error("disk unavailable");
+	};
+	await expect(
+		s.api.handleHook("PostToolUse", bash("bun test")),
+	).resolves.toBeUndefined();
+	expect(s.store.outcome(ID1)?.quality).toBeNull();
+	s.store.recordAttemptEvents = real;
+	await s.api.handleHook("PostToolUse", bash("bun test"));
+	expect(s.store.outcome(ID1)?.quality).toBe(1);
+});
+
+test.each(["low", "high"] as const)(
+	"late mod start adopts hook evidence with %s effort without creating a retry",
+	async (hookEffort) => {
+		const s = setup();
+		const { suggestion_id, classification } = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			turn: "mod-turn",
+			source: "claude-code-mod",
+		});
+		const path = join(dir, "early-hook.jsonl");
+		const row = JSON.parse(
+			assistant("early-hook", "gpt-6-luna", 10, {}, T0 + 500),
+		);
+		row.message.content = [{ type: "tool_use", id: "c1", name: "Bash" }];
+		await Bun.write(
+			path,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				JSON.stringify(row),
+			].join("\n"),
+		);
+		s.setNow(T0 + 600);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				...JSON.parse(bash("bun test")),
+				transcript_path: path,
+				tool_use_id: "c1",
+				effort: { level: hookEffort },
+			}),
+		);
+		const implicit = s.store.outcome(suggestion_id);
+		expect(implicit).toMatchObject({
+			ordinal: 1,
+			quality: 1,
+			effort: hookEffort,
+		});
+		s.setNow(T0 + 700);
+		const started = await s.api.startAttempt({
+			suggestionId: suggestion_id,
+			key: "mod-turn:0",
+			model: "gpt-6-luna",
+			effort: "low",
+			session: SESSION,
+			turn: "mod-turn",
+			ownsUsage: true,
+		});
+		expect(started).toMatchObject({
+			id: implicit?.attempt_id,
+			ordinal: 1,
+			effort: "low",
+		});
+		await s.api.bindAttempt({
+			attempt: started.id,
+			call: "c1",
+			session: SESSION,
+		});
+		expect(s.store.outcome(suggestion_id)).toMatchObject({
+			ordinal: 1,
+			quality: 1,
+			effort: "low",
+		});
+		expect(s.store.cellStats(classification.task_type)).toEqual([
+			expect.objectContaining({
+				model: "openai/gpt-6-luna",
+				effort: "low",
+				n: 1,
+				sum_quality: 1,
+			}),
+		]);
+		expect(s.store.retryStats(classification.task_type)).toEqual([]);
+	},
+);
+
+test("mod low 100/high 200 steps own usage and bind hook tools despite different prompt and turn IDs", async () => {
+	const dbPath = join(dir, "mod-steps.db");
+	const s = setup({ dbPath, openStore });
+	const { suggestion_id } = await s.api.suggest({
+		...suggestInput(),
+		session: SESSION,
+		turn: "mod-turn",
+		source: "claude-code-mod",
+	});
+	const low = await s.api.startAttempt({
+		suggestionId: suggestion_id,
+		key: "mod-turn:0",
+		model: "gpt-6-luna",
+		effort: "low",
+		session: SESSION,
+		turn: "mod-turn",
+		ownsUsage: true,
+	});
+	await s.api.bindAttempt({
+		attempt: low.id,
+		call: "low-call",
+		session: SESSION,
+	});
+	await s.api.usage({
+		suggestionId: suggestion_id,
+		attempt: low.id,
+		key: "mod-turn:0",
+		model: "gpt-6-luna",
+		effort: "low",
+		turn: "mod-turn",
+		session: SESSION,
+		source: "claude-code-mod",
+		input: 100,
+		output: 10,
+		cacheRead: 20,
+		cacheCreation: 30,
+	});
+	s.setNow(T0 + 1000);
+	const high = await s.api.startAttempt({
+		suggestionId: suggestion_id,
+		key: "mod-turn:1",
+		model: "gpt-6-luna",
+		effort: "high",
+		session: SESSION,
+		turn: "mod-turn",
+		ownsUsage: true,
+	});
+	await s.api.bindAttempt({
+		attempt: high.id,
+		call: "high-call",
+		session: SESSION,
+	});
+	const usage = {
+		suggestionId: suggestion_id,
+		attempt: high.id,
+		key: "mod-turn:1",
+		model: "gpt-6-luna",
+		effort: "high",
+		turn: "mod-turn",
+		session: SESSION,
+		source: "claude-code-mod" as const,
+		input: 200,
+		output: 20,
+		cacheRead: 40,
+		cacheCreation: 60,
+	};
+	await s.api.usage(usage);
+	await s.api.usage(usage);
+	const path = join(dir, "mod-hooks.jsonl");
+	const rows = [
+		JSON.stringify({ type: "user", promptId: PROMPT }),
+		...[
+			["low", "low-call", T0 + 1],
+			["high", "high-call", T0 + 1001],
+		].map(([id, call, at]) => {
+			const row = JSON.parse(
+				assistant(String(id), "gpt-6-luna", 999, {}, Number(at)),
+			);
+			row.message.content = [{ type: "tool_use", id: call, name: "Bash" }];
+			return JSON.stringify(row);
+		}),
+	];
+	await Bun.write(path, rows.join("\n"));
+	for (const call of ["low-call", "high-call"])
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				...JSON.parse(bash("bun test")),
+				transcript_path: path,
+				tool_use_id: call,
+			}),
+		);
+	await s.api.handleHook(
+		"Stop",
+		JSON.stringify(base({ hook_event_name: "Stop", transcript_path: path })),
+	);
+	const db = new Database(dbPath);
+	try {
+		expect(
+			db
+				.query(
+					"SELECT ordinal,effort,input_tokens,output_tokens,quality FROM attempt_outcomes ORDER BY ordinal",
+				)
+				.all(),
+		).toEqual([
+			{
+				ordinal: 1,
+				effort: "low",
+				input_tokens: 100,
+				output_tokens: 10,
+				quality: 1,
+			},
+			{
+				ordinal: 2,
+				effort: "high",
+				input_tokens: 200,
+				output_tokens: 20,
+				quality: 1,
+			},
+		]);
+		expect(
+			db
+				.query(
+					"SELECT COUNT(*) AS n FROM latest_attempt_events WHERE kind='usage'",
+				)
+				.get(),
+		).toEqual({ n: 2 });
+	} finally {
+		db.close();
+	}
+});
+
+test("same-pair Codex follow-up turns reuse the execution and A B A retains three attempts", async () => {
+	const dbPath = join(dir, "segments.db");
+	const s = setup({ dbPath, openStore });
+	await s.api.suggest(suggestInput());
+	const file = join(dir, "segments.jsonl");
+	const rows = [
+		{ type: "session_meta", payload: { id: "codex-segments" } },
+		...["gpt-6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6-luna"].flatMap(
+			(model, i) => [
+				{
+					type: "turn_context",
+					payload: { turn_id: `t${i}`, model, effort: "low" },
+				},
+				{
+					type: "token_usage_record",
+					payload: {
+						turn_id: `t${i}`,
+						turn_token_usage: {
+							input_tokens: 100,
+							cached_input_tokens: 0,
+							cache_write_input_tokens: 0,
+							output_tokens: 10,
+						},
+					},
+				},
+			],
+		),
+	];
+	await Bun.write(file, rows.map((row) => JSON.stringify(row)).join("\n"));
+	await s.api.importRollout({ file, suggestionId: ID1 });
+	await s.api.importRollout({ file, suggestionId: ID1 });
+	const db = new Database(dbPath);
+	try {
+		expect(
+			db.query("SELECT ordinal,model FROM attempts ORDER BY ordinal").all(),
+		).toEqual([
+			{ ordinal: 1, model: "openai/gpt-6-luna" },
+			{ ordinal: 2, model: "openai/gpt-6-sol" },
+			{ ordinal: 3, model: "openai/gpt-6-luna" },
+		]);
+		for (const attempt of db
+			.query<{ id: string; model: string; ordinal: number }, []>(
+				"SELECT id,model,ordinal FROM attempts ORDER BY ordinal",
+			)
+			.all()) {
+			await s.api.report({
+				suggestionId: ID1,
+				attempt: attempt.id,
+				model: attempt.model,
+				effort: "low",
+				result: attempt.ordinal === 3 ? "pass" : "fail",
+			});
+		}
+		expect(
+			db
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_outcomes WHERE suggestion_id=?",
+				)
+				.get(ID1),
+		).toEqual({ n: 3 });
+		expect(
+			db
+				.query(
+					"SELECT ordinal,model,effort,quality FROM attempt_outcomes ORDER BY ordinal",
+				)
+				.all(),
+		).toEqual([
+			{ ordinal: 1, model: "openai/gpt-6-luna", effort: "low", quality: 0 },
+			{ ordinal: 2, model: "openai/gpt-6-sol", effort: "low", quality: 0 },
+			{ ordinal: 3, model: "openai/gpt-6-luna", effort: "low", quality: 1 },
+		]);
+		expect(
+			db.query("SELECT SUM(output_tokens) AS output FROM usage_totals").get(),
+		).toEqual({ output: 40 });
+	} finally {
+		db.close();
+	}
+});
+
+test("Codex mixed pair turn records its measured total once without inventing an attempt split", async () => {
+	const dbPath = join(dir, "mixed.db");
+	const s = setup({ dbPath, openStore });
+	await s.api.suggest(suggestInput());
+	const file = join(dir, "mixed.jsonl");
+	await Bun.write(
+		file,
+		[
+			{
+				type: "turn_context",
+				payload: { turn_id: "mixed", model: "gpt-6-luna", effort: "low" },
+			},
+			{
+				type: "turn_context",
+				payload: { turn_id: "mixed", model: "gpt-6-sol", effort: "high" },
+			},
+			{
+				type: "token_usage_record",
+				payload: {
+					turn_id: "mixed",
+					turn_token_usage: {
+						input_tokens: 300,
+						cached_input_tokens: 0,
+						cache_write_input_tokens: 0,
+						output_tokens: 30,
+					},
+				},
+			},
+		]
+			.map((row) => JSON.stringify(row))
+			.join("\n"),
+	);
+	await s.api.importRollout({ file, suggestionId: ID1 });
+	const db = new Database(dbPath);
+	try {
+		expect(
+			db
+				.query(
+					"SELECT suggestion_id,attempt_id,input_tokens,output_tokens FROM usage_totals",
+				)
+				.all(),
+		).toEqual([
+			{
+				suggestion_id: ID1,
+				attempt_id: null,
+				input_tokens: 300,
+				output_tokens: 30,
+			},
+		]);
+	} finally {
+		db.close();
+	}
+});
+
+test("Codex PostToolUse links a normal skill suggestion without a --source flag", async () => {
+	const dbPath = join(dir, "codex-skill.db");
+	const s = setup({ dbPath, openStore });
+	await s.api.suggest(suggestInput());
+	await s.api.handleHook(
+		"codex:PostToolUse",
+		JSON.stringify({
+			hook_event_name: "PostToolUse",
+			session_id: SESSION,
+			turn_id: "todo-turn",
+			tool_name: "Bash",
+			tool_use_id: "exec-placeholder",
+			tool_input: { command: 'spatz "task" --json' },
+			tool_response: `suggestion_id: ${ID1}`,
+		}),
+	);
+	await s.api.handleHook(
+		"codex:Stop",
+		JSON.stringify({
+			hook_event_name: "Stop",
+			session_id: SESSION,
+			turn_id: "todo-turn",
+			transcript_path: `${import.meta.dir}/../signals/fixtures/codex-command-events.jsonl`,
+		}),
+	);
+	const db = new Database(dbPath);
+	try {
+		expect(
+			db
+				.query(
+					"SELECT SUM(output_tokens) AS output FROM usage_totals WHERE suggestion_id=?",
+				)
+				.get(ID1),
+		).toEqual({ output: 674 });
+		expect(
+			db.query("SELECT COUNT(*) AS n FROM failures WHERE kind='hook'").get(),
+		).toEqual({ n: 0 });
 	} finally {
 		db.close();
 	}

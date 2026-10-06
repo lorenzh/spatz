@@ -62,7 +62,7 @@ Add the marketplace inside Claude Code:
 | --- | --- | --- |
 | Hooks only | `/plugin install spatz@spatz` | Records test/build signals and transcript usage for linked suggestions. It does not request recommendations or switch models. Run `spatz` yourself or through your agent. |
 | Mod only | `/plugin install spatz-mod@spatz` | Requests recommendations and can apply model and effort. Records usage directly, without automatic outcome signals. Use `spatz report` for outcomes. |
-| Both | Run both install commands | The mod routes. With `record: auto`, the hooks record outcome signals and transcript usage. |
+| Both | Run both install commands | The mod routes and owns usage for its registered execution segments. Hooks record outcome signals and skip usage owned by the mod. |
 
 If you installed the 0.1.1 hooks plugin as `spatz-hooks@spatz`, migrate it:
 
@@ -78,16 +78,17 @@ In `show` mode it displays recommendations. To apply them, run `/spatz mode appl
 See the [mod guide](claude-mod.md) for routing scopes and persistent options.
 
 With both plugins enabled, keep `record: auto`.
-The mod checks for an enabled `spatz@…` hooks plugin once per session. It also recognizes the legacy `spatz-hooks@…` id.
-It then turns off its own usage recording. If that check fails, the mod records usage.
-Use `/spatz status` to check the recorder. To force hooks-only recording, use `/spatz record off`.
+`auto` equals `on`: the mod registers starts and records step usage.
+Hooks record test/build signals and skip usage owned by the mod.
+Use `/spatz status` to check the recorder.
+To use hooks for all usage recording, run `/spatz record off`.
 The shared skill skips CLI recommendations for Claude Code subagents because the mod routes them. It still uses spatz for Codex runs and other harnesses.
 
 When you install the `spatz` hooks plugin, remove hand-written `spatz hook` entries from `~/.claude/settings.json`.
 Check project settings for the same entries. Keep unrelated hooks.
 Otherwise, Claude Code runs both copies.
-The mod cannot detect hand-written hooks through the plugin list.
-If you keep those hooks with the mod, set `record: off`.
+If you use hand-written hooks with the mod, keep `record: auto`.
+The same ownership rule prevents those hooks from recording usage owned by the mod.
 
 See [hooks](hooks.md) for event details and attribution limits.
 
@@ -123,8 +124,8 @@ claude --plugin-dir ./spatz-plugin
 On macOS, use `shasum -a 256 --check` for the checksum.
 Use `spatz-claude-hooks-<version>.zip` for the `spatz` hooks plugin. ZIP names stay stable across the plugin ID rename.
 `--plugin-dir` loads an extracted plugin for that session.
-If you load both plugins manually, set `/spatz record off`.
-Automatic detection checks installed plugins.
+If you load both plugins manually, keep `record: auto`.
+Hooks record outcome signals and skip usage owned by the mod.
 The ZIPs include the launcher and skill. The launcher downloads the CLI when needed.
 
 ## Use with Codex

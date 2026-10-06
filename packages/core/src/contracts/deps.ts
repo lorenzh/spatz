@@ -1,4 +1,5 @@
 // Injection seams. Unit tests pass fakes for all of these; no network, no real home dir.
+import type { AttemptStore } from "./attempts.ts";
 import type { DifficultyInput } from "./difficulty.ts";
 import type {
 	Agent,
@@ -8,7 +9,6 @@ import type {
 	Outcome,
 	ReportResult,
 	RoutingScope,
-	SignalRecord,
 	StatsReport,
 	Suggestion,
 	SuggestionRecord,
@@ -91,7 +91,7 @@ export type RandomFn = () => number;
 
 // ---------- Store (implemented by store module with bun:sqlite) ----------
 
-export interface Store {
+export interface Store extends AttemptStore {
 	/** One observation per session and agent; fill missing fields only. */
 	upsertDispatch(record: DispatchRecord): void;
 	/** Count once per kind, event, session and turn; count each call when either id is absent. */
@@ -108,8 +108,10 @@ export interface Store {
 		},
 	): void;
 	getSuggestion(id: string): SuggestionRecord | null;
-	/** Non-test outcomes with a used pair, grouped by (task_type, difficulty, model, effort), for one task_type (all difficulties). */
+	/** First attempts of root suggestions plus legacy/eval outcomes, grouped by cell and actual pair. Non-test only. */
 	cellStats(taskType: TaskType): CellStat[];
+	/** Later attempts and --retry-of chain members, grouped by cell and actual pair. Non-test only. */
+	retryStats(taskType: TaskType): CellStat[];
 	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */
 	linkSession(
 		suggestionId: string,
@@ -117,15 +119,8 @@ export interface Store {
 		promptId: string | null,
 		at: number,
 		agentId?: string,
+		harness?: "codex" | "claude-code",
 	): string[];
-	/** Latest suggestion of the selected agent sequence with closed_at null and last_event_at >= now - openWindowMs; else null. */
-	/** Unknown agents use the main sequence. An agent with a closed window does not fall back. */
-	findOpenSuggestion(
-		sessionId: string,
-		now: number,
-		openWindowMs: number,
-		agentId?: string | null,
-	): string | null;
 	/** Time windows [start, end) of the selected agent sequence that overlap [from, to]. start = created_at; end = the earlier of closed_at and last_event_at + openWindowMs (inclusive). */
 	sessionWindows(
 		sessionId: string,
@@ -134,10 +129,7 @@ export interface Store {
 		openWindowMs: number,
 		agentId?: string | null,
 	): { id: string; start: number; end: number }[];
-	/** Set last_event_at. */
-	touch(suggestionId: string, at: number): void;
 	closeSuggestion(suggestionId: string, at: number): void;
-	insertSignal(record: SignalRecord): void;
 	/** Upsert on (suggestion_id, source, scope_key, model). */
 	upsertUsage(record: UsageRecord): void;
 	getUsage(
@@ -146,30 +138,6 @@ export interface Store {
 		scopeKey: string,
 		model: string,
 	): UsageRecord | null;
-	/** Distinct transcript and subagent usage scopes of the suggestions, with their stored effort. */
-	usageScopes(
-		suggestionIds: string[],
-	): Pick<UsageRecord, "source" | "scope_key" | "effort">[];
-	/**
-	 * Replace one (source, scope_key) of the session from a transcript snapshot, in one IMMEDIATE transaction that rolls back on error.
-	 * Returns false and writes nothing when the snapshot is older than the stored watermark: an earlier last_at, or the same last_at with fewer messages.
-	 * Else: windows over [from, last_at], delete the scope's rows in the session, insert rows(windows), store the watermark.
-	 */
-	rewriteScope(
-		scope: {
-			session_id: string;
-			source: UsageRecord["source"];
-			scope_key: string;
-			agent_id?: string | null;
-			message_count: number;
-			from: number;
-			last_at: number;
-			openWindowMs: number;
-		},
-		rows: (
-			windows: { id: string; start: number; end: number }[],
-		) => UsageRecord[],
-	): boolean;
 	outcome(suggestionId: string): Outcome | null;
 	/** Close the database handle. */
 	dispose(): void;
@@ -205,6 +173,7 @@ export interface CoreDeps {
 // ---------- Use-case API (what the CLI and a later MCP server call) ----------
 
 export interface SuggestInput {
+	retryOf?: string;
 	/** Original explicit model before routing; "-" means no explicit model. */
 	requested?: string;
 	/** Custom Claude agent whose definition supplies the model when none is explicit. */
@@ -222,6 +191,9 @@ export interface SuggestInput {
 }
 
 export interface ReportInput {
+	attempt?: string;
+	correct?: boolean;
+	confirm?: boolean;
 	suggestionId: string;
 	model: string;
 	effort: string;
@@ -233,6 +205,10 @@ export interface ReportInput {
 }
 
 export interface UsageInput {
+	attempt?: string;
+	key?: string;
+	session?: string;
+	agentId?: string;
 	costUsd?: number;
 	suggestionId: string;
 	model: string;
@@ -257,6 +233,23 @@ export interface StatsInput {
 }
 
 export interface SpatzApi {
+	startAttempt(input: {
+		suggestionId: string;
+		key: string;
+		model: string;
+		effort?: string;
+		session: string;
+		agentId?: string;
+		turn?: string;
+		ownsUsage?: boolean;
+	}): Promise<import("./attempts.ts").AttemptRecord>;
+	bindAttempt(input: {
+		attempt: string;
+		call: string;
+		session: string;
+		agentId?: string;
+	}): Promise<void>;
+	finalizeAttempts(input: { session: string; agentId?: string }): Promise<void>;
 	/** Import each Codex turn against an explicit suggestion; the same turn replaces its prior records. */
 	importRollout(input: {
 		file: string;

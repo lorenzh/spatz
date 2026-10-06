@@ -25,7 +25,7 @@ function directory() {
 	return dir;
 }
 
-async function fixture(dir: string, version = 5) {
+async function fixture(dir: string, version = 7) {
 	const path = join(dir, "spatz.db");
 	const db = new Database(path);
 	handles.push(db);
@@ -39,6 +39,7 @@ async function fixture(dir: string, version = 5) {
 // Use the previous schema to exercise a real migration and restore with the old CLI.
 async function previousStore(dir: string) {
 	const source = (await Bun.file(join(import.meta.dir, "index.ts")).text())
+		.replaceAll('from "./attempt', `from "${import.meta.dir}/attempt`)
 		.replaceAll(
 			'from "../contracts/',
 			`from "${join(import.meta.dir, "../contracts")}/`,
@@ -77,7 +78,18 @@ test("previous-schema WAL data is backed up before migration and restores with t
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION,
 	});
-	expect(rows(migrated)).toMatchObject(before);
+	expect(rows(migrated)).toMatchObject(
+		before.map((set, i) =>
+			i === 0
+				? (set as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) => ({
+							...r,
+							closed_at: closed_at ?? expect.any(Number),
+						}),
+					)
+				: set,
+		),
+	);
 	const backup = `${path}.bak-v${SCHEMA_VERSION - 1}`;
 	expect(existsSync(backup)).toBe(true);
 	const restoredPath = join(dir, "restored.db");
@@ -190,31 +202,103 @@ console.log("ready"); openDatabase(process.argv[1]).close();`;
 	}
 });
 
-test("previous-version fixture preserves all data and adds an empty dispatch ledger", async () => {
-	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
+test("v7 fixture preserves all data and adds an empty attempt ledger", async () => {
+	const { path, db } = await fixture(directory(), 7);
 	const before = rows(db);
 	const migrated = openDatabase(path);
 	handles.push(migrated);
-	expect(rows(migrated)).toMatchObject(before);
-	expect(migrated.query("SELECT * FROM dispatches").all()).toEqual([]);
+	expect(rows(migrated)).toMatchObject(
+		before.map((set, i) =>
+			i === 0
+				? (set as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) => ({
+							...r,
+							closed_at: closed_at ?? expect.any(Number),
+						}),
+					)
+				: set,
+		),
+	);
+	expect(migrated.query("SELECT * FROM attempts").all()).toEqual([]);
+	expect(
+		migrated
+			.query("SELECT * FROM legacy_outcomes WHERE suggestion_id='proof'")
+			.get(),
+	).toEqual({ suggestion_id: "proof", quality: 1, model: "A", effort: "low" });
+	expect(
+		migrated
+			.query(
+				"SELECT SUM(output_tokens) AS n FROM usage_totals WHERE suggestion_id='proof'",
+			)
+			.get(),
+	).toEqual({ n: 60 });
+	expect(migrated.query("PRAGMA foreign_keys").get()).toEqual({
+		foreign_keys: 1,
+	});
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION,
 	});
 });
 
-test("dispatch migration failure rolls back every statement and the version", async () => {
-	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
-	db.run("CREATE TABLE dispatches (conflict TEXT)");
+test("attempt migration failure rolls back every statement and the version", async () => {
+	const { path, db } = await fixture(directory(), 7);
+	db.run("CREATE TABLE attempts (conflict TEXT)");
 	const before = rows(db);
 	expect(() => openDatabase(path)).toThrow();
 	expect(rows(db)).toEqual(before);
 	expect(db.query("PRAGMA user_version").get()).toEqual({
-		user_version: SCHEMA_VERSION - 1,
+		user_version: 7,
 	});
 	expect(
 		db
 			.query("PRAGMA table_info(suggestions)")
 			.all()
-			.some((r) => (r as { name: string }).name === "requested_model"),
+			.some((r) => (r as { name: string }).name === "is_legacy"),
 	).toBe(false);
+});
+
+test("v7 migration creates report metadata and indexed latest revisions", async () => {
+	const dir = directory();
+	const { path } = await fixture(dir, 7);
+	const migrated = openDatabase(path);
+	handles.push(migrated);
+	migrated.run(`INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at,output_tokens)
+ VALUES('claude-code','session','','event',0,'pending','usage','transcript',1000,20),
+ ('claude-code','session','','event',1,'pending','usage','transcript',1001,30)`);
+	expect(
+		migrated
+			.query(
+				"SELECT event_id,output_tokens,rounds,note FROM latest_attempt_events",
+			)
+			.all(),
+	).toEqual([
+		{ event_id: "event", output_tokens: 30, rounds: null, note: null },
+	]);
+	expect(migrated.query("PRAGMA user_version").get()).toEqual({
+		user_version: 8,
+	});
+	expect(
+		migrated
+			.query(
+				"SELECT name FROM sqlite_master WHERE type='index' AND name='events_attempt'",
+			)
+			.get(),
+	).toEqual({ name: "events_attempt" });
+});
+
+test("v8 index failure rolls back the whole ledger and keeps v7 rows", async () => {
+	const dir = directory();
+	const { path, db } = await fixture(dir, 7);
+	db.run("CREATE INDEX events_attempt ON suggestions(id)");
+	const before = rows(db);
+	expect(() => openDatabase(path)).toThrow();
+	expect(rows(db)).toEqual(before);
+	expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+	expect(
+		db
+			.query(
+				"SELECT name FROM sqlite_master WHERE type='table' AND name='attempt_events'",
+			)
+			.get(),
+	).toBeNull();
 });

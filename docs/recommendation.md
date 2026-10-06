@@ -2,7 +2,7 @@
 title: How spatz picks a model and effort
 description: The decision rule of spatz: cells, the Beta estimate, thresholds, cost order, critical tasks, exploration, the control group and how quality is computed.
 tags: [spatz, recommendation, learning]
-keywords: [decision rule, strategy, learned, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
+keywords: [attempt, retry, chain, outcome, decision rule, strategy, learned, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
 ---
 
 # How spatz picks a model and effort
@@ -21,7 +21,7 @@ For each candidate in a cell, spatz computes an estimate of the success rate:
 estimate = (1 + sum of quality) / (2 + n)
 ```
 
-`n` is the number of outcomes of the candidate in the cell. `quality` is the value of one outcome, from 0 to 1. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each outcome moves the estimate towards the observed quality.
+`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `quality` ranges from 0 to 1. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each first-attempt outcome moves the estimate towards the observed quality.
 
 Only some outcomes count:
 
@@ -30,6 +30,15 @@ Only some outcomes count:
 - An outcome counts only when spatz knows both the model and the effort of the used pair.
 - Outcomes of models that are not in the current `--models` list do not count.
 - Old outcomes do not decay.
+
+Each reported retry keeps its own outcome in separate retry history.
+A same-pair reported failure followed by a pass contributes `n=1` and `sum_quality=0` to the first-attempt estimate.
+The retry contributes `n=1` and `sum_quality=1` to retry history.
+`store.cellStats(taskType)` uses only ordinal 1 of root suggestions and legacy/eval outcomes.
+`store.retryStats(taskType)` groups later ordinals and `--retry-of` chain members by cell and actual model/effort pair.
+Retry outcomes cannot change the first-attempt estimate.
+An internal test-fix-test loop stays in one attempt. Its latest ordered result supplies the quality.
+A sequence `A → B → A` keeps three attempts even when the first and last pairs match.
 
 ### Enough data and pooling
 
@@ -111,10 +120,11 @@ The control group gets the most expensive candidate in 10 % of the normal sugges
 | `learned_success` | Success rate of learned picks: strategy `learned` and not explored. |
 | `control_success` | Success rate of the control group. |
 | `coverage` | Share of suggestions (without `--dry-run`) that have an outcome. |
-| `adoption` | Per task type: share of outcomes whose used pair is the recommended pair. |
+| `adoption` | Per task type: share of root decisions whose first actual pair is the recommended pair. |
 | `success` | Per pair: share of outcomes with quality `≥ 0.8`. |
 
-spatz compares `learned_success` and `control_success` per cell. It uses only cells that have both groups. It weights each cell by its number of outcomes in both groups. If no cell has both groups, both fields are empty (`-` in text output, `null` in JSON).
+spatz compares first-attempt quality once per root for `learned_success` and `control_success`.
+It groups these root decisions per cell. It uses only cells that have both groups. It weights each cell by its number of outcomes in both groups. If no cell has both groups, both fields are empty (`-` in text output, `null` in JSON).
 
 If `learned_success` is about as high as `control_success`, the cheaper picks are good enough. If it is clearly lower, the learned picks lose quality. Small `n` gives noisy rates.
 
@@ -122,7 +132,8 @@ For the command options, read [cli.md](cli.md).
 
 ## Quality and success
 
-The `outcomes` view computes one quality value per suggestion from its signals.
+The `attempt_outcomes` view computes quality for each attempt with evidence.
+The `outcomes` view combines these rows with frozen legacy outcomes.
 
 | Signal | Source | Value | Weight |
 |---|---|---|---|
@@ -132,13 +143,19 @@ The `outcomes` view computes one quality value per suggestion from its signals.
 
 The rules:
 
-1. If a report exists, the quality is the value of the latest report. Hook signals do not count.
-2. Without a report, spatz takes the latest value per signal kind. The quality is the weighted mean over the kinds.
+1. If an attempt has a report, its verdict supplies quality. Hook signals do not override that report.
+2. Without a report, spatz takes the latest ordered value per signal kind within that attempt. Quality is their weighted mean.
 3. Without a signal, there is no outcome.
 
-The used pair comes from the latest report. Without a report, it is the model with the most output tokens in the time window of the suggestion. Its effort is the latest recorded effort for that model. If the catalog lists only `none` for a model, spatz records missing effort as `none`.
+Conflicting observations without source order stay unresolved.
+Execution evidence supplies the actual pair. A report fills only unknown pair fields.
+The recommended pair alone supplies no execution evidence.
+`--correct` changes a prior verdict without adding a retry or cost.
+An identical report is a replay. A changed reported verdict without `--correct` creates a retry.
+With `--confirm`, a changed prior verdict is an error instead.
+If the catalog lists only `none` for a model, spatz normalizes missing effort to `none`.
 Learning also treats older null-effort outcomes as `none` for those models.
-For other models, outcomes without a known effort do not count for learning.
+Other unknown pairs cannot train learning.
 
 An outcome is a success when quality `≥ 0.8`. `partial` is not a success.
 
@@ -152,17 +169,23 @@ They do not change the learning cell or its thresholds.
 
 Session windows use `(session_id, agent_id)`. Each subagent can keep an independent open suggestion.
 The main sequence uses a null agent id.
-A suggestion can cover several turns. Direct usage records each turn separately.
+A suggestion can cover several turns. Mod usage keeps each step separate.
 Direct usage has no success value. Explicit reports or test/build signals supply that value.
-The outcome view still computes one outcome per suggestion.
+Each scored attempt has its own outcome. Usage alone supplies no quality.
 See [how-it-works.md](how-it-works.md#direct-attribution) for the fields and migration.
 
-`spatz stats --by scope` compares outcomes and token totals per scope.
+`spatz stats --by scope` counts completed recovery chains under the root suggestion's scope.
 It includes input, output, cache-read and cache-creation tokens.
 The cache-read share divides cache-read tokens by all input tokens, including cache creation.
 Suggestions without a scope appear on a separate line.
-`n` counts outcomes. Usage without an outcome still contributes tokens.
-The view does not estimate cost or routing latency.
+`n` counts each completed chain once. Legacy outcomes keep their previous meaning.
+Usage without an outcome still contributes tokens.
+Each execution keeps its tokens. Chain decision cost counts all linked attempts once under the first actual pair.
+For costs `10 → 20 → 70`, the root cost is `100`.
+Failed chains contribute cost too. Orchestration overhead stays in chain totals with a null attempt ID.
+Separate review suggestions keep separate chains.
+USD totals use stored prices or reported costs and exclude legacy `tokens_schema = 1` rows.
+The view does not measure routing latency.
 See [cli.md](cli.md#spatz-stats) for the output fields.
 
 ## Worked example

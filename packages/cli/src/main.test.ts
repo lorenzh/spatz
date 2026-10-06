@@ -39,6 +39,13 @@ const suggestion: Suggestion = {
 };
 
 const outcome: Outcome = {
+	attempt_id: "attempt-2",
+	ordinal: 2,
+	root_id: "attempt-1",
+	input_tokens: 100,
+	output_tokens: 200,
+	cache_read_tokens: 300,
+	cache_creation_tokens: 400,
 	suggestion_id: "abc-123",
 	quality: 1,
 	model: "openai/gpt-6-sol",
@@ -68,6 +75,8 @@ const statsReport: StatsReport = {
 			adoption_rate: 0.75,
 			input_tokens: 1200,
 			output_tokens: 340,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
 		},
 	],
 	coverage: 0.8,
@@ -94,6 +103,15 @@ function fakeIO(stdin: () => Promise<string> = async () => "{}") {
 function fakeApi(overrides: Partial<SpatzApi> = {}) {
 	const calls: { method: string; args: unknown[] }[] = [];
 	const api: SpatzApi = {
+		startAttempt: async () => {
+			throw new Error("unexpected attempt start");
+		},
+		bindAttempt: async () => {
+			throw new Error("unexpected attempt bind");
+		},
+		finalizeAttempts: async () => {
+			throw new Error("unexpected attempt finalize");
+		},
 		importRollout: async () => {
 			throw new Error("unexpected import");
 		},
@@ -124,6 +142,23 @@ function fakeApi(overrides: Partial<SpatzApi> = {}) {
 }
 
 describe("suggest", () => {
+	test("explicit suggest forwards the retry chain", async () => {
+		const { io } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(
+			await main(
+				["suggest", "fix the retry", "--retry-of", "previous"],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(calls).toEqual([
+			{
+				method: "suggest",
+				args: [{ task: "fix the retry", dryRun: false, retryOf: "previous" }],
+			},
+		]);
+	});
 	test("passes task and raw --models to api.suggest", async () => {
 		const { io } = fakeIO();
 		const { api, calls } = fakeApi();
@@ -308,6 +343,39 @@ describe("--json", () => {
 });
 
 describe("report", () => {
+	test("forwards explicit attempt and correction and returns the selected report", async () => {
+		const { io, stdout } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(
+			await main(
+				[
+					"report",
+					"abc-123",
+					"--model",
+					"m",
+					"--effort",
+					"low",
+					"--result",
+					"pass",
+					"--attempt",
+					"attempt-2",
+					"--correct",
+					"--json",
+				],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(calls[0]?.args[0]).toEqual({
+			suggestionId: "abc-123",
+			model: "m",
+			effort: "low",
+			result: "pass",
+			attempt: "attempt-2",
+			correct: true,
+		});
+		expect(JSON.parse(stdout())).toEqual(outcome);
+	});
 	test("calls api.report with rounds as integer and note", async () => {
 		const { io } = fakeIO();
 		const { api, calls } = fakeApi();
@@ -673,7 +741,7 @@ describe("stats", () => {
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
 			[
-				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cost_usd=-",
+				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-",
 				"  openai/gpt-6-sol:medium  n=3  success=67%",
 				"  anthropic/claude-opus-5.5:-  n=1  success=100%",
 				"coverage: 80%  learned_success: 70%  control_success: -",
@@ -718,6 +786,94 @@ describe("stats", () => {
 });
 
 describe("mod CLI", () => {
+	test("attempt start, bind, and finalize carry stable execution identity", async () => {
+		const seen: unknown[] = [];
+		const { api } = fakeApi({
+			startAttempt: async (input) => {
+				seen.push(input);
+				return { id: "a1" } as never;
+			},
+			bindAttempt: async (input) => {
+				seen.push(input);
+			},
+			finalizeAttempts: async (input) => {
+				seen.push(input);
+			},
+		});
+		const { io, stdout } = fakeIO();
+		expect(
+			await main(
+				[
+					"attempt",
+					"start",
+					"s1",
+					"--key",
+					"t:0",
+					"--model",
+					"m",
+					"--effort",
+					"low",
+					"--session",
+					"session",
+					"--agent-id",
+					"child",
+					"--turn",
+					"t",
+					"--owns-usage",
+					"--json",
+				],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(JSON.parse(stdout())).toEqual({ id: "a1" });
+		expect(
+			await main(
+				[
+					"attempt",
+					"bind",
+					"a1",
+					"--call",
+					"call1",
+					"--session",
+					"session",
+					"--agent-id",
+					"child",
+				],
+				fakeIO().io,
+				api,
+			),
+		).toBe(0);
+		expect(
+			await main(
+				["attempt", "finalize", "--session", "session", "--agent-id", "child"],
+				fakeIO().io,
+				api,
+			),
+		).toBe(0);
+		expect(seen).toEqual([
+			{
+				suggestionId: "s1",
+				key: "t:0",
+				model: "m",
+				effort: "low",
+				session: "session",
+				agentId: "child",
+				turn: "t",
+				ownsUsage: true,
+			},
+			{ attempt: "a1", call: "call1", session: "session", agentId: "child" },
+			{ session: "session", agentId: "child" },
+		]);
+		for (const args of [
+			["attempt"],
+			["attempt", "wat"],
+			["attempt", "start", "s1"],
+			["attempt", "bind", "a1"],
+			["attempt", "finalize"],
+		])
+			expect(await main(args, fakeIO().io, api)).toBe(2);
+	});
 	test("suggest passes explicit linking flags and scope", async () => {
 		const { io } = fakeIO();
 		const { api, calls } = fakeApi();
@@ -1080,4 +1236,32 @@ test("suggestion CLI forwards requested models and the explicit absent marker", 
 			requestedAgent: "pinned",
 		});
 	}
+});
+
+test("report forwards confirmation of an explicit attempt", async () => {
+	const { io } = fakeIO();
+	const { api, calls } = fakeApi();
+	expect(
+		await main(
+			[
+				"report",
+				"abc-123",
+				"--model",
+				"m",
+				"--effort",
+				"low",
+				"--result",
+				"pass",
+				"--attempt",
+				"attempt-id",
+				"--confirm",
+			],
+			io,
+			api,
+		),
+	).toBe(0);
+	expect(calls[0]?.args[0]).toMatchObject({
+		attempt: "attempt-id",
+		confirm: true,
+	});
 });

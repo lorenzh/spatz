@@ -25,6 +25,9 @@ function session(
 		suggestion?: (n: number) => Out | Promise<Out>;
 		plugins?: Out;
 		link?: Out;
+		bind?: () => Out | Promise<Out>;
+		startAttempt?: () => Out | Promise<Out>;
+		onStep?: () => void;
 		sessionIdThrows?: boolean;
 	} = {},
 ) {
@@ -57,6 +60,18 @@ function session(
 				if (argv[0] === "claude")
 					return over.plugins ?? { exitCode: 0, stdout: "[]", stderr: "" };
 				const args = argv[0] === "sh" ? argv.slice(2) : argv.slice(1);
+				if (args[0] === "attempt" && args[1] === "bind" && over.bind)
+					return over.bind();
+				if (args[0] === "attempt" && args[1] === "start" && over.startAttempt)
+					return over.startAttempt();
+				if (args[0] === "attempt")
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({
+							id: `attempt-${args[args.indexOf("--key") + 1]}`,
+						}),
+						stderr: "",
+					};
 				if (args[0] === "usage")
 					return { exitCode: 0, stdout: "{}", stderr: "" };
 				if (args[0] === "link")
@@ -93,7 +108,8 @@ function session(
 	const suggests = () =>
 		argvs.filter(
 			(a) =>
-				!["usage", "link"].includes(cliArgs(a)[0] ?? "") && a[0] !== "claude",
+				!["usage", "link", "attempt"].includes(cliArgs(a)[0] ?? "") &&
+				a[0] !== "claude",
 		);
 	const links = () => argvs.filter((a) => cliArgs(a)[0] === "link");
 	const usages = () =>
@@ -171,6 +187,7 @@ function session(
 			{ index: 0, model: "inherited", messageCount: 1, ...e } as TurnStepInput,
 			async function* (input) {
 				seen = input;
+				over.onStep?.();
 				events.push(`yield after ${suggests().length} suggests`);
 				yield { kind: "text", index: 0, text: "x" };
 				return {
@@ -193,6 +210,7 @@ function session(
 		agentId: string | undefined,
 		isError: boolean,
 		result: unknown = "failed",
+		onCall: () => void = () => {},
 	) =>
 		hook<
 			(
@@ -203,10 +221,12 @@ function session(
 		>("tool.call")(
 			$,
 			{ tool: "Bash", command, tool_use_id: "t", agentId } as ToolCallInput,
-			async () =>
-				(isError
-					? { isError: true, result }
-					: { result: { stdout: "" } }) as ToolCallResult,
+			async () => {
+				onCall();
+				return (
+					isError ? { isError: true, result } : { result: { stdout: "" } }
+				) as ToolCallResult;
+			},
 		);
 
 	const complete = (e: Partial<TurnCompleteInput> & { turnId: string }) =>
@@ -802,7 +822,7 @@ describe("record", () => {
 		cache_creation_input_tokens: 40,
 	};
 
-	test("on: usage after each step and at turn.complete, keyed by turn", async () => {
+	test("on: disjoint step usage keeps attempt identity; completion does not add a turn total", async () => {
 		const s = session({ mode: "show", scope: "turn", record: "on" });
 		await s.start("t1", LONG);
 		await s.step({ turnId: "t1" });
@@ -820,8 +840,9 @@ describe("record", () => {
 			turnId: "t1",
 			usage: { ...turnUsage, output_tokens: 25 },
 		});
-		expect(s.usages()).toHaveLength(2);
-		expect(s.flag(s.usages()[1] as string[], "--output")).toBe("25");
+		expect(s.usages()).toHaveLength(1);
+		expect(s.flag(argv, "--key")).toBe("t1:0");
+		expect(s.flag(argv, "--attempt")).toBe("attempt-t1:0");
 	});
 
 	test("a subagent run records under its own turn id", async () => {
@@ -829,10 +850,7 @@ describe("record", () => {
 		await s.spawn({});
 		await s.step({ turnId: "run1", agentId: "a1" });
 		await s.complete({ turnId: "run1", agentId: "a1", usage: turnUsage });
-		expect(s.usages().map((u) => s.flag(u, "--turn"))).toEqual([
-			"run1",
-			"run1",
-		]);
+		expect(s.usages().map((u) => s.flag(u, "--turn"))).toEqual(["run1"]);
 	});
 
 	test("complete without usage records nothing; unknown turns record nothing", async () => {
@@ -869,7 +887,7 @@ describe("record", () => {
 			await s.spawn({});
 			await s.step({ turnId: "r1", agentId: "a1" });
 			await s.complete({ turnId: "r1", agentId: "a1", usage: turnUsage });
-			expect(s.usages()).toHaveLength(2);
+			expect(s.usages()).toHaveLength(1);
 		}
 		const mod = session(
 			{ mode: "show", record: "auto" },
@@ -1076,4 +1094,162 @@ test("every mod suggestion carries the original requested model or the absent ma
 			expect(s.flag(argv, "--requested")).toBe("-");
 		}
 	}
+});
+
+test("step starts precede execution, auto owns main usage, and tool calls bind to the active step", async () => {
+	const s = session(
+		{ mode: "apply", scope: "turn", main: true, record: "auto" },
+		{
+			plugins: {
+				exitCode: 0,
+				stdout: JSON.stringify([{ id: "spatz@spatz", enabled: true }]),
+				stderr: "",
+			},
+		},
+	);
+	await s.start("t1", LONG);
+	await s.step({ turnId: "t1", index: 0 });
+	await s.bash("bun test", undefined, false);
+	await s.step({ turnId: "t1", index: 1 });
+	const args = s.argvs.map((a) => (a[0] === "sh" ? a.slice(2) : a.slice(1)));
+	const starts = args.filter((a) => a[0] === "attempt" && a[1] === "start");
+	expect(starts).toHaveLength(1);
+	expect(starts[0]).toContain("--owns-usage");
+	expect(s.flag(starts[0] ?? [], "--model")).toBe("claude-sonnet-5-5");
+	expect(s.flag(starts[0] ?? [], "--effort")).toBe("medium");
+	expect(s.usages().map((a) => s.flag(a, "--key"))).toEqual(["t1:0", "t1:1"]);
+	expect(args.find((a) => a[0] === "attempt" && a[1] === "bind")).toEqual([
+		"attempt",
+		"bind",
+		"attempt-t1:0",
+		"--call",
+		"t",
+		"--session",
+		"sess1",
+	]);
+	expect(s.usages().map((a) => s.flag(a, "--output"))).toEqual(["20", "20"]);
+	expect(s.usages().map((a) => s.flag(a, "--effort"))).toEqual([
+		"medium",
+		"medium",
+	]);
+	await s.complete({ turnId: "t1" });
+	expect(s.argvs.some((a) => a.includes("finalize"))).toBe(true);
+});
+
+test("record off never registers usage ownership; show records sent effort without borrowing the recommendation", async () => {
+	const off = session({ mode: "show", scope: "turn", record: "off" });
+	await off.start("off", LONG);
+	await off.step({ turnId: "off" });
+	expect(off.argvs.some((a) => a.includes("attempt"))).toBe(false);
+	const shown = session({ mode: "show", scope: "turn", record: "on" });
+	await shown.start("t1", LONG);
+	await shown.step({ turnId: "t1", model: "claude-opus-5-5", effort: "low" });
+	const start = shown.argvs.find((a) => a.includes("--owns-usage")) ?? [];
+	expect(shown.flag(start, "--model")).toBe("claude-opus-5-5");
+	expect(shown.flag(start, "--effort")).toBe("low");
+	expect(shown.flag(shown.usages()[0] ?? [], "--effort")).toBe("low");
+});
+
+test("same-pair TDD and follow-up turns keep their attempt; A to B to A starts three segments", async () => {
+	const s = session({ mode: "show", scope: "session", record: "on" });
+	await s.start("t1", LONG);
+	await s.step({
+		turnId: "t1",
+		index: 0,
+		model: "claude-sonnet-5-5",
+		effort: "low",
+	});
+	await s.bash("bun test", undefined, true);
+	await s.step({
+		turnId: "t1",
+		index: 1,
+		model: "claude-sonnet-5-5",
+		effort: "low",
+	});
+	await s.bash("bun test", undefined, false);
+	await s.complete({ turnId: "t1" });
+	await s.start("t2", LONG);
+	await s.step({
+		turnId: "t2",
+		index: 0,
+		model: "claude-sonnet-5-5",
+		effort: "low",
+	});
+	await s.step({
+		turnId: "t2",
+		index: 1,
+		model: "claude-opus-5-5",
+		effort: "high",
+	});
+	await s.step({
+		turnId: "t2",
+		index: 2,
+		model: "claude-sonnet-5-5",
+		effort: "low",
+	});
+	const starts = s.argvs.filter((a) => a.includes("--owns-usage"));
+	expect(starts.map((a) => s.flag(a, "--key"))).toEqual([
+		"t1:0",
+		"t2:1",
+		"t2:2",
+	]);
+	expect(s.usages().map((a) => s.flag(a, "--attempt"))).toEqual([
+		"attempt-t1:0",
+		"attempt-t1:0",
+		"attempt-t1:0",
+		"attempt-t2:1",
+		"attempt-t2:2",
+	]);
+});
+
+test("tool calls execute while their attempt binding is pending", async () => {
+	let release!: (result: Out) => void;
+	const binding = new Promise<Out>((resolve) => {
+		release = resolve;
+	});
+	const s = session(
+		{ mode: "show", scope: "turn", record: "auto" },
+		{ bind: () => binding },
+	);
+	await s.start("t1", LONG);
+	await s.step({ turnId: "t1", index: 0 });
+	let calls = 0;
+	const tool = s.bash("bun test", undefined, false, undefined, () => calls++);
+	try {
+		expect(calls).toBe(1);
+		await tool;
+		expect(s.argvs.some((a) => a.includes("bind"))).toBe(true);
+	} finally {
+		release({ exitCode: 0, stdout: "{}", stderr: "" });
+		await tool;
+	}
+});
+
+test("model requests and tools execute while their attempt start is pending", async () => {
+	const start = Promise.withResolvers<Out>();
+	const executing = Promise.withResolvers<void>();
+	const s = session(
+		{ mode: "show", scope: "turn", record: "auto" },
+		{ startAttempt: () => start.promise, onStep: () => executing.resolve() },
+	);
+	await s.start("t1", LONG);
+	const step = s.step({ turnId: "t1" });
+	try {
+		await executing.promise;
+		let calls = 0;
+		await s.bash("bun test", undefined, false, undefined, () => calls++);
+		expect(calls).toBe(1);
+		expect(s.usages()).toHaveLength(0);
+	} finally {
+		start.resolve({
+			exitCode: 0,
+			stdout: '{"id":"delayed-attempt"}',
+			stderr: "",
+		});
+		await step;
+	}
+	expect(s.flag(s.usages()[0] ?? [], "--attempt")).toBe("delayed-attempt");
+	expect(s.argvs.find((a) => a.includes("bind"))).toContain("delayed-attempt");
+	await s.complete({ turnId: "t1" });
+	expect(s.argvs.some((a) => a.includes("finalize"))).toBe(true);
 });

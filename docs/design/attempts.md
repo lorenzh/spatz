@@ -22,7 +22,7 @@ Claude hooks and Codex record at turn granularity or coarser. Only the mod split
 ```text
 spatz suggest <task> [--retry-of <suggestion_id>]
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail
-             [--attempt <id>] [--correct]
+             [--attempt <id>] [--correct | --confirm]
 # Mod only; context also supplies harness, session and agent:
 spatz attempt start <suggestion_id> --key <turnId:index> --model <m> --effort <e>
 ```
@@ -32,10 +32,12 @@ The skill propagates suggestion IDs. It needs no start call or attempt ID. The m
 Report selection also runs in that transaction:
 
 ```text
+if --confirm: require --attempt; reject --correct
 if --attempt: select that attempt; check suggestion ownership and pair
 else: select highest ordinal with same model and effort null or equal
       (the unused implicit attempt with null model is also compatible)
 if none: create next attempt with reported pair
+if --confirm and prior report differs: reject; use --correct
 if --correct: require a prior report; replace its verdict
 else if selected report equals this report: return it unchanged
 else if selected already has a report: create next attempt; store report
@@ -154,15 +156,23 @@ An unbound follow-up prompt/turn can use the window. A known p1 cannot fall thro
 
 Time windows are half-open and use a shared source clock. Receipt time cannot replace source time. Clock skew cannot change exact identity. Late events cannot extend today's idle window. Explicit adapter links connect prompt and turn aliases.
 
-On new links or transcripts, reconcile pending/window events and their provisional aliases together. Move signals and usage in one transaction. Exact bindings stay fixed. Conflicting window credit returns to pending. Preserve message IDs and source order before aggregation. Partial or older transcripts cannot erase evidence.
+On links, starts and bindings, reconcile pending/window events and provisional aliases within the affected harness, session and agent. On ordinary event writes, resolve new events and pending events in that context. Recompute only affected recovery roots. Prune expired pending event identities and their revisions in batches of 256, using receipt time and `openWindowMs`. Move signals and usage in one transaction. Exact bindings stay fixed. Conflicting window credit returns to pending. Preserve message IDs and source order before aggregation. Partial or older transcripts cannot erase evidence.
 
 Main-session orchestration usage in a delegated suggestion's window belongs to suggestion totals with a null attempt. Main-session test/build signals bind to the most recent closed delegated attempt, even when the prompt is already bound. Detect delegation from an Agent tool use in source order within the window, not hook arrival order. Persist the signal choice; later reports cannot retarget it. The orchestrator's model does not replace the worker's pair. Limit: main-session self-fixes also land on that delegated attempt. Explicit attempt identity can override this fallback.
+
+`report --attempt <id> --confirm` records a verdict on an existing attempt without creating a retry. It rejects a changed prior report; use `--correct` for that. The two flags cannot be combined.
 
 ## Outcomes, consumers and cost
 
 `attempt_outcomes` has one row per attempt with quality evidence. The report wins. Otherwise combine the latest test and build with weights 1.0 and 0.8. Conflicting observations without source order stay unresolved. Usage alone creates no quality. Expose UUID, ordinal, root, actual pair, quality and four token totals.
 
-`cellStats` counts scored attempts once. Same-pair reported fail/pass gives `n=2, sum_quality=1`. An internal TDD fail/pass gives one passing outcome. Keep dry-run exclusion, difficulty normalization and catalog-confirmed `none` normalization. Unknown pairs cannot train learning.
+`cellStats` counts scored root first attempts (`ordinal=1` and `attempt_id=root_id`) plus frozen legacy/eval outcomes.
+`retryStats` counts later ordinals and `--retry-of` chain members separately per pair and cell.
+Same-pair reported fail/pass gives first-attempt `n=1, sum_quality=0` and retry `n=1, sum_quality=1`.
+A retry never changes the first-attempt estimate.
+An internal TDD fail/pass gives one passing outcome.
+Both histories exclude dry runs and normalize difficulty and catalog-confirmed `none` effort.
+Unknown pairs cannot train learning.
 
 `usage_totals` exposes `suggestion_id`, nullable `attempt_id`, pair fields and all four token columns.
 The sketch below predates #67. Implementation must also carry `cost_usd`, `cost_source`, `tokens_complete` and `tokens_schema` from `usages`.

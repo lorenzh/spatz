@@ -91,7 +91,11 @@ spatz stats
 
 Replace `<suggestion_id>` with the ID from the recommendation.
 Results can be `pass`, `partial`, or `fail`.
-An explicit report overrides hook signals for that recommendation.
+An explicit report overrides hook signals for its selected attempt.
+A changed verdict creates a retry. Use `--correct` to fix a mistaken report.
+Use `--attempt <id> --confirm` to report on an existing attempt without creating a retry.
+Use `spatz suggest "Retry the task" --retry-of <suggestion_id>` to link a new suggestion to the same recovery chain.
+See [report flags](docs/cli.md#spatz-report) for explicit attempt selection.
 
 For experiments, add `--dry-run` to the recommendation command.
 These suggestions never count toward learning or statistics.
@@ -117,7 +121,7 @@ See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recomme
 | Other agents | Request recommendations and report outcomes through the CLI. | [CLI reference](docs/cli.md) |
 
 The Claude Code mod supports `step`, `turn`, `subagent`, `session`, and `escalate` routing scopes.
-Hooks and the mod can run together. The mod's `record: auto` avoids duplicate usage recording with the `spatz` hooks plugin.
+Hooks and the mod can run together. With `record: auto`, the mod records step usage and hooks record signals.
 
 ### Install for Claude Code
 
@@ -147,7 +151,7 @@ The mod needs Claude Code 2.1.287 or newer.
    /spatz status
    ```
 
-   When you install both plugins, keep `record: auto`. Hooks record signals and main usage. The mod records routed subagent usage.
+   When you install both plugins, keep `record: auto`. Hooks record signals. The mod owns usage for its registered execution segments.
    To apply recommendations to the main session too, enable `/spatz main on`.
 
 3. Remove any manual `spatz hook` entries from `~/.claude/settings.json` and project settings.

@@ -2,12 +2,12 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
+keywords: [attempt, retry, binding, pending, identity, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
 ---
 
 # Claude Code hooks for spatz
 
-spatz learns which pair of model and effort succeeds. It needs results for that. Claude Code hooks give spatz these results without extra work from the agent: test and build results, and the models and tokens the session used. `spatz report` gives an explicit result. A report wins over all hook signals.
+spatz learns which pair of model and effort succeeds. It needs results for that. Claude Code hooks give spatz these results without extra work from the agent: test and build results, and the models and tokens the session used. `spatz report` gives an explicit result. A report wins over the hook signals for its selected attempt.
 
 The hooks never block a session. `spatz hook` always exits with code 0 and prints nothing by default.
 With `SPATZ_DEBUG=1`, the hook writes diagnostics to stderr. It still ignores all errors.
@@ -33,14 +33,13 @@ No separate CLI install is needed when either package runner is available.
 The first run downloads about 60 MB. Package runners use the plugin's version.
 Remove hand-written `spatz hook` entries from `~/.claude/settings.json` and project settings to avoid duplicate calls.
 Keep unrelated hooks.
-With both plugins, leave `record: auto`. Hooks record signals and main usage; the mod records routed subagent usage.
+With both plugins, leave `record: auto`. Hooks record signals. The mod owns usage for the execution segments it registers.
 
 ### Manual settings
 
 If you do not install the hooks plugin, use these settings instead.
-With manual hooks and main-session mod routing, set the mod's `record: off`.
-For subagent-only routing, `auto` keeps the mod's more complete usage.
-Automatic detection checks installed plugins only.
+Manual hooks use the same explicit usage ownership as plugin hooks.
+With `record: off`, the mod registers no usage-owning starts. Hooks then record transcript usage.
 
 1. Make sure that `spatz` is on the `PATH` of a non-interactive shell. A shell alias is not enough. The [README](../README.md) shows a small wrapper script.
 2. Select the settings file:
@@ -88,7 +87,8 @@ spatz handles these four events. Other events do no harm, but they give no signa
 
 spatz ignores the `SubagentHandback` tool event and the second `UserPromptSubmit` that a subagent handback starts.
 
-Signal weights: `test` 1.0, `build` 0.8, `report` 1.0. Without a report, spatz takes the newest value per signal kind. The quality is the weighted mean over the kinds. Without any signal, the suggestion has no outcome. Token usage alone does not make an outcome.
+Signal weights: `test` 1.0, `build` 0.8, `report` 1.0. Within each attempt, spatz takes the latest ordered value per signal kind. Quality is their weighted mean.
+Conflicting observations without source order stay unresolved. Usage alone creates no quality evidence.
 
 The hooks store no prompt text and no tool output. They store signals, model ids, efforts and token counts. See [privacy.md](privacy.md).
 
@@ -135,7 +135,8 @@ Without explicit linking, the `PostToolUse` hook makes the link:
 3. spatz reads the suggestion id from the output. Text output gives the line `suggestion_id: <uuid>`. JSON output gives the field `"suggestion_id"`.
 4. spatz stores `session_id` and `prompt_id` with the suggestion. Subagent events also supply `agent_id`.
 
-Later signals and usage use the matching session and agent window.
+Later signals and usage first use source identity within the matching session and agent.
+Only unbound identities can fall back to a trustworthy source-time window.
 
 ```mermaid
 sequenceDiagram
@@ -178,11 +179,31 @@ A suggestion is open from its creation until the first of these events:
 
 - `spatz report` for this suggestion.
 - The next linked suggestion with the same session and agent id. The old window ends at the new suggestion.
-- 2 hours without activity in that window. Each matching hook event resets this time.
+- 2 hours without source activity in that window. Receipt of a late event does not extend it.
 
-Signals go to the open suggestion of the matching session and agent window. Token usage goes to the suggestion whose window holds the time stamp of each transcript message. Messages before the first suggestion of that window sequence count for no suggestion.
+Signals and usage share the same attempt resolver.
+Exact call, message and start IDs select an attempt even after its window closes.
+Existing prompt and turn bindings restrict the candidates.
+An old prompt cannot select a new suggestion because its event arrived late.
+Only trustworthy source time can select an otherwise unbound window.
+Receipt time does not count. Missing transcripts or source time leave events `pending`.
+Pending events receive no quality credit or unassigned token totals.
+They expire after `openWindowMs` without a binding, measured from receipt.
+Each event batch removes up to 256 expired event identities across the database.
+It removes their revisions together, so expiry cannot restore stale credit.
+This limit keeps cleanup from holding the write lock for a large backlog.
+New batches continue cleanup; an idle database does not run background cleanup.
 
-Hooks run async, so the link can arrive after `Stop` or `SubagentStop`. In that case spatz reads the transcripts again and puts each message in the correct window. A replayed or older transcript snapshot does not overwrite newer data.
+Windows are half-open. Bound source activity advances `last_event_at` with `MAX(last_event_at, occurred_at)`.
+A late event uses its source time. Receipt time never extends the window.
+A delayed link can shorten a window or supply missing identity.
+The store then moves signals and usage together in one transaction.
+Repairs only visit the affected harness, session and agent, and their recovery roots.
+Ordinary hook writes resolve new events and pending events in that context.
+They do not replay the history of window-bound events.
+Provisional window bindings move with their events. Exact bindings stay fixed.
+Conflicting provisional credit returns to pending.
+Replayed or older transcripts cannot erase newer evidence.
 
 ## Subagents
 
@@ -191,10 +212,20 @@ Its suggestions do not close the main window or another subagent's window.
 If an agent has no linked suggestion, its hooks use the main sequence as before.
 If it has a linked suggestion, closure does not send later events back to the main sequence.
 
-- `SubagentStop` reads `<session>/subagents/agent-<agent_id>.jsonl`. spatz sums the tokens per model.
+- `SubagentStop` reads `<session>/subagents/agent-<agent_id>.jsonl`. spatz preserves message identity before aggregating usage.
 - `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts and no effort, because the `effort.level` in this event belongs to the main session.
 
-Without a report, the used pair is the model with the most output tokens assigned to the suggestion. Its effort is the newest effort that a hook gave for that model. A report always sets the used pair.
+Execution evidence supplies the attempt's actual pair. A report can fill unknown fields but cannot replace known fields.
+Subagent effort stays null unless the mod supplies it.
+Main-hook effort is usable only when a mod does not rewrite the main steps.
+Claude transcript entries are deduplicated by `message.id` within the session and agent.
+Entry UUIDs and tool-use IDs are not usage message IDs.
+
+After a delegated execution, main-session test/build signals select the latest closed delegate in the same suggestion window.
+An Agent tool call in source order proves delegation.
+Later reports do not retarget this signal choice.
+Main-session orchestration tokens belong to suggestion totals with no attempt ID.
+Main-session self-fixes follow the same fallback unless explicit identity selects an attempt.
 
 ## Dispatch observations
 
@@ -224,6 +255,7 @@ No prompt text or tool output is stored.
 The identity fixtures confirm that `agent_id` joins hook and mod observations.
 Agent tool calls also share `tool_use_id`.
 Mod `turnId` and hook `prompt_id` are different ids.
+The ledger links a dispatch to its attempt by `(session_id, agent_id)`.
 See [dispatch counts](cli.md#dispatch-counts) for the stats fields.
 
 ## Mod and hooks together
@@ -233,15 +265,19 @@ It does not exclude them by provenance. This supports separate routing and recor
 The mod routes through the CLI. Hooks can record signals and transcript usage for those suggestions.
 Direct `spatz usage` records tokens without a transcript.
 
-With `record: auto`, the mod records routed subagent usage even when the hooks plugin is enabled.
-Subagent transcripts undercount output tokens ([#86](https://github.com/lorenzh/spatz/issues/86)).
-The first mod usage removes hook estimates for that session and agent.
-Later hook usage for the same agent is ignored. Test and build signals still count.
-Hooks-only subagent totals remain lower-bound estimates until #86 is fully resolved.
+With `record: auto`, the mod registers usage ownership and records each step for main sessions and routed subagents.
+Hooks keep test/build signals but skip usage covered by those ownership bindings.
+The mod supplies the answering model and sent effort for each disjoint step.
+It never attributes a mixed turn total to the last pair.
+With `record: off`, the mod registers no usage-owning starts. Hooks resume turn-level transcript recording.
 
-Main-session automatic recording still uses the hooks plugin when enabled.
-Do not force both recorders on for main usage. Their turn ids cannot safely be matched.
-When you install the hooks plugin, remove equivalent hand-written entries from `~/.claude/settings.json`.
+Subagent transcripts undercount output tokens ([#86](https://github.com/lorenzh/spatz/issues/86)).
+The mod's measurements replace hook estimates for the same session and agent.
+Later hook replays cannot add those estimates again.
+Hooks-only subagent totals remain lower-bound estimates.
+Explicit bindings connect hook tool-use IDs to mod tool-call IDs.
+They never assume that mod `turnId` equals hook `prompt_id`.
+When installing the plugin, remove equivalent hand-written hook entries.
 
 ## Limits
 
@@ -305,7 +341,7 @@ SPATZ_SUGGESTION_ID=<suggestion_id> codex exec -m gpt-6-sol -c model_reasoning_e
 ```
 
 The routing skill adds this prefix. Codex passes the environment to the plugin hooks.
-At Stop, the plugin records that turn's usage and test/build signals against the named suggestion.
+At Stop, the plugin binds that run's attempts, usage and test/build signals to the named suggestion.
 The explicit ID works after `spatz report` closes the suggestion or its time window expires.
 It leaves the parent session link unchanged. For an unknown ID, the hook records a failure. It cannot select another suggestion.
 Without the variable, hooks use the existing session attribution.
@@ -317,7 +353,7 @@ spatz import-rollout <rollout.jsonl> --suggestion <suggestion_id>
 ```
 
 The file must belong to that run. The import records every recognized turn in the file.
-Both paths use the same turn keys. Replaying hooks or imports replaces those records without adding tokens twice.
+Both paths use the same run and turn identities. Replaying hooks or imports cannot add duplicate attempts or tokens.
 A file without usage leaves stored usage unchanged. For imports, use the latest complete rollout.
 Run `spatz report` separately to record your verified verdict.
 
@@ -331,7 +367,15 @@ The latest test and build results for that turn replace earlier results when Sto
 These signals use source `Stop` and the turn ID. Replayed events do not add duplicate signals.
 Codex has no `SubagentStop` or `PostToolUseFailure` hook.
 
+Legacy `call_id` and completed-command `item.id` use separate identity namespaces.
+A shared turn does not prove that these IDs describe the same call.
+The parser prefers completed commands and suppresses legacy mirrors.
+The hook placeholder `exec-placeholder` is not call identity.
+
 Codex usage comes from the last `token_usage_record` for the turn.
+Cumulative snapshots replace prior snapshots. They are never summed.
+If an in-turn pair switch has no separate counters, usage stays in suggestion totals with a null attempt ID.
+Per-attempt cost remains incomplete. spatz does not invent a token split.
 An explicit `turn_token_usage` takes priority over `token_count` totals, which can lag after compaction.
 If turn totals are absent, spatz uses the change in thread totals or sums per-response `usage` records.
 Older rollouts use `event_msg` records with type `token_count`.

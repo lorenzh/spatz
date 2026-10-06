@@ -26,21 +26,80 @@ const PROMPT = hookEvents.spatzCall.prompt_id;
 
 let home: string;
 let dbPath: string;
+let transcriptStart: number;
+let transcriptEarliest: number;
 
-/** Fixture transcript copy whose timestamps start 1 min from now, so they fall inside the window of suggestions made by this run. */
+/** Keep fixture source order within the real suggestion/report window. */
 async function shiftedTranscript(name: string): Promise<string> {
-	const text = await Bun.file(join(SIGNAL_FIXTURES, name)).text();
+	let text = await Bun.file(join(SIGNAL_FIXTURES, name)).text();
+	if (name === "main-transcript.jsonl") {
+		const calls = [undefined, undefined, hookEvents.agentTool];
+		let index = 0;
+		text = text
+			.split("\n")
+			.map((line) => {
+				if (!line) return line;
+				const row = JSON.parse(line);
+				if (row.message?.content?.[0]?.type === "tool_use") {
+					const call = calls[index++];
+					if (call)
+						row.message.content = [
+							{
+								type: "tool_use",
+								id: call.tool_use_id,
+								name: call.tool_name,
+								input: call.tool_input,
+							},
+						];
+				}
+				return JSON.stringify(row);
+			})
+			.join("\n");
+		// Main-session verification follows the captured child execution in source order.
+		text +=
+			"\n" +
+			[hookEvents.testPass, hookEvents.buildFail]
+				.map((call, index) =>
+					JSON.stringify({
+						type: "assistant",
+						uuid: `verify-entry-${index}`,
+						timestamp: `2026-10-03T22:19:${28 + index}.000Z`,
+						message: {
+							id: `verify-message-${index}`,
+							model: "claude-sonnet-5-5",
+							usage: {
+								input_tokens: 0,
+								output_tokens: 0,
+								cache_read_input_tokens: 0,
+								cache_creation_input_tokens: 0,
+							},
+							content: [
+								{
+									type: "tool_use",
+									id: call.tool_use_id,
+									name: call.tool_name,
+									input: call.tool_input,
+								},
+							],
+						},
+					}),
+				)
+				.join("\n");
+	}
 	const stamps = [...text.matchAll(/"timestamp": *"([^"]+)"/g)].map((m) =>
 		Date.parse(m[1] as string),
 	);
-	const shift = Date.now() + 60_000 - Math.min(...stamps);
+	if (name === "main-transcript.jsonl") {
+		transcriptStart = Date.now();
+		transcriptEarliest = Math.min(...stamps);
+	}
 	const path = join(home, name);
 	await Bun.write(
 		path,
 		text.replace(
 			/"timestamp": *"([^"]+)"/g,
 			(_, t: string) =>
-				`"timestamp": "${new Date(Date.parse(t) + shift).toISOString()}"`,
+				`"timestamp": "${new Date(transcriptStart + Math.round((Date.parse(t) - transcriptEarliest) / 1000)).toISOString()}"`,
 		),
 	);
 	return path;
@@ -255,6 +314,8 @@ describe("hook", () => {
 		const s = await spatz([TASK, "--models", MODELS, "--json"]);
 		linkedStdout = s.stdout;
 		linkedId = (JSON.parse(s.stdout) as Suggestion).suggestion_id;
+		mainTranscript = await shiftedTranscript("main-transcript.jsonl");
+		subagentTranscript = await shiftedTranscript("subagent-transcript.jsonl");
 		const r = await hook(hookEvents.spatzCall, linkedStdout);
 		expect(r).toEqual({ stdout: "", stderr: "", code: 0 });
 		const d = db();
@@ -322,7 +383,7 @@ describe("hook", () => {
 			expect(
 				d
 					.query(
-						"SELECT kind, value, weight FROM signals WHERE suggestion_id = ? ORDER BY kind",
+						"SELECT kind, value, weight FROM latest_attempt_events WHERE suggestion_id = ? AND kind IN ('test', 'build') ORDER BY kind",
 					)
 					.all(linkedId),
 			).toEqual([
@@ -331,34 +392,18 @@ describe("hook", () => {
 			]);
 			const usages = d
 				.query(
-					"SELECT source, model, effort, scope_key, is_sidechain, output_tokens FROM usages WHERE suggestion_id = ? ORDER BY source",
+					"SELECT model, effort, agent_key, output_tokens FROM latest_attempt_events WHERE suggestion_id = ? AND kind = 'usage'",
 				)
 				.all(linkedId) as Record<string, unknown>[];
-			expect(usages.map((u) => u.source)).toEqual([
-				"agent_tool",
-				"subagent",
-				"transcript",
-			]);
-			expect(usages[0]).toMatchObject({
-				model: "anthropic/claude-sonnet-5.5",
-				effort: null,
-				scope_key: hookEvents.agentTool.tool_response.agentId,
-				is_sidechain: 1,
-			});
-			expect(usages[1]).toMatchObject({
-				model: "anthropic/claude-sonnet-5.5",
-				effort: "low",
-				scope_key: hookEvents.subagentStop.agent_id,
-				is_sidechain: 1,
-			});
-			expect(usages[2]).toMatchObject({
-				model: "anthropic/claude-sonnet-5.5",
-				effort: "low",
-				scope_key: PROMPT,
-				is_sidechain: 0,
-			});
-			for (const u of usages.slice(1))
-				expect(u.output_tokens as number).toBeGreaterThan(0);
+			expect(usages.length).toBeGreaterThan(0);
+			expect(
+				usages
+					.filter((u) => u.agent_key !== "")
+					.every((u) => u.effort === null),
+			).toBe(true);
+			expect(usages.reduce((n, u) => n + Number(u.output_tokens ?? 0), 0)).toBe(
+				445,
+			);
 			// Hook-only outcome: weighted mean of the latest test (1, w 1) and build (0, w 0.8).
 			const o = d
 				.query("SELECT quality FROM outcomes WHERE suggestion_id = ?")
@@ -404,7 +449,7 @@ describe("report", () => {
 		expect(r.stderr).toBe("");
 		expect(r.code).toBe(0);
 		const o: Outcome = JSON.parse(r.stdout);
-		expect(o).toEqual({
+		expect(o).toMatchObject({
 			suggestion_id: linkedId,
 			quality: 1,
 			model: "anthropic/claude-sonnet-5.5",
@@ -465,8 +510,13 @@ describe("report", () => {
 async function countSignals() {
 	const d = db();
 	try {
-		return (d.query("SELECT COUNT(*) AS n FROM signals").get() as { n: number })
-			.n;
+		return (
+			d
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_events WHERE kind IN ('test', 'build', 'report')",
+				)
+				.get() as { n: number }
+		).n;
 	} finally {
 		d.close();
 	}
@@ -479,7 +529,7 @@ describe("stats", () => {
 		expect(r.code).toBe(0);
 		const s: StatsReport = JSON.parse(r.stdout);
 		const other = s.by_type.find((t) => t.task_type === "other");
-		// Non-test suggestions: first (partial), luna (none), linked (pass).
+		// Main verification and its report score the same delegated attempt.
 		expect(other?.n).toBe(2);
 		expect(other?.pairs).toEqual([
 			{
@@ -598,13 +648,15 @@ test("mod CLI stores explicit attribution, usage replays, direct reports and sco
 		expect(
 			d
 				.query(
-					"SELECT COUNT(*) AS n FROM usages WHERE suggestion_id = ? AND source = 'claude-code-mod'",
+					"SELECT COUNT(*) AS n FROM latest_attempt_events WHERE suggestion_id = ? AND source = 'claude-code-mod' AND kind = 'usage'",
 				)
 				.get(id),
 		).toEqual({ n: 1 });
 		expect(
 			d
-				.query("SELECT COUNT(*) AS n FROM signals WHERE suggestion_id = ?")
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_events WHERE kind IN ('test', 'build', 'report') AND suggestion_id = ?",
+				)
 				.get(id),
 		).toEqual({ n: 1 });
 	} finally {
@@ -869,16 +921,242 @@ test("Codex environment link and fallback import persist the same run", async ()
 		expect(
 			conn
 				.query(
-					"SELECT source, output_tokens, tokens_schema FROM usages WHERE suggestion_id = ?",
+					"SELECT source, output_tokens, tokens_schema FROM latest_attempt_events WHERE suggestion_id = ? AND kind = 'usage'",
 				)
 				.all(id),
 		).toEqual([{ source: "transcript", output_tokens: 674, tokens_schema: 2 }]);
 		expect(
 			conn
-				.query("SELECT COUNT(*) AS n FROM signals WHERE suggestion_id = ?")
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_events WHERE kind IN ('test', 'build', 'report') AND suggestion_id = ?",
+				)
 				.get(id),
 		).toEqual({ n: 4 });
 	} finally {
 		conn.close();
 	}
 });
+
+test("concurrent hook processes allocate attempts, replay starts, and retain late signals and usage", async () => {
+	const grown = new Database(dbPath);
+	try {
+		grown.run(
+			`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<22000)
+   INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at)
+   SELECT 'claude-code','grown-' || i,'','pending',0,'pending','test','hook',? FROM n`,
+			[Date.now()],
+		);
+	} finally {
+		grown.close();
+	}
+	const suggested = await spatz([
+		TASK,
+		"--models",
+		"gpt-6-sol:low",
+		"--dry-run",
+		"--json",
+	]);
+	expect(suggested.code).toBe(0);
+	const id = JSON.parse(suggested.stdout).suggestion_id as string;
+	const at = Date.now() + 1000;
+	const runs = await Promise.all(
+		Array.from({ length: 6 }, async (_, i) => {
+			const session = `attempt-race-${i}`;
+			const turn = `turn-${i}`;
+			const file = join(home, `race-${i}.jsonl`);
+			await Bun.write(
+				file,
+				[
+					{ type: "session_meta", payload: { id: session } },
+					{
+						timestamp: new Date(at).toISOString(),
+						type: "turn_context",
+						payload: {
+							turn_id: turn,
+							model: "gpt-6-sol",
+							effort: i % 2 ? "high" : "low",
+						},
+					},
+					{
+						timestamp: new Date(at + 1).toISOString(),
+						type: "event_msg",
+						payload: {
+							type: "item_completed",
+							turn_id: turn,
+							item: {
+								type: "CommandExecution",
+								id: `exec-${i}`,
+								command: ["bash", "-lc", "bun test"],
+								exit_code: 0,
+							},
+						},
+					},
+					{
+						timestamp: new Date(at + 2).toISOString(),
+						type: "token_usage_record",
+						ordinal: 4,
+						payload: {
+							turn_id: turn,
+							turn_token_usage: {
+								input_tokens: 100,
+								cached_input_tokens: 20,
+								cache_write_input_tokens: 0,
+								output_tokens: i + 1,
+							},
+						},
+					},
+				]
+					.map((row) => JSON.stringify(row))
+					.join("\n"),
+			);
+			return JSON.stringify({
+				hook_event_name: "Stop",
+				session_id: session,
+				turn_id: turn,
+				transcript_path: file,
+			});
+		}),
+	);
+	const replies = await Promise.all(
+		[...runs, ...runs].map((stdin) =>
+			spatz(["hook", "Stop", "--agent", "codex"], stdin, {
+				SPATZ_SUGGESTION_ID: id,
+			}),
+		),
+	);
+	for (const reply of replies)
+		expect(reply).toEqual({ code: 0, stdout: "", stderr: "" });
+	const conn = db();
+	try {
+		expect(
+			conn
+				.query(
+					"SELECT ordinal FROM attempts WHERE suggestion_id = ? ORDER BY ordinal",
+				)
+				.all(id),
+		).toEqual(Array.from({ length: 6 }, (_, i) => ({ ordinal: i + 1 })));
+		expect(
+			conn
+				.query(
+					"SELECT COUNT(*) AS n, SUM(output_tokens) AS output FROM usage_totals WHERE suggestion_id = ?",
+				)
+				.get(id),
+		).toEqual({ n: 6, output: 21 });
+		expect(
+			conn
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_events WHERE suggestion_id = ? AND kind = 'test'",
+				)
+				.get(id),
+		).toEqual({ n: 6 });
+	} finally {
+		conn.close();
+	}
+
+	const late = await spatz([
+		TASK,
+		"--models",
+		"claude-sonnet-5-5:low",
+		"--dry-run",
+		"--json",
+	]);
+	const lateId = JSON.parse(late.stdout).suggestion_id as string;
+	const file = join(home, "late-race.jsonl");
+	const lateAt = Date.now() + 1000;
+	await Bun.write(
+		file,
+		[
+			{
+				type: "user",
+				uuid: "p-race",
+				promptId: "p-race",
+				timestamp: new Date(lateAt).toISOString(),
+			},
+			{
+				type: "assistant",
+				uuid: "entry",
+				timestamp: new Date(lateAt + 2).toISOString(),
+				message: {
+					id: "message-race",
+					model: "claude-sonnet-5-5",
+					usage: {
+						input_tokens: 1,
+						output_tokens: 2,
+						cache_read_input_tokens: 3,
+						cache_creation_input_tokens: 4,
+					},
+					content: [
+						{
+							type: "tool_use",
+							id: "call-race",
+							name: "Bash",
+							input: { command: "bun test" },
+						},
+					],
+				},
+			},
+		]
+			.map((row) => JSON.stringify(row))
+			.join("\n"),
+	);
+	const context = {
+		session_id: "late-race",
+		prompt_id: "p-race",
+		transcript_path: file,
+		effort: { level: "low" },
+	};
+	const signal = {
+		...context,
+		hook_event_name: "PostToolUse",
+		tool_name: "Bash",
+		tool_use_id: "call-race",
+		tool_input: { command: "bun test" },
+		tool_response: { stdout: "" },
+	};
+	const stop = { ...context, hook_event_name: "Stop" };
+	await Promise.all(
+		[signal, stop].map((e) =>
+			spatz(["hook", e.hook_event_name], JSON.stringify(e)),
+		),
+	);
+	const link = {
+		...context,
+		hook_event_name: "PostToolUse",
+		tool_name: "Bash",
+		tool_use_id: "link-race",
+		tool_input: { command: 'spatz "task" --json' },
+		tool_response: { stdout: late.stdout },
+	};
+	for (const result of await Promise.all(
+		[link, stop, signal, link, stop].map((e) =>
+			spatz(["hook", e.hook_event_name], JSON.stringify(e)),
+		),
+	))
+		expect(result.code).toBe(0);
+	const final = db();
+	try {
+		expect(
+			final
+				.query(
+					"SELECT SUM(output_tokens) AS output FROM usage_totals WHERE suggestion_id = ?",
+				)
+				.get(lateId),
+		).toEqual({ output: 2 });
+		expect(
+			final
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_events WHERE suggestion_id = ? AND kind = 'test' AND binding <> 'pending'",
+				)
+				.get(lateId),
+		).toEqual({ n: 1 });
+		expect(
+			final
+				.query(
+					"SELECT COUNT(*) AS n FROM failures WHERE event = 'codex:Stop' AND session_id LIKE 'attempt-race-%'",
+				)
+				.get(),
+		).toEqual({ n: 0 });
+	} finally {
+		final.close();
+	}
+}, 30_000);

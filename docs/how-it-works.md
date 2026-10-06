@@ -2,7 +2,7 @@
 title: How spatz works
 description: The terms, core modules, suggestion flow, Jev classification and SQLite data model of spatz.
 tags: [spatz, architecture, classification, data-model]
-keywords: [cost, tokens, price_snapshot, tokens_schema, fallback, failures, launcher, diagnostics, concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
+keywords: [attempt, retry, binding, recovery chain, chain, cost, tokens, price_snapshot, tokens_schema, fallback, failures, launcher, diagnostics, concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
 ---
 
 # How spatz works
@@ -20,7 +20,9 @@ For the decision rule, read [recommendation.md](recommendation.md). For data tha
 | Suggestion | The result of one `spatz "<task>"` call: an id, a ranking of 1 to 3 candidates, a reason and the classification. |
 | Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz usage`, `spatz report` or Claude Code and Codex CLI transcripts. |
 | Signal | One observed result for a suggestion: a report value, a test run or a build run. |
-| Outcome | The quality of one suggestion (0 to 1), computed from its signals, plus the pair that was actually used. |
+| Attempt | One execution by an actual model/effort pair. It has a UUID and an ordinal within its suggestion. |
+| Outcome | The quality of one attempt (0 to 1), computed from its signals, plus its actual pair. |
+| Recovery chain | Attempts linked to one root attempt, including suggestions created with `--retry-of`. |
 | Cell | The pair (task type, difficulty). spatz learns success rates per cell. |
 
 Effort is one of `none`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, in this cost order.
@@ -65,8 +67,8 @@ flowchart LR
 4. `recommend` reads the learned history of the task type and picks a candidate.
 5. `store` saves the suggestion without the task text. The CLI prints the suggestion. The first output line is `suggestion_id: <id>`.
 6. The Claude Code `PostToolUse` hook sees the `spatz` call. It reads the suggestion id from the output and links the suggestion to the session and prompt.
-7. Later hook events of the same session add signals and usage to the open suggestion.
-8. `spatz report` adds an explicit result and closes the suggestion.
+7. Later hook events bind signals and usage to their originating attempt using source identity or a trustworthy source-time window.
+8. `spatz report` records the selected attempt's result and closes its suggestion window.
 9. The next suggestion for the same task type uses the new outcomes.
 
 A suggestion stays open until the first of these events:
@@ -185,9 +187,15 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 | Table or view | Content |
 |---|---|
 | `suggestions` | One row per recommendation with its classification, ranking and strategy. Also stores timestamps, flags and attribution fields. No task text. |
-| `usages` | Model, effort and token counts per suggestion. `source` is `report`, `transcript`, `subagent`, `agent_tool` or `claude-code-mod`. A report usage also holds `rounds` and `note`. |
-| `signals` | One row per signal: kind (`report`, `test`, `build`), value, weight, source and time. |
-| `outcomes` | A view, not a table. It computes quality and the used pair per suggestion. See [recommendation.md](recommendation.md#quality-and-success). |
+| `usages`, `signals` | Frozen measurements and signals for legacy suggestions. |
+| `attempts` | Execution UUID, ordinal, start key, actual pair, root and closure times. |
+| `attempt_bindings` | External prompt, turn, call, message and start IDs linked to attempts. |
+| `attempt_events` | Derived signals and usage with source identity, revision and binding state. No raw input. |
+| `attempt_outcomes` | Quality evidence and four token totals per attempt. |
+| `legacy_outcomes` | The unchanged pre-attempt outcome query over frozen legacy rows. |
+| `outcomes` | Legacy outcomes plus attempt outcomes. See [recommendation.md](recommendation.md#quality-and-success). |
+| `usage_totals` | Legacy and current authoritative usage, with nullable attempt IDs and normalized cost fields. |
+| `dispatches` | One observation per session/agent pair, linked to its attempt through that pair. |
 | `usage_scopes` | One watermark per transcript scope. See below. |
 | `failures` | Parse and hook failures with kind, event, timestamp, session id and turn key. No transcript text or error messages. |
 
@@ -220,9 +228,9 @@ It uses the suggestion's `agent = 'codex'` or a transcript row with an `openai/`
 All USD aggregates exclude schema-1 rows. Historical rows have unavailable cost and unknown completeness.
 Token reports keep the historical counts. These can mix inclusive and uncached Codex input.
 
-The [attempt ledger](design/attempts.md) remains a design for #34.
-Its future `usage_totals` view can reuse these cost fields and schema exclusions.
-It must aggregate each usage measurement once before joining outcomes.
+The `usage_totals` view carries these cost fields and schema exclusions across legacy and attempt usage.
+Stats aggregate each measurement once before joining outcomes.
+Pending usage without a suggestion contributes no tokens or cost.
 See [CLI stats](cli.md#spatz-stats) for the current totals.
 
 ### Migrations
@@ -241,6 +249,8 @@ Before the first migration write, a separate read-only connection creates a back
 | 4 | English difficulty values, probability keys and pooling reasons. Row counts and outcomes stay unchanged. |
 | 5 | Nullable `suggestions.fallback_reason` and the `failures` table. Existing rows and outcomes stay unchanged. |
 | 6 | Suggestion price snapshots, nullable token counters, completeness and schema flags, USD cost and its source. |
+| 7 | Dispatch observations keyed by session and agent. |
+| 8 | Attempt ledger and shared event binding. Existing suggestions become closed legacy rows. |
 
 `SCHEMA_V3` is the third entry in `MIGRATIONS`.
 `SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.
@@ -262,6 +272,14 @@ If either statement fails, SQLite rolls back the entire migration.
 It rebuilds `usages` to allow null counters and preserves rowids and all existing values.
 The migration recreates the unchanged `outcomes` view and keeps usage watermarks intact.
 If any statement fails, SQLite rolls back the table rebuild and the version update.
+
+`SCHEMA_V8` uses single SQL statements in the migration transaction.
+It closes existing suggestions and marks them as legacy.
+It preserves the exact previous outcome query as `legacy_outcomes`.
+Signals, usages, rowids, usage watermarks and price snapshots stay unchanged.
+Late events for legacy suggestions are dropped with a local diagnostic.
+They cannot fall through to newer suggestions.
+Historical retry counts and first-pair costs remain unknown.
 
 ### Failure recording
 
@@ -297,44 +315,64 @@ See [configuration.md](configuration.md#launcher-failures) for retention and wri
 The Bash hook remains available for calls without explicit linking.
 No task text enters these fields.
 
-Direct usage stores each run's `turn_id` and the suggestion's `agent_id` in `usages`.
-Its source is `claude-code-mod`. Its `scope_key` is the turn id.
-The existing uniqueness rule covers `(suggestion_id, source, scope_key, model)`.
-Repeated submissions replace one row. Follow-up turns keep separate rows.
-The API reads no transcript for direct usage.
+Direct recorders preserve source identity before adding usage.
+The mod registers each execution segment before the request starts.
+Start replay returns the same attempt. A changed pair starts a new attempt.
+Direct reports select an attempt rather than replacing a suggestion-wide outcome.
+Usage alone never creates quality evidence.
 
-Direct reports store `turn_id` and `agent_id` in `signals` and report usage rows.
-The signal index covers `(suggestion_id, source, turn_id, kind)` for non-null turns.
-The outcome view still aggregates one outcome per suggestion.
-Usage alone never creates an outcome.
+### Attempts and recovery chains
+
+A suggestion opens attempt 1 with an unknown actual pair.
+The first execution or report fills that pair. The recommendation alone cannot fill it.
+Explicit starts, pair switches, new dispatches and work after a report start new attempts.
+A failed test followed by a fix stays in the same attempt.
+A report closes the attempt and suggestion window. Late evidence can still bind to it.
+
+Each chain uses its first attempt's `root_id`.
+`suggest --retry-of <suggestion_id>` joins that suggestion's chain.
+Unlinked suggestions and separate reviews start separate chains.
+A report or finalized Stop evidence with quality at least `successQuality` closes the chain successfully.
+Intermediate test results do not close it.
+The next unlinked suggestion in the same session/agent closes an unsuccessful chain.
+The chain view also derives idle expiry at read time.
+Late evidence and report corrections recompute the chain result.
+
+Execution tokens stay with their attempts. Decision cost counts the chain once under its root pair.
+For costs `10 → 20 → 70`, the root decision costs `100`.
+Failed completed chains also contribute cost.
+Main-session orchestration usage has a suggestion ID and a null attempt ID.
+It contributes to chain cost and remains identifiable as overhead.
+A cost-per-success consumer divides by successful chains. With zero successes, the result is null.
 
 ### Session and agent windows
 
 Each `(session_id, agent_id)` has its own sequence of suggestion windows.
 A null `agent_id` selects the main sequence.
-A new subagent suggestion cannot close a main suggestion or another agent's suggestion.
-Late links close only earlier suggestions in their own sequence.
+A new subagent suggestion cannot close another agent's suggestion.
 The routing label `scope` does not select the sequence.
 
-Hooks select the sequence from the event's agent id.
-If that agent has no linked suggestions, hooks use the main sequence for legacy attribution.
-If that agent has any linked suggestion, hooks use only its sequence, even after closure.
-`Stop` reads the main sequence. `SubagentStop` reads the subagent sequence.
-See [hooks.md](hooks.md) for how routing and recording work together.
+Signals and usage use the same binding rule:
 
+- `bound`: source identity selects the attempt.
+- `window`: trustworthy source time selects one compatible window.
+- `pending`: no safe target exists. The event receives no quality credit.
 
-### Usage scopes and the atomic rewrite
+Existing bindings restrict candidates even after their windows close.
+An old prompt cannot select a newer suggestion through its timestamp.
+Exact call, message and start bindings work without timestamps.
+Without known identity or trustworthy source time, the event stays pending.
+Receipt time never substitutes for source time.
 
-A usage scope is one transcript part: one prompt of the main session (`transcript`, key `prompt_id`) or one subagent (`subagent`, key `agent_id`). The `Stop` and `SubagentStop` hooks read the whole scope each time.
+Windows are half-open. They end at closure or idle expiry.
+Late events cannot extend the current idle window.
+New links and transcripts reconcile pending events and provisional window bindings together.
+The store moves signals and usage in one transaction. Exact bindings stay fixed.
+Conflicting window credit returns to pending. Older transcripts cannot erase newer evidence.
 
-Hooks run in the background. Their events can arrive late, twice or in the wrong order. A late link can also shorten the time window of an earlier suggestion. So spatz does not add usage rows. It rewrites the whole scope:
-
-1. spatz reads the watermark of the scope: the time of the last message and the message count.
-2. If the new snapshot is older, spatz skips it. Older means an earlier last message, or the same last message with fewer messages.
-3. spatz deletes all usage rows of the scope for the suggestions of this session.
-4. spatz splits the messages by the suggestion windows of the selected agent sequence. It writes one usage row per suggestion and model.
-5. spatz saves the new watermark.
-
-All five steps run in one `IMMEDIATE` transaction. A compacted transcript has fewer messages, so the time of the last message decides first.
-
-The time window of a suggestion starts at its creation. It ends at the earliest of these times: its closure, or 2 h after its last event.
+An Agent tool call in source order establishes delegation.
+Main-session test/build signals then select the latest closed delegate in that suggestion window.
+The selected attempt stays fixed when later reports arrive.
+Main-session self-fixes follow this same fallback unless explicit attempt identity overrides it.
+The orchestrator's pair does not replace the worker's pair.
+See [hooks.md](hooks.md) for recorder ownership and identity limits.
