@@ -80,7 +80,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					COALESCE(SUM(u.cache_read_tokens), 0)::DOUBLE AS cache_read_tokens,
 					COALESCE(SUM(u.cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens,
 					SUM(u.cost_usd)::DOUBLE AS cost_usd,
-					COUNT(*) FILTER (WHERE u.tokens_schema <> 2 OR u.tokens_complete <> 1)::INTEGER AS incomplete
+					COUNT(*) FILTER (WHERE u.lower_bound = 1)::INTEGER AS incomplete
 				FROM s LEFT JOIN db.usage_totals u ON u.suggestion_id = s.id GROUP BY ALL
 			), agg AS (
 				SELECT task_type, COUNT(*)::INTEGER AS n, AVG(adopted) FILTER (WHERE first_attempt) AS adoption_rate FROM o GROUP BY ALL
@@ -145,7 +145,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
      SELECT suggestion_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
       SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens,
       SUM(cost_usd)::DOUBLE AS cost_usd,
-      COUNT(*) FILTER (WHERE tokens_schema <> 2 OR tokens_complete <> 1)::INTEGER AS incomplete
+      COUNT(*) FILTER (WHERE lower_bound = 1)::INTEGER AS incomplete
      FROM db.usage_totals GROUP BY suggestion_id
     ) tok ON tok.suggestion_id = s.id WHERE s.is_legacy = 1
     UNION ALL

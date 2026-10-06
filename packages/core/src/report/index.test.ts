@@ -752,7 +752,7 @@ test("dispatch counts include unlinked spawns, exclude dry runs, and do not coun
 	expect(result).toMatchObject({ dispatches: 4, routed_by_mod: 1, swapped: 1 });
 });
 
-test("incomplete usage shares schema-1 exclusions and chains retain lower-bound counts", async () => {
+test("only known subagent estimates count as incomplete; unknown usage retains null cost", async () => {
 	for (const id of ["complete", "partial", "old", "missing"]) {
 		sug(id, {
 			scope: "subagent",
@@ -766,11 +766,18 @@ test("incomplete usage shares schema-1 exclusions and chains retain lower-bound 
 			"UPDATE attempt_events SET cost_usd=1, cost_source='reported' WHERE kind='usage'",
 		);
 		db.run(
-			"UPDATE attempt_events SET tokens_complete=0 WHERE suggestion_id IN ('partial','missing')",
+			"UPDATE attempt_events SET tokens_complete=0,source='subagent',harness='claude-code' WHERE suggestion_id IN ('partial','missing')",
 		);
 		db.run(
 			"UPDATE attempt_events SET tokens_schema=1,tokens_complete=0 WHERE suggestion_id='old'",
 		);
+		expect(
+			db
+				.query(
+					"SELECT cost_usd,incomplete FROM chain_outcomes WHERE suggestion_id='old'",
+				)
+				.get(),
+		).toEqual({ cost_usd: null, incomplete: 0 });
 		expect(
 			db
 				.query(
@@ -796,7 +803,7 @@ test("incomplete usage shares schema-1 exclusions and chains retain lower-bound 
 			result.by_type.find((t) => t.task_type === "code.bugfix"),
 		).toMatchObject({
 			cost_usd: 1,
-			incomplete: 2,
+			incomplete: 1,
 			input_tokens: 30,
 			output_tokens: 60,
 		});
@@ -806,7 +813,7 @@ test("incomplete usage shares schema-1 exclusions and chains retain lower-bound 
 		});
 		expect(result.by_scope?.[0]).toMatchObject({
 			cost_usd: 1,
-			incomplete: 3,
+			incomplete: 2,
 			input_tokens: 40,
 			output_tokens: 80,
 		});

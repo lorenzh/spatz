@@ -66,6 +66,13 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 			expect(
 				migrated
 					.query(
+						"SELECT tokens_complete,cost_usd,lower_bound FROM usage_totals WHERE suggestion_id='r' AND model='m/a'",
+					)
+					.get(),
+			).toEqual({ tokens_complete: 0, cost_usd: null, lower_bound: 0 });
+			expect(
+				migrated
+					.query(
 						"SELECT COUNT(*) AS n FROM suggestions WHERE is_legacy <> 1 OR closed_at IS NULL",
 					)
 					.get(),
@@ -85,12 +92,16 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 					throw new Error(`INSTALL blocked: ${sql}`);
 			},
 		});
-		// Preserve the frozen statistics; completeness counts are new in v9.
+		// Unknown legacy completeness stays unpriced without a lower-bound warning.
+		expect(
+			result.by_type.find((row) => row.task_type === "review"),
+		).toMatchObject({ incomplete: 0 });
+		// Preserve the frozen statistics; lower-bound counts are new in v9.
 		expect<unknown>({
 			...baseline.stats,
 			by_scope: baseline.stats.by_scope.map((row) => ({
 				...row,
-				incomplete: row.scope === "turn" ? 2 : row.scope === null ? 3 : 0,
+				incomplete: 0,
 			})),
 			by_type: baseline.stats.by_type.map((row) => {
 				const cache = baseline.caches.find(
@@ -100,12 +111,7 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 					throw new Error(`missing frozen cache totals for ${row.task_type}`);
 				return {
 					...row,
-					incomplete:
-						row.task_type === "code.bugfix"
-							? 3
-							: row.task_type === "review"
-								? 2
-								: 0,
+					incomplete: 0,
 					cache_read_tokens: cache.cache_read_tokens,
 					cache_creation_tokens: cache.cache_creation_tokens,
 				};

@@ -736,6 +736,19 @@ describe("stats", () => {
 		expect(text).toContain("coverage: 80%");
 	});
 
+	test("stats text omits lower-bound note when incomplete is zero", async () => {
+		const { io, stdout } = fakeIO();
+		const { api } = fakeApi({
+			stats: async () => ({
+				...statsReport,
+				by_type: statsReport.by_type.map((row) => ({ ...row, incomplete: 0 })),
+			}),
+		});
+		await main(["stats"], io, api);
+		expect(stdout()).toContain("incomplete=0");
+		expect(stdout()).not.toContain("lower bounds");
+	});
+
 	test("text output: complete ordered lines incl. null success as -", async () => {
 		const { io, stdout } = fakeIO();
 		const { api } = fakeApi();

@@ -308,7 +308,10 @@ test("usage completeness migration marks stored Claude subagents and filters exi
 	const { path, db } = await fixture(dir);
 	const previous = await previousStore(dir);
 	previous.openDatabase(path).close();
-	db.run("UPDATE suggestions SET agent='claude-code' WHERE id='h'");
+	db.run("UPDATE suggestions SET agent='claude-code' WHERE id IN ('h','r')");
+	db.run(
+		"UPDATE usages SET tokens_complete=1 WHERE suggestion_id='r' AND source='transcript'",
+	);
 	db.run("UPDATE suggestions SET agent='codex' WHERE id='n'");
 	db.run(
 		"UPDATE usages SET tokens_complete=1, cost_usd=99, cost_source='reported' WHERE source='subagent'",
@@ -371,6 +374,13 @@ test("usage completeness migration marks stored Claude subagents and filters exi
 			)
 			.get(),
 	).toEqual({ cost_usd: 0.093 });
+	expect(
+		migrated
+			.query(
+				"SELECT tokens_complete FROM usages WHERE suggestion_id='r' AND source='transcript'",
+			)
+			.get(),
+	).toEqual({ tokens_complete: 1 });
 	expect(
 		migrated
 			.query("SELECT cost_usd FROM attempt_usage WHERE suggestion_id='proof'")

@@ -411,8 +411,8 @@ For none-only catalog models, stats count old rows with a missing effort as `non
 | `success_rate` | Share of completed chains that succeeded, plus legacy results. Without results, JSON gives `null` and text gives `-`. |
 | `input_tokens`, `output_tokens` | Total recorded input and output tokens. |
 | `cache_read_tokens`, `cache_creation_tokens` | Total recorded cache tokens. |
-| `cost_usd` | Sum of eligible USD costs, or `null`. A chain with incomplete usage has no eligible cost. |
-| `incomplete` | Number of usage rows excluded from cost because `tokens_complete = 0` or `tokens_schema = 1`. |
+| `cost_usd` | Sum of eligible USD costs, or `null`. A chain with usage excluded from cost has no eligible cost. |
+| `incomplete` | Number of known Claude subagent lower-bound estimates excluded from cost. |
 | `cache_read_share` | `cache_read_tokens / (input_tokens + cache_read_tokens + cache_creation_tokens)`. With no input tokens, the share is zero. |
 
 Token totals include suggestions without outcomes. Each measurement counts once before outcome joins.
@@ -426,9 +426,12 @@ Both task-type and scope stats include all four token totals, `cost_usd` and `in
 The sum includes reported costs and costs calculated from stored prices.
 Only schema-2 rows with `tokens_complete = 1` enter USD totals.
 If no eligible row has a cost, the total is `null` (`-` in text).
-`incomplete` counts excluded `usage_totals` rows once, even when both flags exclude them.
+`incomplete` counts `usage_totals` rows with known Claude subagent lower-bound estimates.
+These have `tokens_complete = 0` and source `subagent`, or source `transcript` with a non-empty agent key or `is_sidechain = 1`.
+Codex rows are excluded from this count.
+Legacy main-session and report rows with unknown completeness keep null costs but do not enter `incomplete`.
 Attempt usage is grouped by suggestion, attempt, model and effort before this count.
-A chain with any incomplete usage has a null cost, including for cost-per-success inputs.
+A chain with any usage excluded from cost has a null cost, including for cost-per-success inputs.
 Token totals keep lower-bound estimates and historical rows. Null counters contribute zero.
 Hooks-only Claude subagent transcripts have `tokens_complete = 0`, even when all four counters are present.
 When `incomplete` is positive, text output notes that costs exclude rows and token totals may be lower bounds.
@@ -524,7 +527,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `by_type[].cache_read_tokens` | number | Sum of input tokens read from cache. |
 | `by_type[].cache_creation_tokens` | number | Sum of input tokens written to cache. |
 | `by_type[].cost_usd` | number or null | Sum of costs from complete schema-2 usage rows. Null if none have a cost. |
-| `by_type[].incomplete` | number | Count of usage rows excluded by completeness or schema version. Zero when none are excluded. |
+| `by_type[].incomplete` | number | Count of known Claude subagent lower-bound estimates. Zero when none are present. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | First-attempt success rate of learned root decisions in cells with both learned and control outcomes, weighted by their counts. |
 | `control_success` | number or null | Success rate of the control group in the same cells. |

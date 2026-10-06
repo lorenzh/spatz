@@ -396,7 +396,7 @@ export interface TypeStats {
 	cache_read_tokens: number;
 	cache_creation_tokens: number;
 	cost_usd: number | null;
-	/** Usage rows excluded from cost because counters are incomplete or schema 1. */
+	/** Known Claude subagent lower-bound usage estimates excluded from cost. */
 	incomplete: number;
 	task_type: TaskType;
 	/** Outcomes of non-test suggestions. */
@@ -410,7 +410,7 @@ export interface TypeStats {
 
 export interface ScopeStats {
 	cost_usd: number | null;
-	/** Usage rows excluded from cost because counters are incomplete or schema 1. */
+	/** Known Claude subagent lower-bound usage estimates excluded from cost. */
 	incomplete: number;
 	scope: RoutingScope | null;
 	/** Number of outcomes, as in TypeStats. */

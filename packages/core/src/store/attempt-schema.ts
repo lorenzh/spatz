@@ -1,3 +1,21 @@
+// Shared by ingestion, migration and the lower-bound counts in usage views.
+export const lowerBoundSql = (
+	source: string,
+	claude: string,
+	sidechain: string,
+) =>
+	`(${claude} AND (${source}='subagent' OR (${source}='transcript' AND ${sidechain})))`;
+const eventLowerBound = lowerBoundSql(
+	"source",
+	"harness='claude-code'",
+	"agent_key<>''",
+);
+const legacyLowerBound = lowerBoundSql(
+	"source",
+	"NOT EXISTS(SELECT 1 FROM suggestions s WHERE s.id=usages.suggestion_id AND s.agent='codex')",
+	"is_sidechain=1",
+);
+
 const tokens = [
 	"input_tokens",
 	"output_tokens",
@@ -91,30 +109,29 @@ export const ATTEMPT_SCHEMA = [
 
 // v9 refreshes persisted views as well as stored hook estimates. No new columns.
 export const USAGE_COMPLETENESS_SCHEMA = [
-	`UPDATE attempt_events SET tokens_complete=0 WHERE kind='usage' AND harness='claude-code'
-     AND (source='subagent' OR (source='transcript' AND agent_key<>''))`,
-	`UPDATE usages SET tokens_complete=0 WHERE (source='subagent' OR (source='transcript' AND is_sidechain=1))
-     AND NOT EXISTS(SELECT 1 FROM suggestions s WHERE s.id=usages.suggestion_id AND s.agent='codex')`,
+	`UPDATE attempt_events SET tokens_complete=0 WHERE kind='usage' AND ${eventLowerBound}`,
+	`UPDATE usages SET tokens_complete=0 WHERE ${legacyLowerBound}`,
 	"DROP VIEW attempt_usage",
 	`CREATE VIEW attempt_usage AS SELECT suggestion_id,attempt_id,model,effort,
  ${tokens.map((t) => `SUM(${t}) AS ${t}`).join(",")},
  CASE WHEN COUNT(cost_usd)=COUNT(*) AND MIN(tokens_schema)=2 AND MIN(tokens_complete)=1 THEN SUM(cost_usd) END AS cost_usd,
  CASE WHEN COUNT(cost_usd)<COUNT(*) OR MIN(tokens_schema)<>2 OR MIN(tokens_complete)<>1 THEN 'unavailable' WHEN MIN(cost_source)=MAX(cost_source) THEN MIN(cost_source) ELSE 'priced' END AS cost_source,
- MIN(tokens_complete) AS tokens_complete, MIN(tokens_schema) AS tokens_schema
+ MIN(tokens_complete) AS tokens_complete, MIN(tokens_schema) AS tokens_schema,
+ MAX(CASE WHEN tokens_complete=0 AND ${eventLowerBound} THEN 1 ELSE 0 END) AS lower_bound
  FROM latest_attempt_events e WHERE kind='usage' AND binding <> 'pending' AND suggestion_id IS NOT NULL
  AND NOT (e.source IN ('transcript','subagent','agent_tool') AND EXISTS(
  SELECT 1 FROM attempts a WHERE a.session_key=e.session_key AND a.agent_key=e.agent_key AND a.owns_usage=1))
  GROUP BY suggestion_id,attempt_id,model,effort`,
 	"DROP VIEW usage_totals",
-	`CREATE VIEW usage_totals AS SELECT suggestion_id,NULL AS attempt_id,model,effort,${tokens.join(",")},CASE WHEN tokens_schema=2 AND tokens_complete=1 THEN cost_usd END AS cost_usd,CASE WHEN tokens_schema=2 AND tokens_complete=1 THEN cost_source ELSE 'unavailable' END AS cost_source,tokens_complete,tokens_schema FROM usages
- UNION ALL SELECT suggestion_id,attempt_id,model,effort,${tokens.join(",")},cost_usd,cost_source,tokens_complete,tokens_schema FROM attempt_usage`,
+	`CREATE VIEW usage_totals AS SELECT suggestion_id,NULL AS attempt_id,model,effort,${tokens.join(",")},CASE WHEN tokens_schema=2 AND tokens_complete=1 THEN cost_usd END AS cost_usd,CASE WHEN tokens_schema=2 AND tokens_complete=1 THEN cost_source ELSE 'unavailable' END AS cost_source,tokens_complete,tokens_schema,CASE WHEN tokens_complete=0 AND ${legacyLowerBound} THEN 1 ELSE 0 END AS lower_bound FROM usages
+ UNION ALL SELECT suggestion_id,attempt_id,model,effort,${tokens.join(",")},cost_usd,cost_source,tokens_complete,tokens_schema,lower_bound FROM attempt_usage`,
 	"DROP VIEW chain_outcomes",
 	`CREATE VIEW chain_outcomes AS WITH verdict AS (
  SELECT a.root_id,MAX(CASE WHEN a.finalized_at IS NOT NULL THEN q.quality END) AS quality,
  MAX(CASE WHEN a.finalized_at IS NOT NULL AND q.quality>=r.success_quality THEN 1 ELSE 0 END) AS success
  FROM attempts a JOIN attempts r ON r.id=a.root_id LEFT JOIN attempt_quality q ON q.attempt_id=a.id GROUP BY a.root_id
  ), members AS (SELECT DISTINCT root_id,suggestion_id FROM attempts), usage AS (
- SELECT m.root_id,SUM(CASE WHEN u.tokens_schema<>2 OR u.tokens_complete<>1 THEN 1 ELSE 0 END) AS incomplete,${tokens.map((t) => `SUM(u.${t}) AS ${t}`).join(",")},
+ SELECT m.root_id,SUM(COALESCE(u.lower_bound,0)) AS incomplete,${tokens.map((t) => `SUM(u.${t}) AS ${t}`).join(",")},
  CASE WHEN COUNT(u.cost_usd)=COUNT(u.suggestion_id) AND MIN(u.tokens_schema)=2 AND MIN(u.tokens_complete)=1 THEN SUM(u.cost_usd) END AS cost_usd,
  ${tokens.map((t) => `SUM(CASE WHEN u.attempt_id IS NULL THEN u.${t} ELSE 0 END) AS orchestration_${t}`).join(",")},
  SUM(CASE WHEN u.attempt_id IS NULL AND u.tokens_schema=2 AND u.tokens_complete=1 THEN u.cost_usd ELSE 0 END) AS orchestration_cost_usd
