@@ -121,20 +121,27 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		);
 		// Learned picks (strategy learned, no exploration) vs the control group, per cell (task_type, difficulty)
 		// with both groups, weighted by the cell's count of these outcomes. Exploration, jev-choice and rules are no learned pick.
+		// learned-fallback picks get their own row against control, never dropped.
 		const [cmp] = await rows<{
 			learned_success: number | null;
+			fallback_success: number | null;
 			control_success: number | null;
 		}>(
 			`, cmp AS (
-				SELECT task_type, difficulty, success, control = 1 AS is_control FROM o
-				WHERE first_attempt AND (control = 1 OR (strategy = 'learned' AND explored = 0))
+				SELECT task_type, difficulty, success, control = 1 AS is_control, strategy FROM o
+				WHERE first_attempt AND (control = 1 OR (strategy IN ('learned', 'learned-fallback') AND explored = 0))
 			), cells AS (
-				SELECT COUNT(*) AS w,
-					AVG(success) FILTER (WHERE NOT is_control) AS l,
+				SELECT
+					COUNT(*) FILTER (WHERE is_control OR strategy = 'learned') AS w,
+					COUNT(*) FILTER (WHERE is_control OR strategy = 'learned-fallback') AS wf,
+					AVG(success) FILTER (WHERE NOT is_control AND strategy = 'learned') AS l,
+					AVG(success) FILTER (WHERE NOT is_control AND strategy = 'learned-fallback') AS f,
 					AVG(success) FILTER (WHERE is_control) AS k
-				FROM cmp GROUP BY task_type, difficulty HAVING l IS NOT NULL AND k IS NOT NULL
+				FROM cmp GROUP BY task_type, difficulty HAVING k IS NOT NULL
 			)
-			SELECT SUM(w * l) / SUM(w) AS learned_success, SUM(w * k) / SUM(w) AS control_success FROM cells`,
+			SELECT SUM(w * l) / SUM(w) FILTER (WHERE l IS NOT NULL) AS learned_success,
+				SUM(wf * f) / SUM(wf) FILTER (WHERE f IS NOT NULL) AS fallback_success,
+				SUM(w * k) FILTER (WHERE l IS NOT NULL) / SUM(w) FILTER (WHERE l IS NOT NULL) AS control_success FROM cells`,
 		);
 
 		const scopes =
@@ -202,6 +209,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				})),
 			coverage: cov?.coverage ?? 0,
 			learned_success: cmp?.learned_success ?? null,
+			fallback_success: cmp?.fallback_success ?? null,
 			control_success: cmp?.control_success ?? null,
 		};
 	} finally {

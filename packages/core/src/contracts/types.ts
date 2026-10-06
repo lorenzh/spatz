@@ -52,7 +52,7 @@ export interface Tuning {
 	minEstimate: number;
 	/** Critical tasks: a cheaper pair needs n >= 10 ... */
 	criticalMinN: number;
-	/** ... and estimate >= 0.9. */
+	/** ... and 5 % lower Beta bound of success >= 0.9. */
 	criticalMinEstimate: number;
 	/** Random draw u in [0,1): u < controlRate -> control. Default 0.1. */
 	controlRate: number;
@@ -176,16 +176,23 @@ export interface CellStat {
 	effort: Effort;
 	n: number;
 	sum_quality: number;
+	/** Outcomes with quality >= successQuality; learning uses these, not sum_quality. */
+	successes: number;
 }
 
 // ---------- Suggestion (spec "Output") ----------
 
-export type StrategyName = "learned" | "jev-choice" | "rules" | "strongest";
+export type StrategyName =
+	| "learned"
+	| "learned-fallback"
+	| "jev-choice"
+	| "rules"
+	| "strongest";
 
 export interface RankingEntry {
 	model: string;
 	effort: Effort;
-	/** Beta mean (1 + sum quality) / (2 + n). */
+	/** Beta mean of success (1 + successes) / (2 + n). */
 	estimate: number;
 	n: number;
 }
@@ -440,6 +447,8 @@ export interface StatsReport {
 	coverage: number;
 	/** Success rate of learned vs control, compared per cell, weighted by count per cell. null without data. */
 	learned_success: number | null;
+	/** Success rate of learned-fallback picks (best estimate, no pair met the limits) vs control in the same cells. null without data. */
+	fallback_success: number | null;
 	control_success: number | null;
 }
 

@@ -91,7 +91,7 @@ function formatStats(r: StatsReport): string {
 	]);
 	const opt = (x: number | null) => (x === null ? "-" : pct(x));
 	lines.push(
-		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  control_success: ${opt(r.control_success)}`,
+		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
 	);
 	return [...lines, ...diagnostics].join("\n");
 }

@@ -39,12 +39,15 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 			] as const) {
 				const cells = store
 					.cellStats(type)
+					// The baseline predates binary success counts.
+					.map(({ successes: _, ...c }) => c)
 					.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 				expect(baseline.learning[type]).toEqual(cells);
 			}
 			const proof = store.cellStats("code.feature")[0];
 			if (!proof) throw new Error("missing legacy proof outcome");
 			expect((1 + proof.sum_quality) / (2 + proof.n)).toBe(2 / 3);
+			expect(proof.successes).toBe(1);
 		} finally {
 			store.dispose();
 		}
@@ -96,9 +99,10 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 		expect(
 			result.by_type.find((row) => row.task_type === "review"),
 		).toMatchObject({ incomplete: 0 });
-		// Preserve the frozen statistics; lower-bound counts are new in v9.
+		// Preserve the frozen statistics; lower-bound counts are new in v9, fallback_success is newer.
 		expect<unknown>({
 			...baseline.stats,
+			fallback_success: null,
 			by_scope: baseline.stats.by_scope.map((row) => ({
 				...row,
 				incomplete: 0,

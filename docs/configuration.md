@@ -276,9 +276,9 @@ These values are start values from the design. The CLI uses them as they are. No
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `minN` | 5 | Learned choice: a pair needs at least this many outcomes in the cell. |
-| `minEstimate` | 0.8 | Learned choice: a pair needs at least this estimate. |
+| `minEstimate` | 0.8 | Learned choice: a pair needs at least this success estimate. |
 | `criticalMinN` | 10 | Critical task: a cheaper pair needs at least this many outcomes. |
-| `criticalMinEstimate` | 0.9 | Critical task: a cheaper pair needs at least this estimate. |
+| `criticalMinEstimate` | 0.9 | Critical task: a cheaper pair needs a 5 % lower credible bound of success of at least this. |
 | `controlRate` | 0.1 | Share of suggestions in the control group (most expensive pair). |
 | `exploreRate` | 0.1 | Share of suggestions that explore a cheaper pair. |
 | `jevTimeoutMs` | 1000 ms | Timeout of the Jev request. spatz makes no retry. After a timeout, spatz uses the keyword rules. |
