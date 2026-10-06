@@ -277,6 +277,7 @@ See [Contributing](CONTRIBUTING.md) for the full development setup.
 | [CLI reference](docs/cli.md) | Commands, flags, model IDs, output fields, and exit codes. |
 | [How it works](docs/how-it-works.md) | Architecture and the flow from task to outcome. |
 | [Recommendation rules](docs/recommendation.md) | Ranking, exploration, and control groups. |
+| [Measurements](docs/measurements.md) | Benchmark results for model and effort selection. |
 | [Hooks](docs/hooks.md) | Claude Code and Codex CLI setup and recorded signals. |
 | [Claude Code mod](docs/claude-mod.md) | Modes, routing scopes, and `/spatz` commands. |
 | [Configuration](docs/configuration.md) | Environment variables and local files. |
