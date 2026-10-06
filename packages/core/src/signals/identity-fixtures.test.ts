@@ -4,6 +4,11 @@ import main from "./fixtures/main-turn-identity.json";
 import modRouted from "./fixtures/mod-routed-step-identity.json";
 import subagent from "./fixtures/subagent-identity.json";
 import { isIgnoredHookInput, parseHookInput } from "./index.ts";
+import {
+	parseCodexRollout,
+	parseMainTranscript,
+	parseSubagentTranscript,
+} from "./transcript.ts";
 
 describe("identity fixtures", () => {
 	test("main hook prompt and mod turn are distinct; tool calls share tool_use_id", () => {
@@ -141,23 +146,93 @@ describe("identity fixtures", () => {
 		expect(modRouted.modToolUseId).toBe(hook.tool_use_id);
 	});
 
-	test("codex exec rollout keeps turn context and call IDs", () => {
-		const turn = codexExec.turn as {
-			type: string;
-			payload: { turn_id: string; model: string; effort: string };
+	test.each([
+		{
+			variant: "main",
+			hook: main.hook,
+			usage: {
+				model: "claude-sonnet-5-5",
+				input_tokens: 2,
+				output_tokens: 163,
+				cache_read_tokens: 11547,
+				cache_creation_tokens: 29466,
+			},
+		},
+		{
+			variant: "subagent",
+			hook: subagent.hook,
+			usage: {
+				model: "claude-haiku-4-5-20251001",
+				input_tokens: 10,
+				output_tokens: 3,
+				cache_read_tokens: 0,
+				cache_creation_tokens: 21334,
+			},
+		},
+	])(
+		"Claude $variant transcript deduplicates message.id and joins tool_use_id",
+		async ({ variant, hook, usage }) => {
+			const jsonl = await Bun.file(
+				`${import.meta.dir}/fixtures/${variant}-identity-transcript.jsonl`,
+			).text();
+			const rows = jsonl
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			const assistants = rows.filter((row) => row.type === "assistant");
+			expect(assistants).toHaveLength(2);
+			expect(assistants[0].uuid).not.toBe(assistants[1].uuid);
+			expect(assistants[0].message.id).toBe(assistants[1].message.id);
+			const tool = assistants
+				.flatMap((row) => row.message.content)
+				.find((block) => block.type === "tool_use");
+			expect(tool.id).toBe(hook.tool_use_id);
+			if (variant === "subagent") {
+				expect(
+					assistants.every((row) => row.agentId === subagent.modAgentId),
+				).toBe(true);
+			}
+			expect(
+				variant === "main"
+					? parseMainTranscript(jsonl, hook.prompt_id)
+					: parseSubagentTranscript(jsonl),
+			).toEqual([usage]);
+		},
+	);
+
+	test("codex exec parses both formats; completed item ID differs from legacy call_id", () => {
+		const { turn, call, callOutput, completed, tokenUsage } = codexExec;
+		expect(callOutput.payload.call_id).toBe(call.payload.call_id);
+		expect(completed.payload.item.id).not.toBe(call.payload.call_id);
+		expect(completed.payload.item).not.toHaveProperty("call_id");
+		expect(completed.payload.turn_id).toBe(turn.payload.turn_id);
+		const legacy = [turn, call, callOutput];
+		const expected = {
+			model: "gpt-6-astra",
+			effort: "high",
 		};
-		const call = codexExec.call as {
-			type: string;
-			payload: { call_id: string; name: string };
-		};
-		const output = codexExec.callOutput as { payload: { call_id: string } };
-		expect(turn.type).toBe("turn_context");
-		expect(turn.payload.model).toBe("gpt-6-astra");
-		expect(turn.payload.effort).toBe("high");
-		expect(turn.payload.turn_id).toBeTruthy();
-		expect(call.type).toBe("response_item");
-		expect(call.payload.name).toBe("exec");
-		expect(call.payload.call_id).toMatch(/^call_/);
-		expect(output.payload.call_id).toBe(call.payload.call_id);
+		// This exec wrapper returns JSON with exit_code, not the legacy exit_code=N text.
+		expect(
+			parseCodexRollout(
+				legacy.map((row) => JSON.stringify(row)).join("\n"),
+				turn.payload.turn_id,
+			),
+		).toEqual({ ...expected, calls: [], usage: null });
+		const rows = [turn, call, tokenUsage, completed, callOutput, completed];
+		expect(
+			parseCodexRollout(
+				rows.map((row) => JSON.stringify(row)).join("\n"),
+				turn.payload.turn_id,
+			),
+		).toEqual({
+			...expected,
+			calls: [{ command: "[redacted]", exit_code: 0 }],
+			usage: {
+				input_tokens: 22390,
+				cache_read_input_tokens: 12288,
+				cache_creation_input_tokens: 0,
+				output_tokens: 96,
+			},
+		});
 	});
 });

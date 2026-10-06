@@ -13,14 +13,76 @@
 			"type": "custom_tool_call",
 			"call_id": "call_yLMKZWo1O7DKBsXwzCrZpUge",
 			"name": "exec",
-			"input": "[redacted]"
+			"input": "text(await tools.exec_command({cmd:\"[redacted]\",max_output_tokens:10000}));\n"
 		}
 	},
 	"callOutput": {
 		"type": "response_item",
 		"payload": {
 			"type": "custom_tool_call_output",
-			"call_id": "call_yLMKZWo1O7DKBsXwzCrZpUge"
+			"call_id": "call_yLMKZWo1O7DKBsXwzCrZpUge",
+			"output": [
+				{
+					"type": "input_text",
+					"text": "Script completed\nWall time 0.3 seconds\nOutput:\n"
+				},
+				{
+					"type": "input_text",
+					"text": "{\"chunk_id\":\"010d53\",\"wall_time_seconds\":0.000005239,\"exit_code\":0,\"original_token_count\":1275,\"output\":\"[redacted]\"}"
+				}
+			]
+		}
+	},
+	"completed": {
+		"timestamp": "2026-10-06T00:33:11.270Z",
+		"ordinal": 15,
+		"type": "event_msg",
+		"payload": {
+			"type": "item_completed",
+			"thread_id": "01a10ea0-de20-7c52-8e40-fa58285175e6",
+			"turn_id": "01a10ea0-df2c-7053-b80a-5c48c4ba87ee",
+			"item": {
+				"type": "CommandExecution",
+				"id": "exec-bec398ff-1a9f-4445-997e-664871e34504",
+				"command": ["/bin/bash", "-lc", "[redacted]"],
+				"exit_code": 0
+			}
+		}
+	},
+	"tokenUsage": {
+		"timestamp": "2026-10-06T00:33:11.159Z",
+		"ordinal": 14,
+		"type": "token_usage_record",
+		"payload": {
+			"thread_id": "01a10ea0-de20-7c52-8e40-fa58285175e6",
+			"turn_id": "01a10ea0-df2c-7053-b80a-5c48c4ba87ee",
+			"session_id": "01a10ea0-de20-7c52-8e40-fa58285175e6",
+			"root_turn_id": "01a10ea0-df2c-7053-b80a-5c48c4ba87ee",
+			"response_id": "resp_02a40f5d3d1f06a6016ac441c413f087d2badae6c27c4f6ac4",
+			"usage": {
+				"input_tokens": 22390,
+				"cached_input_tokens": 12288,
+				"cache_write_input_tokens": 0,
+				"output_tokens": 96,
+				"reasoning_output_tokens": 0,
+				"total_tokens": 22486
+			},
+			"turn_token_usage": {
+				"input_tokens": 22390,
+				"cached_input_tokens": 12288,
+				"cache_write_input_tokens": 0,
+				"output_tokens": 96,
+				"reasoning_output_tokens": 0,
+				"total_tokens": 22486
+			},
+			"thread_token_usage": {
+				"input_tokens": 22390,
+				"cached_input_tokens": 12288,
+				"cache_write_input_tokens": 0,
+				"output_tokens": 96,
+				"reasoning_output_tokens": 0,
+				"total_tokens": 22486
+			}
 		}
 	}
 }
