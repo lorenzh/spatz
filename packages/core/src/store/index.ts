@@ -339,8 +339,9 @@ export function openStore(
 				), live AS (
 					-- The newest known version per model; older known versions seed nothing, null matches any.
 					SELECT model, model_version FROM (
-						SELECT model, model_version, ROW_NUMBER() OVER (PARTITION BY model ORDER BY COALESCE(opened_at,0) DESC, rowid DESC) AS rn
-						FROM attempts WHERE model_version IS NOT NULL
+						SELECT a.model, a.model_version, ROW_NUMBER() OVER (PARTITION BY a.model ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
+						FROM attempts a JOIN suggestions s ON s.id = a.suggestion_id
+						WHERE a.model_version IS NOT NULL AND s.is_test = 0
 					) WHERE rn = 1
 				), normalized AS (
 					SELECT h.*, CASE WHEN h.model IN (${noneOnlyModels.map(() => "?").join()}) THEN 'none' ELSE h.effort END AS known_effort

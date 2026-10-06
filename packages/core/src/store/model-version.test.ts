@@ -61,3 +61,55 @@ test("a new known model_version starts an empty prior; null rows match any versi
 		store.dispose();
 	}
 });
+
+test("a test suggestion under an old revision does not change the live version", () => {
+	const store = openStore(":memory:");
+	try {
+		const report = (
+			id: string,
+			at: number,
+			version: string,
+			isTest = false,
+		) => {
+			store.insertSuggestion({ ...suggestion(id, at), is_test: isTest });
+			store.reportAttempt({
+				suggestion_id: id,
+				model: "m/a",
+				effort: "low",
+				result: "pass",
+				at,
+				model_version: version,
+			});
+		};
+		report("old", 1000, "20250101");
+		report("old2", 1500, "20250101");
+		report("new", 2000, "20260101");
+		expect(store.cellStats("code.bugfix")[0]?.n).toBe(1);
+		report("dry", 3000, "20250101", true);
+		expect(store.cellStats("code.bugfix")[0]?.n).toBe(1);
+	} finally {
+		store.dispose();
+	}
+});
+
+test("a report under a new revision with the same verdict is not a replay", () => {
+	const store = openStore(":memory:");
+	try {
+		store.insertSuggestion(suggestion("s", 1000));
+		const r = (at: number, version: string | null) =>
+			store.reportAttempt({
+				suggestion_id: "s",
+				model: "m/a",
+				effort: "low",
+				result: "pass",
+				at,
+				model_version: version,
+			});
+		const first = r(1000, "20250101");
+		expect(r(1100, null).attempt_id).toBe(first.attempt_id);
+		expect(r(1200, "20250101").attempt_id).toBe(first.attempt_id);
+		expect(r(2000, "20260101").attempt_id).not.toBe(first.attempt_id);
+	} finally {
+		store.dispose();
+	}
+});

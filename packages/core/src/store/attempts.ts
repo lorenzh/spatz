@@ -65,10 +65,13 @@ export function attemptStore(
 	};
 	const compatible = (
 		a: AttemptRecord,
-		e: Pick<AttemptEvent, "model" | "effort">,
+		e: Pick<AttemptEvent, "model" | "effort" | "model_version">,
 	) =>
 		(!e.model || !a.model || a.model === e.model) &&
-		(!e.effort || !a.effort || a.effort === e.effort);
+		(!e.effort || !a.effort || a.effort === e.effort) &&
+		(!e.model_version ||
+			!a.model_version ||
+			a.model_version === e.model_version);
 	const context = (id: string): AttemptContext => {
 		const s = store().getSuggestion(id);
 		if (!s) throw new Error("unknown suggestion");
@@ -1057,10 +1060,15 @@ export function attemptStore(
 					let a = input.attempt_id
 						? get(input.attempt_id)
 						: db
-								.query<AttemptRecord, [string, string, string]>(
-									"SELECT * FROM attempts WHERE suggestion_id=? AND (model=? OR model IS NULL) AND (effort=? OR effort IS NULL) ORDER BY ordinal DESC LIMIT 1",
+								.query<AttemptRecord, [string, string, string, string | null]>(
+									"SELECT * FROM attempts WHERE suggestion_id=? AND (model=? OR model IS NULL) AND (effort=? OR effort IS NULL) AND (?4 IS NULL OR model_version IS NULL OR model_version=?4) ORDER BY ordinal DESC LIMIT 1",
 								)
-								.get(input.suggestion_id, input.model, input.effort);
+								.get(
+									input.suggestion_id,
+									input.model,
+									input.effort,
+									input.model_version ?? null,
+								);
 					if (
 						input.attempt_id &&
 						(!a ||
