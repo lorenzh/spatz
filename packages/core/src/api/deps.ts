@@ -67,7 +67,10 @@ export async function loadConfig(
 			deps.env.SPATZ_NO_NETWORK !== "1" &&
 			deps.env.SPATZ_NO_JEV !== "1" &&
 			project?.jev !== false,
-		tuning: DEFAULT_TUNING,
+		tuning: {
+			...DEFAULT_TUNING,
+			familyPooling: deps.env.SPATZ_FAMILY_POOLING === "1",
+		},
 		aliases: strings(aliases),
 		descriptions: strings(descriptions),
 	};

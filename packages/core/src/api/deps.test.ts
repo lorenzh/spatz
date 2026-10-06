@@ -30,6 +30,15 @@ describe("loadConfig", () => {
 		});
 	});
 
+	test("SPATZ_FAMILY_POOLING=1 enables family pooling", async () => {
+		const c = await loadConfig({
+			env: { SPATZ_FAMILY_POOLING: "1" },
+			homeDir: home,
+			cwd,
+		});
+		expect(c.tuning.familyPooling).toBe(true);
+	});
+
 	test("SPATZ_NO_JEV=1 opts out", async () => {
 		const c = await loadConfig({
 			env: { SPATZ_NO_JEV: "1" },

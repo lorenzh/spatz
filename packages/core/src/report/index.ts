@@ -14,13 +14,15 @@ export interface StatsOptions {
 	dbPath: string;
 	type?: TaskType;
 	by?: "scope";
+	/** Only outcomes of attempts with this model_version. */
+	modelVersion?: string;
 	/** Success means quality >= this (0.8). */
 	successQuality: number;
 	/** Catalog-confirmed models whose only effort is `none`. */
 	noneOnlyModels?: string[];
 }
 
-// Non-test suggestions and their outcomes. Parameters: $q (success quality), $none (JSON array of none-only models).
+// Non-test suggestions and their outcomes. Parameters: $q (success quality), $none (JSON array of none-only models), $mv (model version or NULL).
 const BASE = `
 WITH s AS (SELECT * FROM suggestions WHERE is_test = 0),
 oq AS (
@@ -28,9 +30,9 @@ oq AS (
 		CASE WHEN model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE effort END AS effort,
 		quality >= $q AS success, attempt_id, root_id
 	FROM (
-		SELECT suggestion_id, model, effort, quality, NULL AS attempt_id, NULL AS root_id FROM legacy_outcomes
-		UNION ALL SELECT suggestion_id, model, effort, quality, attempt_id, root_id FROM attempt_outcomes
-	) WHERE quality IS NOT NULL
+		SELECT suggestion_id, model, effort, quality, NULL AS attempt_id, NULL AS root_id, NULL AS model_version FROM legacy_outcomes
+		UNION ALL SELECT suggestion_id, model, effort, quality, attempt_id, root_id, model_version FROM attempt_outcomes
+	) WHERE quality IS NOT NULL AND ($mv IS NULL OR model_version = $mv)
 ),
 o AS (
 	SELECT s.id AS suggestion_id, s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
@@ -49,6 +51,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 	const params = {
 		q,
 		none: JSON.stringify(options.noneOnlyModels ?? []),
+		mv: options.modelVersion ?? null,
 		type: type ?? null,
 	};
 	const rows = <T>(sql: string): T[] =>
@@ -99,21 +102,27 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		);
 		// Learned picks (strategy learned, no exploration) vs the control group, per cell (task_type, difficulty)
 		// with both groups, weighted by the cell's count of these outcomes. Exploration, jev-choice and rules are no learned pick.
+		// learned-fallback picks get their own row against control, never dropped.
 		const [cmp] = rows<{
 			learned_success: number | null;
+			fallback_success: number | null;
 			control_success: number | null;
 		}>(
 			`, cmp AS (
-				SELECT task_type, difficulty, success, control = 1 AS is_control FROM o
-				WHERE first_attempt AND (control = 1 OR (strategy = 'learned' AND explored = 0))
+				SELECT task_type, difficulty, success, control = 1 AS is_control, strategy FROM o
+				WHERE first_attempt AND (control = 1 OR (strategy IN ('learned', 'learned-fallback') AND explored = 0))
 			), cells AS (
-				SELECT COUNT(*) AS w,
-					AVG(success) FILTER (WHERE NOT is_control) AS l,
+				SELECT
+					COUNT(*) FILTER (WHERE is_control OR strategy = 'learned') AS w,
+					COUNT(*) FILTER (WHERE is_control OR strategy = 'learned-fallback') AS wf,
+					AVG(success) FILTER (WHERE NOT is_control AND strategy = 'learned') AS l,
+					AVG(success) FILTER (WHERE NOT is_control AND strategy = 'learned-fallback') AS f,
 					AVG(success) FILTER (WHERE is_control) AS k
-				FROM cmp GROUP BY task_type, difficulty
+				FROM cmp GROUP BY task_type, difficulty HAVING k IS NOT NULL
 			)
-			SELECT SUM(w * l) / SUM(w) AS learned_success, SUM(w * k) / SUM(w) AS control_success
-			FROM cells WHERE l IS NOT NULL AND k IS NOT NULL`,
+			SELECT SUM(w * l) / SUM(w) FILTER (WHERE l IS NOT NULL) AS learned_success,
+				SUM(wf * f) / SUM(wf) FILTER (WHERE f IS NOT NULL) AS fallback_success,
+				SUM(w * k) FILTER (WHERE l IS NOT NULL) / SUM(w) FILTER (WHERE l IS NOT NULL) AS control_success FROM cells`,
 		);
 
 		const scopes =
@@ -180,6 +189,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				})),
 			coverage: cov?.coverage ?? 0,
 			learned_success: cmp?.learned_success ?? null,
+			fallback_success: cmp?.fallback_success ?? null,
 			control_success: cmp?.control_success ?? null,
 		};
 	} finally {

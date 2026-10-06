@@ -2,7 +2,7 @@
 title: How spatz picks a model and effort
 description: The decision rule of spatz: cells, the Beta estimate, thresholds, cost order, critical tasks, exploration, the control group and how quality is computed.
 tags: [spatz, recommendation, learning]
-keywords: [attempt, retry, chain, outcome, decision rule, strategy, learned, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
+keywords: [attempt, retry, chain, outcome, decision rule, strategy, learned, learned-fallback, credible bound, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
 ---
 
 # How spatz picks a model and effort
@@ -18,10 +18,10 @@ A cell is the pair (task type, difficulty), for example (`code.bugfix`, `easy`).
 For each candidate in a cell, spatz computes an estimate of the success rate:
 
 ```
-estimate = (1 + sum of quality) / (2 + n)
+estimate = (1 + successes) / (2 + n)
 ```
 
-`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `quality` ranges from 0 to 1. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each first-attempt outcome moves the estimate towards the observed quality.
+`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `successes` counts the outcomes with quality `≥ 0.8` (`successQuality`). A partial result is no success. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each first-attempt outcome moves the estimate towards the observed success rate. Only live first attempts count in `n`.
 
 Only some outcomes count:
 
@@ -32,13 +32,19 @@ Only some outcomes count:
 - Old outcomes do not decay.
 
 Each reported retry keeps its own outcome in separate retry history.
-A same-pair reported failure followed by a pass contributes `n=1` and `sum_quality=0` to the first-attempt estimate.
-The retry contributes `n=1` and `sum_quality=1` to retry history.
+A same-pair reported failure followed by a pass contributes `n=1` and `successes=0` to the first-attempt estimate.
+The retry contributes `n=1` and `successes=1` to retry history.
 `store.cellStats(taskType)` uses only ordinal 1 of root suggestions and legacy/eval outcomes.
 `store.retryStats(taskType)` groups later ordinals and `--retry-of` chain members by cell and actual model/effort pair.
 Retry outcomes cannot change the first-attempt estimate.
 An internal test-fix-test loop stays in one attempt. Its latest ordered result supplies the quality.
 A sequence `A → B → A` keeps three attempts even when the first and last pairs match.
+
+### Model versions
+
+Outcomes do not decay with age. Instead, each attempt stores a `model_version` when the harness shows a dated model id (for example `claude-sonnet-4-5-20250929` gives `20250929`). Otherwise it stores null.
+For each model, the newest known version is the live one. Outcomes of an older known version do not count, so a new version starts with an empty estimate. Outcomes with a null version count for every version.
+The old outcomes stay in the database. `spatz stats --model-version <v>` shows them.
 
 ### Enough data and pooling
 
@@ -54,17 +60,19 @@ If the cell has too little data, spatz pools the outcomes of the same task type 
 
 Success on a harder task is evidence for an easier task. The reverse is not true. Pooled data uses the same "enough data" rule.
 
+With `SPATZ_FAMILY_POOLING=1`, a level that still has too little data pools next over all types of the same family (see [how-it-works.md](how-it-works.md#task-types)) at the same difficulty. spatz never pools across families. The flag is off by default until an offline replay shows that family pooling does not hurt.
+
 ## Decision order
 
 spatz applies the first rule that matches. The values are the start values in `DEFAULT_TUNING` (`packages/core/src/contracts/types.ts`).
 
-1. **Critical task.** If the criticality is not `none`, spatz uses the critical rule. A cheaper candidate wins only with `n ≥ 10` and estimate `≥ 0.9` in this cell. spatz takes the cheapest such candidate (strategy `learned`). Otherwise it recommends the most expensive candidate (strategy `strongest`). There is no pooling, no control and no exploration for critical tasks.
+1. **Critical task.** If the criticality is not `none`, spatz uses the critical rule. A cheaper candidate wins only with `n ≥ 10` in this cell and a 5 % lower credible bound `≥ 0.9`. The bound is the 5 % quantile of Beta(1 + successes, 1 + n − successes). With only passes, a candidate needs 28 outcomes. spatz takes the cheapest such candidate (strategy `learned`). Otherwise it recommends the most expensive candidate (strategy `strongest`). There is no pooling, no control and no exploration for critical tasks.
 2. **Random draw.** spatz draws one number `u` in [0, 1) per suggestion.
    - If `u < 0.1`, the suggestion is in the control group. spatz recommends the most expensive candidate (strategy `strongest`, `control: true`).
    - If `0.1 ≤ u < 0.2`, spatz explores after steps 3 to 7. See [Exploration](#exploration).
    - If `u ≥ 0.2`, spatz continues with step 3.
 3. **Learned choice in the cell.** If the cell has enough data, spatz takes the cheapest candidate with `n ≥ 5` and estimate `≥ 0.8` (strategy `learned`).
-4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate among the candidates with `n ≥ 5`. Candidates with fewer outcomes cannot win this step. On a tie, the more expensive candidate wins (strategy `learned`).
+4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate among the candidates with `n ≥ 5`. Candidates with fewer outcomes cannot win this step. On a tie, the more expensive candidate wins (strategy `learned-fallback`). This strategy marks a pick that met no limit.
 5. **Pooled level.** If the cell has too little data, spatz repeats steps 3 and 4 on the pooled levels.
 6. **Jev choice.** If the pooled levels also have too little data, spatz takes the best candidate of Jev (strategy `jev-choice`).
 7. **Rules.** If Jev was not involved, or its answer is not in the catalog, spatz recommends the most expensive candidate (strategy `rules`).
@@ -118,6 +126,7 @@ The control group gets the most expensive candidate in 10 % of the normal sugges
 | Field | Meaning |
 |---|---|
 | `learned_success` | Success rate of learned picks: strategy `learned` and not explored. |
+| `fallback_success` | Success rate of best-estimate picks: strategy `learned-fallback` and not explored. Compared with control in the same cells. |
 | `control_success` | Success rate of the control group. |
 | `coverage` | Share of suggestions (without `--dry-run`) that have an outcome. |
 | `adoption` | Per task type: share of root decisions whose first actual pair is the recommended pair. |

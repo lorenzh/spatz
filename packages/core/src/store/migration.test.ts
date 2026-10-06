@@ -37,7 +37,7 @@ async function fixture(dir: string, version = 7) {
 }
 
 // Use the previous schema to exercise a real migration and restore with the old CLI.
-async function previousStore(dir: string) {
+async function previousStore(dir: string, drop = 1) {
 	const source = (await Bun.file(join(import.meta.dir, "index.ts")).text())
 		.replaceAll('from "./attempt', `from "${import.meta.dir}/attempt`)
 		.replaceAll(
@@ -46,7 +46,7 @@ async function previousStore(dir: string) {
 		)
 		.replace(
 			"export const SCHEMA_VERSION",
-			"MIGRATIONS.pop();\nexport const SCHEMA_VERSION",
+			`MIGRATIONS.splice(-${drop});\nexport const SCHEMA_VERSION`,
 		);
 	const path = join(dir, "previous-store.ts");
 	await Bun.write(path, source);
@@ -306,7 +306,7 @@ test("v8 index failure rolls back the whole ledger and keeps v7 rows", async () 
 test("usage completeness migration marks stored Claude subagents and filters existing costs", async () => {
 	const dir = directory();
 	const { path, db } = await fixture(dir);
-	const previous = await previousStore(dir);
+	const previous = await previousStore(dir, 2);
 	previous.openDatabase(path).close();
 	db.run("UPDATE suggestions SET agent='claude-code' WHERE id IN ('h','r')");
 	db.run(
@@ -386,4 +386,24 @@ test("usage completeness migration marks stored Claude subagents and filters exi
 			.query("SELECT cost_usd FROM attempt_usage WHERE suggestion_id='proof'")
 			.get(),
 	).toEqual({ cost_usd: null });
+});
+
+test("a v5 backup restores intact and the current CLI refuses a downgrade", async () => {
+	const dir = directory();
+	const { path, db } = await fixture(dir, 5);
+	const before = db.query("SELECT * FROM suggestions").all();
+	db.close();
+	openDatabase(path).close();
+	const restoredPath = join(dir, "restored.db");
+	copyFileSync(`${path}.bak-v5`, restoredPath);
+	const restored = new Database(restoredPath);
+	handles.push(restored);
+	expect(restored.query("PRAGMA user_version").get()).toEqual({
+		user_version: 5,
+	});
+	expect(restored.query("SELECT * FROM suggestions").all()).toEqual(before);
+	const newer = openDatabase(path);
+	newer.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+	newer.close();
+	expect(() => openDatabase(path)).toThrow(/newer than supported.*upgrade/i);
 });

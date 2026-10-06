@@ -11,6 +11,8 @@ import {
 	type Difficulty,
 	type RankingEntry,
 	type StrategyName,
+	TASK_FAMILY,
+	type TaskType,
 	type Tuning,
 } from "../contracts/types.ts";
 
@@ -21,14 +23,41 @@ export interface StrategyContext {
 	tuning: Tuning;
 }
 
-/** Beta mean: (1 + sumQuality) / (2 + n). */
-export function estimate(sumQuality: number, n: number): number {
-	return (1 + sumQuality) / (2 + n);
+/** Beta mean: (1 + successes) / (2 + n). */
+export function estimate(successes: number, n: number): number {
+	return (1 + successes) / (2 + n);
+}
+
+/** 5 % quantile of Beta(1 + s, 1 + n - s), by bisection on the binomial form of the CDF (integer s and n). */
+export function lowerBound(successes: number, n: number): number {
+	const a = Math.round(successes) + 1;
+	const m = Math.round(n) + 1; // a + b - 1
+	const cdf = (x: number) => {
+		// I_x(a, b) = P(Binomial(m, x) >= a)
+		// Terms in log space: (1 - x) ** m underflows on large histories.
+		let p = 0;
+		let logTerm = m * Math.log1p(-x); // j = 0
+		const logRatio = Math.log(x) - Math.log1p(-x);
+		for (let j = 0; j <= m; j++) {
+			if (j >= a) p += Math.exp(logTerm);
+			logTerm += Math.log((m - j) / (j + 1)) + logRatio;
+		}
+		return p;
+	};
+	let lo = 0;
+	let hi = 1;
+	for (let i = 0; i < 50; i++) {
+		const mid = (lo + hi) / 2;
+		if (cdf(mid) < 0.05) lo = mid;
+		else hi = mid;
+	}
+	return lo;
 }
 
 interface Est {
 	n: number;
 	estimate: number;
+	successes: number;
 }
 /** Estimate and n per catalog candidate on one level. */
 type Level = (c: Candidate) => Est;
@@ -41,20 +70,23 @@ function level(
 	ctx: StrategyContext,
 	history: CellStat[],
 	difficulties: readonly Difficulty[],
+	sameType: (t: TaskType) => boolean = (t) =>
+		t === ctx.classification.task_type,
 ): Level {
 	const sums = new Map<string, { n: number; sum: number }>();
+	// sum counts successes; quality-mean learning overrated partial-heavy pairs.
 	for (const s of history) {
-		if (s.task_type !== ctx.classification.task_type) continue;
+		if (!sameType(s.task_type)) continue;
 		if (!difficulties.includes(normalizeDifficulty(s.difficulty))) continue;
 		const k = keyOf(s);
 		const cur = sums.get(k) ?? { n: 0, sum: 0 };
 		cur.n += s.n;
-		cur.sum += s.sum_quality;
+		cur.sum += s.successes;
 		sums.set(k, cur);
 	}
 	return (c) => {
 		const s = sums.get(keyOf(c)) ?? { n: 0, sum: 0 };
-		return { n: s.n, estimate: estimate(s.sum, s.n) };
+		return { n: s.n, estimate: estimate(s.sum, s.n), successes: s.sum };
 	};
 }
 
@@ -71,11 +103,10 @@ function decision(
 ): Decision {
 	return {
 		strategy,
-		ranking: catalog.slice(index, index + 3).map((c) => ({
-			model: c.model,
-			effort: c.effort,
-			...at(c),
-		})),
+		ranking: catalog.slice(index, index + 3).map((c) => {
+			const { n, estimate } = at(c);
+			return { model: c.model, effort: c.effort, estimate, n };
+		}),
 		reason,
 		explored: flags.explored ?? false,
 		control: flags.control ?? false,
@@ -100,7 +131,7 @@ function pickOnLevel(catalog: Catalog, at: Level, t: Tuning): number | null {
 	return best;
 }
 
-/** Cell, then extended level (same task_type, same and harder difficulties). null when even the extended level has too little data. */
+/** Cell, then extended level (same task_type, same and harder difficulties), then (flag) the same family at the same level. null when even the extended level has too little data. */
 export function learned(
 	ctx: StrategyContext,
 	catalog: Catalog,
@@ -111,6 +142,13 @@ export function learned(
 	if (difficulty !== "hard") {
 		const harder = DIFFICULTIES.slice(DIFFICULTIES.indexOf(difficulty));
 		levels.push([level(ctx, history, harder), `${harder.join("+")} level`]);
+	}
+	if (ctx.tuning.familyPooling) {
+		const family = TASK_FAMILY[ctx.classification.task_type];
+		levels.push([
+			level(ctx, history, [difficulty], (t) => TASK_FAMILY[t] === family),
+			`${difficulty} level of the ${family} family`,
+		]);
 	}
 	for (const [at, name] of levels) {
 		const i = pickOnLevel(catalog, at, ctx.tuning);
@@ -125,7 +163,7 @@ export function learned(
 			catalog,
 			i,
 			at,
-			"learned",
+			qualified ? "learned" : "learned-fallback",
 			`${label(c)} ${why} on the ${name}.`,
 		);
 	}
@@ -184,7 +222,7 @@ export function strongest(
 	);
 }
 
-/** Critical tasks: most expensive pair unless a cheaper one has cell n >= criticalMinN and estimate >= criticalMinEstimate. */
+/** Critical tasks: most expensive pair unless a cheaper one has cell n >= criticalMinN and a 5 % lower Beta bound >= criticalMinEstimate. */
 function critical(
 	ctx: StrategyContext,
 	catalog: Catalog,
@@ -198,7 +236,7 @@ function critical(
 		return (
 			j < catalog.length - 1 &&
 			e.n >= t.criticalMinN &&
-			e.estimate >= t.criticalMinEstimate
+			lowerBound(e.successes, e.n) >= t.criticalMinEstimate
 		);
 	});
 	if (i >= 0)

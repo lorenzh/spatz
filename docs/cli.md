@@ -17,7 +17,7 @@ spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> 
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
 spatz import-rollout <file> --suggestion <id> [--json]
 spatz hook <event> [--agent codex]
-spatz stats [--type <t>] [--by scope] [--json]
+spatz stats [--type <t>] [--by scope] [--model-version <v>] [--json]
 ```
 
 Related docs: [hooks.md](hooks.md) for Claude Code and Codex integrations, [configuration.md](configuration.md) for environment variables and files.
@@ -139,15 +139,15 @@ The first line is always `suggestion_id: <uuid>`. The Claude Code hook reads thi
 | `ranking[].model` | string | Canonical OpenRouter id. |
 | `ranking[].effort` | string | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. |
 | `ranking[].n` | number | Count of outcomes for this pair on the level that made the decision. That level is the cell (one pair of `task_type` and `difficulty`). If a learned choice used pooled data, it is the pooled level (same task type, same and harder difficulties). See [recommendation.md](recommendation.md). |
-| `ranking[].estimate` | number | Estimated success rate on the same level as `n`: `(1 + sum of quality) / (2 + n)`. With no data it is `0.5`. |
+| `ranking[].estimate` | number | Estimated success rate on the same level as `n`: `(1 + successes) / (2 + n)`, where a success is an outcome with quality `≥ 0.8`. With no data it is `0.5`. |
 | `reason` | string | One sentence that explains the choice. |
-| `classification.task_type` | string | `code.bugfix`, `code.feature`, `code.refactor`, `code.explain`, `review`, `spec`, `planning` or `other`. |
+| `classification.task_type` | string | `code.bugfix`, `code.feature`, `code.refactor`, `code.test`, `code.explain`, `investigation`, `review`, `spec`, `planning`, `ops`, `design.ui`, `design.visual`, `design.3d`, `writing`, `research`, `data` or `other`. |
 | `classification.difficulty` | string | `easy`, `medium` or `hard`. |
 | `classification.criticality` | string | `none`, `business_logic`, `security` or `data_integrity`. |
 | `fallback_used` | boolean | `true` when keyword rules classified the task instead of Jev. |
 | `explored` | boolean | `true` when spatz picked a cheaper pair to collect data (exploration). |
 | `control` | boolean | `true` when the suggestion is in the control group. The control group always gets the most expensive pair. |
-| `strategy` | string | `learned`, `jev-choice`, `rules` or `strongest`. See [recommendation.md](recommendation.md). |
+| `strategy` | string | `learned`, `learned-fallback`, `jev-choice`, `rules` or `strongest`. See [recommendation.md](recommendation.md). |
 | `is_test` | boolean | `true` with `--dry-run`. |
 
 ### Example
@@ -396,7 +396,8 @@ This command shows how well each pair worked, per task type. It reads the databa
 
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.explain`, `review`, `spec`, `planning`, `other`. Another value gives exit code 2. |
+| `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.test`, `code.explain`, `investigation`, `review`, `spec`, `planning`, `ops`, `design.ui`, `design.visual`, `design.3d`, `writing`, `research`, `data`, `other`. Another value gives exit code 2. |
+| `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 
 `--by scope` adds `by_scope` to the JSON response. Text output shows one line per recorded scope.
@@ -451,7 +452,7 @@ It needs no network access. spatz creates an empty database if none exists. Laun
 ```text
 <task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cache_read_tokens=<count>  cache_creation_tokens=<count>  cost_usd=<amount or ->  incomplete=<count>
   <model>:<effort>  n=<count>  success=<pct>
-coverage: <pct>  learned_success: <pct or ->  control_success: <pct or ->
+coverage: <pct>  learned_success: <pct or ->  fallback_success: <pct or ->  control_success: <pct or ->
 dispatches: <count>  routed_by_mod: <count>  swapped: <count>
 fallbacks: <reason>=<count>  ...
 failures: parse=<count>  hook=<count>  launcher=<count>
@@ -530,6 +531,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `by_type[].incomplete` | number | Count of known Claude subagent lower-bound estimates. Zero when none are present. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | First-attempt success rate of learned root decisions in cells with both learned and control outcomes, weighted by their counts. |
+| `fallback_success` | number or null | The same for `learned-fallback` root decisions (best estimate, no pair met the limits). |
 | `control_success` | number or null | Success rate of the control group in the same cells. |
 | `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |
 | `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
@@ -541,7 +543,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 $ spatz stats
 other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-  incomplete=0
   anthropic/claude-sonnet-5.5:medium  n=1  success=100%
-coverage: 14%  learned_success: -  control_success: -
+coverage: 14%  learned_success: -  fallback_success: -  control_success: -
 dispatches: 0  routed_by_mod: 0  swapped: 0
 fallbacks: opt_out=7
 failures: parse=0  hook=0  launcher=0
@@ -549,7 +551,7 @@ failures: parse=0  hook=0  launcher=0
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":null,"incomplete":0}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":null,"incomplete":0}],"coverage":0.14285714285714285,"learned_success":null,"fallback_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes

@@ -55,6 +55,7 @@ test("retries keep the first-attempt estimate and aggregate separately per pair 
 				effort: "low",
 				n: 1,
 				sum_quality: 0,
+				successes: 0,
 			},
 		]);
 		store.reportAttempt({ ...report, result: "pass" });
@@ -87,9 +88,15 @@ test("retries keep the first-attempt estimate and aggregate separately per pair 
 		expect((1 + after.sum_quality) / (2 + after.n)).toBe(1 / 3);
 		expect(store.retryStats("code.bugfix")).toEqual(
 			expect.arrayContaining([
-				{ ...before[0], n: 1, sum_quality: 1 },
-				{ ...before[0], model: "m/b", n: 1, sum_quality: 0.5 },
-				{ ...before[0], difficulty: "hard", n: 1, sum_quality: 1 },
+				{ ...before[0], n: 1, sum_quality: 1, successes: 1 },
+				{ ...before[0], model: "m/b", n: 1, sum_quality: 0.5, successes: 0 },
+				{
+					...before[0],
+					difficulty: "hard",
+					n: 1,
+					sum_quality: 1,
+					successes: 1,
+				},
 			]),
 		);
 		expect(store.retryStats("code.bugfix")).toHaveLength(3);
@@ -153,6 +160,7 @@ test("first-attempt learning keeps legacy eval rows and normalizes none-only pai
 				effort: "none",
 				n: 2,
 				sum_quality: 1,
+				successes: 1,
 			},
 		]);
 		expect(store.retryStats("code.bugfix")).toEqual([
@@ -163,6 +171,7 @@ test("first-attempt learning keeps legacy eval rows and normalizes none-only pai
 				effort: "none",
 				n: 1,
 				sum_quality: 1,
+				successes: 1,
 			},
 		]);
 	} finally {

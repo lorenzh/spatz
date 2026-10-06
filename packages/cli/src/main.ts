@@ -35,7 +35,7 @@ const USAGE = `usage:
   spatz import-rollout <file> --suggestion <id> [--json]
   spatz hook <event> [--agent codex]
   spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
-  spatz stats [--type <t>] [--by scope] [--json]`;
+  spatz stats [--type <t>] [--by scope] [--model-version <v>] [--json]`;
 
 const RESULTS: readonly string[] = ["pass", "partial", "fail"];
 
@@ -91,7 +91,7 @@ function formatStats(r: StatsReport): string {
 	]);
 	const opt = (x: number | null) => (x === null ? "-" : pct(x));
 	lines.push(
-		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  control_success: ${opt(r.control_success)}`,
+		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
 	);
 	return [...lines, ...diagnostics].join("\n");
 }
@@ -134,6 +134,7 @@ function parse(argv: string[]) {
 				"cache-creation": { type: "string" },
 				"cost-usd": { type: "string" },
 				by: { type: "string" },
+				"model-version": { type: "string" },
 			},
 		});
 	} catch (e) {
@@ -330,6 +331,7 @@ export async function main(
 			const input = {
 				...(type && { type: type as TaskType }),
 				...(v.by && { by: "scope" as const }),
+				...(v["model-version"] && { modelVersion: v["model-version"] }),
 			};
 			run = async () => {
 				const r = await api.stats(input);

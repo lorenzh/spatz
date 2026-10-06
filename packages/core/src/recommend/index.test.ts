@@ -14,6 +14,7 @@ import {
 	estimate,
 	jevChoice,
 	learned,
+	lowerBound,
 	recommend,
 	rules,
 	type StrategyContext,
@@ -65,6 +66,7 @@ function stat(
 	sum: number,
 	difficulty: Difficulty = "easy",
 	task_type: CellStat["task_type"] = "code.bugfix",
+	successes = sum,
 ): CellStat {
 	return {
 		task_type,
@@ -73,6 +75,7 @@ function stat(
 		effort: c.effort,
 		n,
 		sum_quality: sum,
+		successes,
 	};
 }
 const pick = (d: Decision) => d.ranking[0];
@@ -107,6 +110,55 @@ describe("estimate", () => {
 	});
 });
 
+describe("lowerBound", () => {
+	test("stays stable on large histories", () => {
+		expect(lowerBound(0, 1100)).toBeCloseTo(1 - 0.95 ** (1 / 1101), 9);
+		expect(lowerBound(1100, 1100)).toBeCloseTo(0.05 ** (1 / 1101), 6);
+		const x = lowerBound(550, 1100);
+		expect(x).toBeGreaterThan(0.47);
+		expect(x).toBeLessThan(0.5);
+	});
+	test("is the 5 % quantile of Beta(1 + s, 1 + n - s)", () => {
+		// Beta(s+1, 1) has CDF x^(s+1).
+		expect(lowerBound(10, 10)).toBeCloseTo(0.05 ** (1 / 11), 6);
+		expect(lowerBound(28, 28)).toBeCloseTo(0.05 ** (1 / 29), 6);
+		// Beta(1, 1) is uniform.
+		expect(lowerBound(0, 0)).toBeCloseTo(0.05, 6);
+		// Beta(6, 2) has CDF 7x^6 - 6x^7.
+		const x = lowerBound(5, 6);
+		expect(7 * x ** 6 - 6 * x ** 7).toBeCloseTo(0.05, 6);
+	});
+});
+
+describe("binary success", () => {
+	test("partial outcomes count as failures, not as 0.5 quality", () => {
+		// 6 passes and 2 partials: quality (1+7)/10 = 0.8 qualifies; success (1+6)/10 = 0.7 does not.
+		const history = [stat(c0, 8, 7, "easy", "code.bugfix", 6), stat(c1, 8, 8)];
+		const d = recommend(ctx(LEARNED), CATALOG, history);
+		expect(pick(d)).toMatchObject({ model: c1.model, estimate: 0.9 });
+		expect(d.strategy).toBe("learned");
+	});
+
+	test("replay fixture: a partial-heavy review x medium cell moves only that pick", () => {
+		// Fixture shaped like the live db: review x medium, cheapest pair passes half and is partial otherwise.
+		const fixture = [
+			stat(c0, 12, 9, "medium", "review", 6),
+			stat(c0, 10, 9.5, "medium", "review", 9), // cell total: n 22, quality 18.5, successes 15
+			stat(c1, 10, 10, "medium", "review"),
+			stat(c0, 10, 10, "easy", "code.bugfix"), // all passes: unchanged
+		];
+		// Mean-quality learning picked c0 (19.5/24 ≈ 0.81); binary rejects it (16/24 ≈ 0.67) and picks c1.
+		const review = recommend(
+			ctx(LEARNED, { task_type: "review", difficulty: "medium" }),
+			CATALOG,
+			fixture,
+		);
+		expect(pick(review)).toMatchObject({ model: c1.model, effort: c1.effort });
+		const bugfix = recommend(ctx(LEARNED), CATALOG, fixture);
+		expect(pick(bugfix)).toMatchObject({ model: c0.model, effort: c0.effort });
+	});
+});
+
 describe("critical tasks", () => {
 	const crits: Criticality[] = ["business_logic", "security", "data_integrity"];
 
@@ -121,11 +173,11 @@ describe("critical tasks", () => {
 		}
 	});
 
-	test("cheapest pair with cell n >= 10 and estimate >= 0.9 wins", () => {
+	test("cheapest pair with cell n >= 10 and 5 % lower bound >= 0.9 wins", () => {
 		const history = [
-			stat(c0, 9, 9), // estimate 10/11 but n < 10
-			stat(c1, 10, 10), // 11/12 ≈ 0.917 qualifies
-			stat(c2, 20, 20), // qualifies, but more expensive
+			stat(c0, 10, 10), // estimate 11/12 but lower bound 0.05^(1/11) ≈ 0.76
+			stat(c1, 30, 30), // lower bound 0.05^(1/31) ≈ 0.908 qualifies
+			stat(c2, 40, 40), // qualifies, but more expensive
 		];
 		for (const r of [0.05, 0.15, 0.5]) {
 			const d = recommend(
@@ -136,29 +188,21 @@ describe("critical tasks", () => {
 			expect(pick(d)).toMatchObject({
 				model: c1.model,
 				effort: c1.effort,
-				n: 10,
+				n: 30,
 			});
 			expect(d.control).toBe(false);
 			expect(d.explored).toBe(false);
 		}
 	});
 
-	test("estimate exactly 0.9 qualifies (inclusive)", () => {
-		const history = [
-			stat(c0, 18, 17), // 18/20 = 0.9 exactly
-			stat(c1, 20, 20), // qualifies, more expensive
-		];
+	test("estimate 0.9 with a lower bound below 0.9 does not qualify", () => {
+		const history = [stat(c0, 18, 17)]; // mean 18/20 = 0.9, bound ≈ 0.75
 		const d = recommend(
 			ctx(LEARNED, { criticality: "security" }),
 			CATALOG,
 			history,
 		);
-		expect(pick(d)).toMatchObject({
-			model: c0.model,
-			effort: c0.effort,
-			estimate: 0.9,
-			n: 18,
-		});
+		expect(pick(d)).toMatchObject({ model: c3.model, effort: c3.effort });
 	});
 
 	test("estimate below 0.9 or data only on the extended level does not count", () => {
@@ -263,7 +307,7 @@ describe("learned choice", () => {
 		const history = [stat(c0, 5, 2), stat(c2, 6, 3), stat(c1, 2, 2)]; // 3/7, 4/8, 3/4 (n too low)
 		const d = recommend(ctx(LEARNED), CATALOG, history);
 		expect(pick(d)).toMatchObject({ model: c2.model, effort: c2.effort, n: 6 });
-		expect(d.strategy).toBe("learned");
+		expect(d.strategy).toBe("learned-fallback");
 	});
 
 	test("best-estimate step skips pairs with too few outcomes", () => {
@@ -343,7 +387,36 @@ describe("extended level", () => {
 		];
 		const d = recommend(ctx(LEARNED), CATALOG, history);
 		expect(pick(d)).toMatchObject({ model: c1.model, effort: c1.effort, n: 6 });
+		expect(d.strategy).toBe("learned-fallback");
+	});
+});
+
+describe("family pooling", () => {
+	const family = [stat(c0, 5, 5, "easy", "code.feature")];
+	const on = (over: Partial<Classification> = {}): StrategyContext => ({
+		...ctx(LEARNED, over),
+		tuning: { ...DEFAULT_TUNING, familyPooling: true },
+	});
+
+	test("is off by default", () => {
+		expect(recommend(ctx(LEARNED), CATALOG, family).strategy).toBe(
+			"jev-choice",
+		);
+	});
+
+	test("pools the same family at the same level after the type levels", () => {
+		const d = recommend(on(), CATALOG, family);
 		expect(d.strategy).toBe("learned");
+		expect(pick(d)).toMatchObject({ model: c0.model, n: 5 });
+		expect(d.reason).toContain("code family");
+	});
+
+	test("never pools across families or other levels", () => {
+		const other = [
+			stat(c0, 5, 5, "easy", "review"),
+			stat(c0, 5, 5, "medium", "code.feature"),
+		];
+		expect(recommend(on(), CATALOG, other).strategy).toBe("jev-choice");
 	});
 });
 

@@ -110,7 +110,7 @@ Jev is the classification model of TypeSafe AI. It gives typed answers with a pr
 
 | Question | Kind | Options |
 |---|---|---|
-| `task_type` | choice | The eight task types below |
+| `task_type` | choice | The 17 task types below |
 | `difficulty` | score over a rubric | `easy`, `medium`, `hard` |
 | `criticality` | choice | `none`, `business_logic`, `security`, `data_integrity` |
 | `best_candidate` | choice | Every candidate as `model:effort` |
@@ -121,16 +121,27 @@ The timeout is 1000 ms. The SDK does not retry.
 
 ### Task types
 
-| Task type | Meaning (translated from the Jev description) |
-|---|---|
-| `code.bugfix` | Find and fix an error in existing code. |
-| `code.feature` | New code adds a function. |
-| `code.refactor` | The code changes its structure. The behavior stays the same. |
-| `code.explain` | The agent explains code and changes nothing. |
-| `review` | The agent checks work of others: a review or a verification. |
-| `spec` | The agent writes or changes a specification. |
-| `planning` | The agent plans steps, architecture or approach without code. |
-| `other` | No other option fits. |
+Taxonomy v2 has 17 flat types. Each type belongs to one family. spatz learns per type. The family only drives pooling (see [recommendation.md](recommendation.md)). v2 is a superset of v1, so old rows stay valid. The rules fallback without Jev still uses only the v1 types.
+
+| Family | Task type | Jev description | Boundary rule |
+|---|---|---|---|
+| code | `code.bugfix` | Find and fix a bug in existing code. | A fix exists in the result; diagnosis only is `investigation`. |
+| code | `code.feature` | Add behaviour with new code. | A UI task is `code.feature` when acceptance is functional (data saved, validation, API). New code with its own tests is `code.feature`. |
+| code | `code.refactor` | Change the code structure without changing its behaviour. | If behaviour changes it is `code.feature` or `code.bugfix`. |
+| code | `code.test` | Write or fix tests for existing code without changing the code under test. | A failing test caused by a bug in the code is `code.bugfix`. |
+| code | `code.explain` | Answer a question about existing code without producing a document or a change. | A written document is `writing`; finding the cause of a fault is `investigation`. |
+| code | `investigation` | Find the cause of a fault or unexpected behaviour without fixing it; the result is a diagnosis. | If the task also asks for the fix it is `code.bugfix`; gathering outside facts is `research`. |
+| review | `review` | Review or verify someone else's work: code, design, document or data. | Covers every artefact type. |
+| planning | `spec` | Write or change requirements, acceptance criteria or an interface contract that others implement. | Other prose is `writing`. |
+| planning | `planning` | Decide the steps, architecture or approach for this project without producing the work. | Gathering facts or options is `research`. |
+| ops | `ops` | Change or diagnose infrastructure, CI, deployment or configuration. | Application code is `code.*`; a CI failure caused by a code bug is `code.bugfix`. |
+| design | `design.ui` | Design or build a user interface: screens, layouts, components, flows or interactive prototypes. | Acceptance is look, layout or interaction; built in Figma or in code. |
+| design | `design.visual` | Create visual assets without interaction: graphics, illustrations, logos, diagrams, slides or image edits. | A chart from given numbers is `design.visual`; from analysed data it is `data`. |
+| design | `design.3d` | Create or change 3D content: models, meshes, scenes, materials or animations. | Includes three.js, Blender scripts and CAD. |
+| prose | `writing` | Write or edit prose for people: documentation, articles, reports, messages or marketing text. | Gathering and comparing facts is `research`. |
+| prose | `research` | Find, compare and summarise information or options; the result is knowledge, not a change. | A report whose main work is gathering is `research`; polishing existing text is `writing`. |
+| data | `data` | Analyse data: query, aggregate, chart or interpret a dataset; the result is a finding or a figure. | Building a pipeline or a schema is `code.feature`. |
+| other | `other` | None of the other options fits. | Live data only. |
 
 ### Difficulty rubric
 
@@ -138,9 +149,9 @@ The output and database use English values, ordered `easy < medium < hard`.
 
 | Value | Rubric |
 |---|---|
-| `easy` | A clear task with little context. One place or one topic. |
-| `medium` | Several places or topics. The approach needs some analysis. |
-| `hard` | Many parts, an unclear cause, a design decision or much context. |
+| `easy` | One clear deliverable with little context. |
+| `medium` | Several places, parts or constraints; some analysis. |
+| `hard` | Many parts, an open goal, a design decision, an unclear cause or much context. |
 
 spatz takes the level with the highest probability. If that probability is below 0.5, spatz moves one level up. `hard` stays `hard`. An uncertain answer thus gets the safer level.
 

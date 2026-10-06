@@ -3,17 +3,48 @@
 
 // ---------- Taxonomy (spec "Classification with Jev") ----------
 
+/** Taxonomy v2 (GitHub issue #72): a superset of v1, so old rows stay valid. Learning stays per type. */
 export const TASK_TYPES = [
 	"code.bugfix",
 	"code.feature",
 	"code.refactor",
+	"code.test",
 	"code.explain",
+	"investigation",
 	"review",
 	"spec",
 	"planning",
+	"ops",
+	"design.ui",
+	"design.visual",
+	"design.3d",
+	"writing",
+	"research",
+	"data",
 	"other",
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
+
+/** Family per type; it only drives pooling (Tuning.familyPooling). */
+export const TASK_FAMILY: Record<TaskType, string> = {
+	"code.bugfix": "code",
+	"code.feature": "code",
+	"code.refactor": "code",
+	"code.test": "code",
+	"code.explain": "code",
+	investigation: "code",
+	review: "review",
+	spec: "planning",
+	planning: "planning",
+	ops: "ops",
+	"design.ui": "design",
+	"design.visual": "design",
+	"design.3d": "design",
+	writing: "prose",
+	research: "prose",
+	data: "data",
+	other: "other",
+};
 
 /** Rubric order matters: Jev score key "0" = easy, "1" = medium, "2" = hard. */
 export const DIFFICULTIES = ["easy", "medium", "hard"] as const;
@@ -52,7 +83,7 @@ export interface Tuning {
 	minEstimate: number;
 	/** Critical tasks: a cheaper pair needs n >= 10 ... */
 	criticalMinN: number;
-	/** ... and estimate >= 0.9. */
+	/** ... and 5 % lower Beta bound of success >= 0.9. */
 	criticalMinEstimate: number;
 	/** Random draw u in [0,1): u < controlRate -> control. Default 0.1. */
 	controlRate: number;
@@ -70,6 +101,8 @@ export interface Tuning {
 	openRouterTimeoutMs: number;
 	/** Success means quality >= this. Default 0.8. */
 	successQuality: number;
+	/** Thin cells pool over the same family at the same level after the type levels. Default false until the offline replay shows no harm; env SPATZ_FAMILY_POOLING=1. */
+	familyPooling: boolean;
 }
 
 export const DEFAULT_TUNING: Tuning = {
@@ -85,6 +118,7 @@ export const DEFAULT_TUNING: Tuning = {
 	openRouterCacheMs: 24 * 60 * 60 * 1000,
 	openRouterTimeoutMs: 3000,
 	successQuality: 0.8,
+	familyPooling: false,
 };
 
 // ---------- Candidates and catalog (spec "Candidates and metadata") ----------
@@ -176,16 +210,23 @@ export interface CellStat {
 	effort: Effort;
 	n: number;
 	sum_quality: number;
+	/** Outcomes with quality >= successQuality; learning uses these, not sum_quality. */
+	successes: number;
 }
 
 // ---------- Suggestion (spec "Output") ----------
 
-export type StrategyName = "learned" | "jev-choice" | "rules" | "strongest";
+export type StrategyName =
+	| "learned"
+	| "learned-fallback"
+	| "jev-choice"
+	| "rules"
+	| "strongest";
 
 export interface RankingEntry {
 	model: string;
 	effort: Effort;
-	/** Beta mean (1 + sum quality) / (2 + n). */
+	/** Beta mean of success (1 + successes) / (2 + n). */
 	estimate: number;
 	n: number;
 }
@@ -440,6 +481,8 @@ export interface StatsReport {
 	coverage: number;
 	/** Success rate of learned vs control, compared per cell, weighted by count per cell. null without data. */
 	learned_success: number | null;
+	/** Success rate of learned-fallback picks (best estimate, no pair met the limits) vs control in the same cells. null without data. */
+	fallback_success: number | null;
 	control_success: number | null;
 }
 

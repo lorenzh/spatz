@@ -282,6 +282,7 @@ test("empty db: no types, coverage 0, no comparison", async () => {
 		by_type: [],
 		coverage: 0,
 		learned_success: null,
+		fallback_success: null,
 		control_success: null,
 		dispatches: 0,
 		routed_by_mod: 0,
@@ -315,6 +316,38 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 	expect(result.by_type[0]?.pairs).toEqual([
 		{ model, effort: "none", n: 1, success_rate: 1 },
 	]);
+});
+
+test("stats filters by model_version and keeps old versions visible under their own", async () => {
+	for (const [id, version, result] of [
+		["v1", "20250101", "pass"],
+		["v2", "20260101", "fail"],
+	] as const) {
+		sug(id);
+		store.reportAttempt({
+			suggestion_id: id,
+			model: "m/a",
+			effort: "low",
+			result,
+			at: 2,
+			model_version: version,
+		});
+	}
+	const by = async (modelVersion: string) =>
+		(
+			await runStats({
+				dbPath,
+				successQuality: 0.8,
+				modelVersion,
+			})
+		).by_type[0]?.pairs;
+	expect(await by("20250101")).toEqual([
+		{ model: "m/a", effort: "low", n: 1, success_rate: 1 },
+	]);
+	expect(await by("20260101")).toEqual([
+		{ model: "m/a", effort: "low", n: 1, success_rate: 0 },
+	]);
+	expect(await by("x'y")).toEqual([]);
 });
 
 test("no source file or package depends on DuckDB", async () => {
@@ -407,6 +440,7 @@ test("only dry-run suggestions: counts nothing", async () => {
 		by_type: [],
 		coverage: 0,
 		learned_success: null,
+		fallback_success: null,
 		control_success: null,
 		dispatches: 0,
 		routed_by_mod: 0,
@@ -456,6 +490,24 @@ test("learned success counts only learned picks: no exploration, jev-choice or r
 	expect(r.control_success).toBe(1);
 });
 
+test("learned-fallback picks get their own row, compared against control in the same cell", async () => {
+	sug("l1");
+	report("l1", "m/a", "low", "pass");
+	sug("f1", { strategy: "learned-fallback" });
+	report("f1", "m/a", "low", "fail");
+	sug("f2", { strategy: "learned-fallback" });
+	report("f2", "m/a", "low", "pass");
+	sug("k1", { control: true });
+	report("k1", "m/b", "high", "pass");
+	// fallback only in another cell without control: ignored
+	sug("f3", { strategy: "learned-fallback", difficulty: "hard" });
+	report("f3", "m/a", "low", "pass");
+	const r = await stats();
+	expect(r.learned_success).toBe(1);
+	expect(r.fallback_success).toBe(0.5);
+	expect(r.control_success).toBe(1);
+});
+
 test("success is quality >= 0.8; pairs and adoption distinguish effort", async () => {
 	const t = "code.feature";
 	sug("e1", { task_type: t, top: ["m/a", "low"] }); // adopted, quality 0.8
@@ -502,6 +554,7 @@ test("learned vs control cells are (task_type, difficulty), not difficulty alone
 	report("x2", "m/b", "high", "fail");
 	expect(await stats()).toMatchObject({
 		learned_success: null,
+		fallback_success: null,
 		control_success: null,
 		dispatches: 0,
 		routed_by_mod: 0,

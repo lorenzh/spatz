@@ -8,6 +8,7 @@ import {
 } from "../catalog/harness.ts";
 import {
 	buildCatalog,
+	modelVersion,
 	parseModelsArg,
 	toCanonicalId,
 } from "../catalog/index.ts";
@@ -36,6 +37,8 @@ import {
 	SCOPES,
 	SIGNAL_WEIGHTS,
 	type StatsReport,
+	TASK_FAMILY,
+	TASK_TYPES,
 	type UsageRecord,
 } from "../contracts/types.ts";
 import { recommend } from "../recommend/index.ts";
@@ -228,6 +231,7 @@ export function createApi(
 					occurred_at: Number.isFinite(message.at) ? message.at : null,
 					received_at: now,
 					model: toCanonicalId(message.model, cfg.aliases),
+					model_version: modelVersion(message.model),
 					effort,
 					revision: 0,
 				};
@@ -329,6 +333,7 @@ export function createApi(
 								model: message
 									? toCanonicalId(message.model, cfg.aliases)
 									: null,
+								model_version: message ? modelVersion(message.model) : null,
 								effort,
 								kind: signal.kind as "test" | "build",
 								value: signal.value,
@@ -427,6 +432,7 @@ export function createApi(
 				occurred_at: call.at,
 				received_at: now,
 				model: toCanonicalId(call.model, cfg.aliases),
+				model_version: modelVersion(call.model),
 				effort: EFFORTS.find((e) => e === call.effort) ?? null,
 				kind,
 				value: call.exit_code === 0 ? 1 : 0,
@@ -446,6 +452,7 @@ export function createApi(
 				model: rollout.mixed_pair
 					? null
 					: toCanonicalId(rollout.model, cfg.aliases),
+				model_version: rollout.mixed_pair ? null : modelVersion(rollout.model),
 				effort: rollout.mixed_pair
 					? null
 					: (EFFORTS.find((e) => e === rollout.effort) ?? null),
@@ -713,7 +720,11 @@ export function createApi(
 				const d = recommend(
 					{ classification: c, random: deps.random(), tuning: cfg.tuning },
 					catalog,
-					store.cellStats(c.task_type),
+					cfg.tuning.familyPooling
+						? TASK_TYPES.filter(
+								(t) => TASK_FAMILY[t] === TASK_FAMILY[c.task_type],
+							).flatMap((t) => store.cellStats(t, cfg.tuning.successQuality))
+						: store.cellStats(c.task_type, cfg.tuning.successQuality),
 				);
 				const id = deps.newId();
 				const now = deps.clock.now();
@@ -923,6 +934,7 @@ export function createApi(
 				return store.reportAttempt({
 					suggestion_id: suggestionId,
 					model: toCanonicalId(model, cfg.aliases),
+					model_version: modelVersion(model),
 					effort: effort as Effort,
 					result,
 					at: deps.clock.now(),
@@ -978,7 +990,7 @@ export function createApi(
 			}
 		},
 
-		async stats({ type, by }) {
+		async stats({ type, by, modelVersion }) {
 			const cfg = await getConfig();
 			const noneOnlyModels = noneOnly(await availableEfforts());
 			// Opening the store runs migrations; the read-only stats connection cannot.
@@ -989,6 +1001,7 @@ export function createApi(
 				dbPath: deps.dbPath,
 				...(type && { type }),
 				...(by && { by }),
+				...(modelVersion && { modelVersion }),
 				successQuality: cfg.tuning.successQuality,
 				noneOnlyModels,
 			});
