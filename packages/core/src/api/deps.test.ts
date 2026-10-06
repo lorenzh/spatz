@@ -80,9 +80,6 @@ describe("defaultDeps", () => {
 		expect(d.openRouterCachePath).toBe(
 			join(home, ".spatz", "openrouter-models.json"),
 		);
-		expect(d.duckdbExtensionDir).toBe(
-			join(home, ".spatz", "duckdb-extensions"),
-		);
 		expect(typeof d.clock.now()).toBe("number");
 		const r = d.random();
 		expect(r >= 0 && r < 1).toBe(true);

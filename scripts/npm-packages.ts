@@ -79,12 +79,7 @@ export async function buildNpmPackages(
 			const dir = join(out, `cli-${target}`);
 			await rename(join(stage, name), dir);
 			const binary = windows ? "spatz.exe" : "spatz";
-			const library = windows
-				? "duckdb.dll"
-				: target.startsWith("darwin")
-					? "libduckdb.dylib"
-					: "libduckdb.so";
-			for (const file of [binary, "duckdb.node", library]) {
+			for (const file of [binary]) {
 				if (!(await Bun.file(join(dir, file)).exists()))
 					throw new Error(`Missing ${target}/${file}`);
 			}

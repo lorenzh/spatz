@@ -39,7 +39,7 @@ The CLI and core are separate packages. `packages/core` (`@spatz/core`) holds al
 | `recommend` | Computes the estimates per cell and picks the candidate. It is pure: no network, no files. |
 | `signals` | Reads hook input: test and build commands, the suggestion id in `spatz` output, and token usage in Claude Code and Codex transcripts. It is pure. |
 | `store` | The SQLite database through `bun:sqlite`: schema, migrations, writes and the `outcomes` view. |
-| `report` | The `spatz stats` evaluation. DuckDB reads the SQLite file in read-only mode. spatz loads DuckDB only for this command. |
+| `report` | The `spatz stats` evaluation. It reads the SQLite file in read-only mode with bun:sqlite. |
 | `contracts` | Shared types and start values. No logic. |
 
 ```mermaid
@@ -243,7 +243,7 @@ See [CLI stats](cli.md#spatz-stats) for the current totals.
 
 ### Migrations
 
-`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz link`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through DuckDB.
+`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz link`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through a read-only bun:sqlite connection.
 
 All pending migrations run in one `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
 

@@ -1,8 +1,8 @@
 ---
 title: spatz configuration
-description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
+description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts. `spatz stats` reads the database with bun:sqlite and needs no download.
 tags: [configuration, reference, spatz]
-keywords: [cost, tokens, price_snapshot, price_date, migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, SPATZ_SUGGESTION_ID, diagnostics, effort]
+keywords: [cost, tokens, price_snapshot, price_date, migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, offline, bun:sqlite, timeout, threshold, tuning, SPATZ_DEBUG, SPATZ_SUGGESTION_ID, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -24,8 +24,6 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | `SPATZ_MODELS` | not set | Default candidate list using the `--models` grammar. Overrides project and user defaults. |
 | `HOME` | home directory of the OS user | spatz keeps all its files in `$HOME/.spatz`. |
 
-The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it. See [DuckDB sqlite extension](#duckdb-sqlite-extension).
-
 ## Files and directories
 
 | Path | Format | Written by | Purpose |
@@ -35,7 +33,6 @@ The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it
 | `~/.spatz/launcher-failures` | One `1` marker per line | Plugin launchers | Failed hook launches for `spatz stats`. |
 | `~/.spatz/harness-models.json` | JSON | spatz | Cache of the harness model catalog. |
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
-| `~/.spatz/duckdb-extensions/` | DuckDB extension directory | `spatz stats` | The DuckDB sqlite extension. |
 | `~/.spatz/aliases.json` | JSON object | you | Model id mapping. Optional. |
 | `~/.spatz/descriptions.json` | JSON object | you | Model descriptions for Jev. Optional. |
 | `<cwd>/.spatz.json` | JSON object | you | Project models and Jev opt-out. Optional. |
@@ -251,7 +248,6 @@ Adding fields cannot teach released clients new efforts. Upgrade the CLI to use 
 `SPATZ_NO_NETWORK=1` skips both catalog requests and Jev classification for suggestions.
 It uses stale caches and keyword classification.
 `SPATZ_NO_JEV=1` and `"jev": false` remain task-text opt-outs. They allow catalog requests because those requests contain no task text.
-For offline `spatz stats`, also preinstall the [DuckDB extension](#duckdb-sqlite-extension).
 
 The [daily catalog workflow](../RELEASING.md#daily-harness-catalog) updates models without a CLI release.
 The bundled catalog changes with the next build. If your account or dispatch tool exposes different choices, configure models explicitly.
@@ -300,31 +296,3 @@ Other fixed values:
 | Jev model | `jev-1.13.0` | Model of the Jev request. |
 
 See [recommendation.md](recommendation.md) for how these values decide a recommendation.
-
-## DuckDB sqlite extension
-
-`spatz stats` reads the SQLite database with DuckDB. DuckDB needs its sqlite extension for that. On the first run, `spatz stats` downloads the extension from `extensions.duckdb.org` into `~/.spatz/duckdb-extensions/`. Later runs work offline. No other command loads DuckDB.
-
-If the machine has no network access, the first `spatz stats` fails with exit code 1 and the message `Failed to download extension "sqlite_scanner"`.
-
-To prepare the extension before you go offline, do one of these steps:
-
-1. Run `spatz stats` once on the same machine while it has network access. The database must exist, so run one `spatz "<task>"` first. You can use `--dry-run`.
-2. Copy or link an existing extension directory to `~/.spatz/duckdb-extensions`. It must come from the same DuckDB version and platform:
-
-   ```bash
-   mkdir -p ~/.spatz
-   ln -s /path/to/existing/duckdb-extensions ~/.spatz/duckdb-extensions
-   ```
-
-The directory has this layout:
-
-```text
-~/.spatz/duckdb-extensions/
-  v1.5.6/
-    linux_amd64/
-      sqlite_scanner.duckdb_extension
-      sqlite_scanner.duckdb_extension.info
-```
-
-The CLI always uses `~/.spatz/duckdb-extensions`. `SPATZ_DUCKDB_EXTENSION_DIR` has no effect on the CLI. Only the test suites read it, to find an installed extension.

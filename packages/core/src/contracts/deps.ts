@@ -155,8 +155,6 @@ export interface CoreDeps {
 	dbPath: string;
 	/** Default <homeDir>/.spatz/openrouter-models.json. */
 	openRouterCachePath: string;
-	/** Default <homeDir>/.spatz/duckdb-extensions. */
-	duckdbExtensionDir: string;
 	fetch: FetchFn;
 	/** null when TYPESAFE_AI_API_KEY is unset (-> fallback "no_key"). */
 	jev: JevClient | null;

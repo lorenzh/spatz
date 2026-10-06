@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Store } from "../contracts/deps.ts";
 import type {
@@ -16,11 +16,6 @@ import type {
 } from "../contracts/types.ts";
 import { openStore } from "../store/index.ts";
 import { runStats } from "./index.ts";
-
-// Pre-installed sqlite extension. Tests never INSTALL: the onSql guard throws before any INSTALL runs.
-const extensionDir =
-	process.env.SPATZ_DUCKDB_EXTENSION_DIR ??
-	join(homedir(), ".spatz", "duckdb-extensions");
 
 let dir: string;
 let dbPath: string;
@@ -116,10 +111,6 @@ function report(
 	store.reportAttempt({ suggestion_id: id, model, effort, result, at: 1 });
 }
 
-const noInstall = (sql: string) => {
-	if (/\bINSTALL\b/i.test(sql)) throw new Error(`INSTALL blocked: ${sql}`);
-};
-
 test("stats and stats by scope combine legacy and English difficulty cells", async () => {
 	sug("legacy", { difficulty: "medium", scope: "turn" });
 	sug("english", { difficulty: "medium", scope: "turn", control: true });
@@ -131,9 +122,7 @@ test("stats and stats by scope combine legacy and English difficulty cells", asy
 	for (const by of [undefined, "scope"] as const) {
 		const result = await runStats({
 			dbPath,
-			extensionDir,
 			successQuality: 0.8,
-			onSql: noInstall,
 			...(by && { by }),
 		});
 		expect(result.learned_success).toBe(1);
@@ -149,10 +138,8 @@ test("stats and stats by scope combine legacy and English difficulty cells", asy
 const stats = (type?: TaskType) =>
 	runStats({
 		dbPath,
-		extensionDir,
 		type,
 		successQuality: 0.8,
-		onSql: noInstall,
 	});
 
 test("attempt statistics count coverage once, compare the first pair, and sum usage before outcomes", async () => {
@@ -212,10 +199,8 @@ test("attempt statistics count coverage once, compare the first pair, and sum us
 	});
 	const result = await runStats({
 		dbPath,
-		extensionDir,
 		successQuality: 0.8,
 		by: "scope",
-		onSql: noInstall,
 	});
 	expect(result.coverage).toBe(2 / 3);
 	expect(result.by_type[0]).toMatchObject({
@@ -255,10 +240,8 @@ test("linked retries use the root scope and first verdict for comparison", async
 	});
 	const result = await runStats({
 		dbPath,
-		extensionDir,
 		successQuality: 0.8,
 		by: "scope",
-		onSql: noInstall,
 	});
 	expect(result.coverage).toBe(1);
 	expect(result.by_scope?.find((s) => s.scope === "turn")).toMatchObject({
@@ -313,22 +296,8 @@ test("reads the SQLite file read-only and leaves it unchanged", async () => {
 	report("s1", "m/a", "low", "pass");
 	store.dispose();
 	const before = Bun.hash(await Bun.file(dbPath).bytes());
-	const sqls: string[] = [];
-	const r = await runStats({
-		dbPath,
-		extensionDir,
-		successQuality: 0.8,
-		onSql: (sql) => {
-			noInstall(sql);
-			sqls.push(sql.trim());
-		},
-	});
+	const r = await runStats({ dbPath, successQuality: 0.8 });
 	expect(r.coverage).toBe(1);
-	expect(sqls.slice(0, 2)).toEqual([
-		"LOAD sqlite",
-		`ATTACH '${dbPath}' AS db (TYPE sqlite, READ_ONLY)`,
-	]);
-	expect(sqls.some((q) => /INSTALL/i.test(q))).toBe(false);
 	expect(Bun.hash(await Bun.file(dbPath).bytes())).toBe(before);
 	store = openStore(dbPath); // afterEach disposes again
 });
@@ -340,41 +309,28 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 	signal("haiku", 1);
 	const result = await runStats({
 		dbPath,
-		extensionDir,
 		successQuality: 0.8,
 		noneOnlyModels: [model],
-		onSql: noInstall,
 	});
 	expect(result.by_type[0]?.pairs).toEqual([
 		{ model, effort: "none", n: 1, success_rate: 1 },
 	]);
 });
 
-test("missing extension: INSTALL is attempted only after LOAD fails (guard stops it)", async () => {
-	const empty = join(dir, "no-ext");
-	const sqls: string[] = [];
-	const run = runStats({
-		dbPath,
-		extensionDir: empty,
-		successQuality: 0.8,
-		onSql: (sql) => {
-			sqls.push(sql.trim());
-			noInstall(sql);
-		},
-	});
-	await expect(run).rejects.toThrow("INSTALL blocked");
-	expect(sqls).toEqual(["LOAD sqlite", "INSTALL sqlite"]);
-});
-
-test("DuckDB is imported only by the report module", async () => {
-	const root = join(import.meta.dir, "..", "..", "..");
+test("no source file or package depends on DuckDB", async () => {
+	const root = join(import.meta.dir, "..", "..", "..", "..");
 	const hits: string[] = [];
-	for await (const f of new Bun.Glob("*/src/**/*.ts").scan(root)) {
-		if (f.endsWith(".test.ts")) continue;
-		if ((await Bun.file(join(root, f)).text()).includes("@duckdb/"))
-			hits.push(f);
-	}
-	expect(hits).toEqual(["core/src/report/index.ts"]);
+	for (const glob of [
+		"packages/*/src/**/*.ts",
+		"scripts/*.ts",
+		"packages/*/package.json",
+		"package.json",
+	])
+		for await (const f of new Bun.Glob(glob).scan(root)) {
+			if (f.endsWith(".test.ts")) continue;
+			if (/duckdb/i.test(await Bun.file(join(root, f)).text())) hits.push(f);
+		}
+	expect(hits).toEqual([]);
 });
 
 describe("one dataset", () => {
@@ -612,10 +568,8 @@ test("scope stats count completed chains once, including expired usage-only chai
 	sug("zero", { scope: "step", task_type: "review" });
 	const r = await runStats({
 		dbPath,
-		extensionDir,
 		successQuality: 0.8,
 		by: "scope",
-		onSql: noInstall,
 	});
 	expect(r.by_scope).toEqual([
 		{
@@ -657,11 +611,9 @@ test("scope stats count completed chains once, including expired usage-only chai
 	]);
 	const filtered = await runStats({
 		dbPath,
-		extensionDir,
 		successQuality: 0.8,
 		by: "scope",
 		type: "review",
-		onSql: noInstall,
 	});
 	expect(filtered.by_scope).toEqual(r.by_scope?.slice(0, 1));
 });
@@ -698,10 +650,8 @@ test("USD totals exclude schema 1 even with a reported cost and remain null with
 	db.close();
 	const result = await runStats({
 		dbPath,
-		extensionDir,
 		successQuality: 0.8,
 		by: "scope",
-		onSql: noInstall,
 	});
 	expect(
 		result.by_type.find((t) => t.task_type === "code.bugfix")?.cost_usd,
@@ -745,7 +695,6 @@ test("dispatch counts include unlinked spawns, exclude dry runs, and do not coun
 	store.upsertDispatch({ ...row, agent_id: "dry", suggestion_id: "test" });
 	const result = await runStats({
 		dbPath,
-		extensionDir,
 		successQuality: 0.8,
 		type: "other",
 	});
@@ -794,10 +743,8 @@ test("only known subagent estimates count as incomplete; unknown usage retains n
 		).toEqual({ cost_usd: null, incomplete: 1 });
 		const result = await runStats({
 			dbPath,
-			extensionDir,
 			successQuality: 0.8,
 			by: "scope",
-			onSql: noInstall,
 		});
 		expect(
 			result.by_type.find((t) => t.task_type === "code.bugfix"),

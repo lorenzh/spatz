@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, SCHEMA_VERSION } from "../store/index.ts";
 import baseline from "./fixtures/v7-stats.json";
@@ -82,15 +82,8 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 		}
 		const result = await runStats({
 			dbPath,
-			extensionDir:
-				process.env.SPATZ_DUCKDB_EXTENSION_DIR ??
-				join(homedir(), ".spatz", "duckdb-extensions"),
 			successQuality: 0.8,
 			by: "scope",
-			onSql(sql) {
-				if (/\bINSTALL\b/i.test(sql))
-					throw new Error(`INSTALL blocked: ${sql}`);
-			},
 		});
 		// Unknown legacy completeness stays unpriced without a lower-bound warning.
 		expect(

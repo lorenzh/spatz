@@ -17,7 +17,6 @@ export function defaultDeps(env: Env, cwd: string): CoreDeps {
 		cwd,
 		dbPath: join(spatzDir, "spatz.db"),
 		openRouterCachePath: join(spatzDir, "openrouter-models.json"),
-		duckdbExtensionDir: join(spatzDir, "duckdb-extensions"),
 		fetch: (input, init) => fetch(input, init),
 		jev: key ? createJevClient(key) : null,
 		clock: { now: Date.now },

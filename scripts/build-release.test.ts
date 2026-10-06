@@ -6,7 +6,7 @@ import { buildRelease } from "./build-release.ts";
 import { smokeRelease } from "./smoke-release.ts";
 
 test.skipIf(process.platform === "win32")(
-	"archive runs outside the checkout with the injected version and DuckDB sidecars",
+	"archive runs outside the checkout with the injected version",
 	async () => {
 		const out = await mkdtemp(join(tmpdir(), "spatz-build-"));
 		try {

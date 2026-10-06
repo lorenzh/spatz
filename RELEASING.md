@@ -137,8 +137,8 @@ bun scripts/smoke-release.ts dist/spatz-cli-0.2.0-linux-x64.tar.gz 0.2.0
 ```
 
 Use your host's OS and architecture in the archive name. The build script supports native builds only, including experimental Windows x64.
-The smoke test checks the checksum, version, dry-run suggestion, and DuckDB statistics outside the checkout.
-It uses the preinstalled DuckDB SQLite extension and sets dead HTTP proxies.
+The smoke test checks the checksum, version, dry-run suggestion, and statistics outside the checkout.
+It sets dead HTTP proxies.
 See [README.md](README.md#releases) for download and installation instructions.
 
 ## Daily harness catalog
@@ -183,7 +183,7 @@ The workflow uses four jobs, each with a timeout:
   It runs the extractor and uploads only `catalog/harness-models.json` with the pinned artifact action.
 - `test` needs `extract`, has `contents: read` and a 15-minute timeout. It checks out the run's commit without stored credentials.
   It copies the artifact with `scripts/accept-harness-catalog.ts` and installs the dev dependencies.
-  It installs the DuckDB extension in a temporary home, then runs `bun test` with another temporary `HOME` and `SPATZ_DUCKDB_EXTENSION_DIR` set to that extension.
+  It runs `bun test` with a temporary `HOME`.
   The dev dependencies are third-party code, so this job has no write access.
 - `publish` needs `test` and has a 10-minute timeout. It checks out the run's commit again without stored credentials.
   The pinned download action puts the `extract` artifact in a temporary directory.
@@ -259,7 +259,7 @@ The packages are:
 
 If the Windows archive is absent, the workflow omits its npm package.
 
-Platform packages keep DuckDB sidecars beside the executable. Linux packages require glibc.
+Platform packages hold only the executable. Linux packages require glibc.
 The launcher needs Node.js 18 or newer. Users do not need a separate Bun installation.
 
 ### Trusted publishing setup

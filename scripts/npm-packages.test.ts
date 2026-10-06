@@ -47,7 +47,7 @@ test("older stable releases preserve latest using a major/minor dist-tag", () =>
 });
 
 test.skipIf(process.platform === "win32")(
-	"packages preserve sidecars, metadata, launcher mapping, arguments and exit status",
+	"packages preserve the binary, metadata, launcher mapping, arguments and exit status",
 	async () => {
 		const temp = await mkdtemp(join(tmpdir(), "spatz-npm-test-"));
 		try {
@@ -64,18 +64,6 @@ test.skipIf(process.platform === "win32")(
 					"#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2))); process.exit(7);\n",
 				);
 				await chmod(join(dir, binary), 0o755);
-				await Bun.write(join(dir, "duckdb.node"), "binding");
-				await Bun.write(
-					join(
-						dir,
-						target.startsWith("win32")
-							? "duckdb.dll"
-							: target.startsWith("darwin")
-								? "libduckdb.dylib"
-								: "libduckdb.so",
-					),
-					"library",
-				);
 				const command = target.startsWith("win32")
 					? [
 							"python3",
@@ -118,10 +106,9 @@ test.skipIf(process.platform === "win32")(
 				expect(pkg.libc).toEqual(
 					target.startsWith("linux") ? ["glibc"] : undefined,
 				);
-				expect(pkg.files).toContain("duckdb.node");
-				expect(
-					await Bun.file(join(out, `cli-${target}/duckdb.node`)).text(),
-				).toBe("binding");
+				expect(pkg.files).toContain(
+					target.startsWith("win32") ? "spatz.exe" : "spatz",
+				);
 				const probe = Bun.spawnSync(
 					[
 						"node",

@@ -791,11 +791,11 @@ describe("stats", () => {
 		const { io, err } = fakeIO();
 		const { api } = fakeApi({
 			stats: async () => {
-				throw new Error("duckdb missing");
+				throw new Error("store missing");
 			},
 		});
 		expect(await main(["stats"], io, api)).toBe(1);
-		expect(err.join("\n")).toContain("duckdb missing");
+		expect(err.join("\n")).toContain("store missing");
 	});
 });
 

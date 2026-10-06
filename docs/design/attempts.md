@@ -124,7 +124,7 @@ Prompt/turn bindings can name several mod segments. Exact call/message/start bin
 
 Enable foreign keys. Check token ranges, pair values, source ownership and matching suggestion/attempt IDs. A new chain root references itself. Other members copy an existing root without changing it. No `predecessor_id` or cycle checks are needed.
 
-DuckDB reads latest event revisions only. It needs `attempt_id`, `suggestion_id`, `binding`, `kind`, `value`, `weight`, pair fields and all four token columns. Binding context/IDs support attribution audits. Source order and times support reconciliation. Store no raw prompts or command output.
+`spatz stats` reads latest event revisions only. It needs `attempt_id`, `suggestion_id`, `binding`, `kind`, `value`, `weight`, pair fields and all four token columns. Binding context/IDs support attribution audits. Source order and times support reconciliation. Store no raw prompts or command output.
 
 ## One binding rule for signals and usage
 

@@ -32,7 +32,7 @@ The npm packages include the Bun runtime. You do not need to install Bun separat
 
 You can also download a binary archive from [GitHub Releases](https://github.com/lorenzh/spatz/releases).
 Choose your OS and CPU architecture. Check its `.sha256` file before extraction.
-Keep the executable and DuckDB libraries together, then put the executable on `PATH`.
+Put the executable on `PATH`.
 See the [binary installation commands](../README.md#releases).
 
 A shell alias does not count as an installed executable.
