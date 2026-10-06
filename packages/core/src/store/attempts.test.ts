@@ -73,35 +73,75 @@ test("same-pair retries preserve failure, correction and replay preserve the slo
 	store.dispose();
 });
 test("A to B to A starts three UUIDs; source-ordered test red to green is one outcome", () => {
-	const store = openStore(":memory:");
-	store.insertSuggestion(suggestion({ session_id: "session" }));
-	const starts = ["m/a", "m/b", "m/a"].map((model, i) =>
-		store.startAttempt({
-			...context,
-			suggestion_id: "s1",
-			key: `t:${i}`,
-			model,
-			effort: "low",
-			at: 1100 + i,
-		}),
-	);
-	expect(starts.map((a) => a.ordinal)).toEqual([1, 2, 3]);
-	expect(new Set(starts.map((a) => a.id)).size).toBe(3);
-	store.recordAttemptEvents(
-		[0, 1].map((value, i) => ({
-			...context,
-			event_id: `test:${i}`,
-			revision: 0,
-			attempt_id: starts[2]!.id,
-			kind: "test" as const,
-			value,
-			weight: 1,
-			source_seq: i,
-			received_at: 1200 + i,
-		})),
-	);
-	expect(store.outcome("s1")).toMatchObject({ quality: 1, ordinal: 3 });
-	store.dispose();
+	const dir = mkdtempSync(join(tmpdir(), "spatz-segments-"));
+	const path = join(dir, "db");
+	const store = openStore(path);
+	const db = new Database(path);
+	try {
+		store.insertSuggestion(suggestion({ session_id: "session" }));
+		const starts = ["m/a", "m/b", "m/a"].map((model, i) =>
+			store.startAttempt({
+				...context,
+				suggestion_id: "s1",
+				key: `t:${i}`,
+				model,
+				effort: "low",
+				at: 1100 + i,
+			}),
+		);
+		expect(starts.map((a) => a.ordinal)).toEqual([1, 2, 3]);
+		expect(new Set(starts.map((a) => a.id)).size).toBe(3);
+		for (const attempt of starts.slice(0, 2))
+			store.recordAttemptEvents([
+				{
+					...context,
+					event_id: `fail:${attempt.ordinal}`,
+					revision: 0,
+					attempt_id: attempt.id,
+					kind: "test",
+					value: 0,
+					weight: 1,
+					source_seq: 0,
+					received_at: 1200,
+				},
+			]);
+		store.recordAttemptEvents(
+			[0, 1].map((value, i) => ({
+				...context,
+				event_id: `test:${i}`,
+				revision: 0,
+				attempt_id: starts.at(-1)?.id,
+				kind: "test" as const,
+				value,
+				weight: 1,
+				source_seq: i,
+				received_at: 1200 + i,
+			})),
+		);
+		expect(store.outcome("s1")).toMatchObject({ quality: 1, ordinal: 3 });
+		expect(
+			db
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_outcomes WHERE suggestion_id='s1'",
+				)
+				.get(),
+		).toEqual({ n: 3 });
+		expect(
+			db
+				.query(
+					"SELECT ordinal,model,effort,quality FROM attempt_outcomes WHERE suggestion_id='s1' ORDER BY ordinal",
+				)
+				.all(),
+		).toEqual([
+			{ ordinal: 1, model: "m/a", effort: "low", quality: 0 },
+			{ ordinal: 2, model: "m/b", effort: "low", quality: 0 },
+			{ ordinal: 3, model: "m/a", effort: "low", quality: 1 },
+		]);
+	} finally {
+		db.close();
+		store.dispose();
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 test("pending and provisional usage and signals reconcile together; known prompt never escapes", () => {
 	const store = openStore(":memory:");
@@ -177,9 +217,11 @@ test("pending repair moves signal and usage atomically and rolls back conflicts"
 	];
 	store.recordAttemptEvents(events);
 	expect(store.outcome("s1")?.quality).toBeNull();
+	const attempt = store.outcome("s1")?.attempt_id;
+	if (!attempt) throw new Error("missing attempt");
 	store.bindAttempt({
 		...context,
-		attempt_id: store.outcome("s1")!.attempt_id!,
+		attempt_id: attempt,
 		id_kind: "prompt",
 		external_id: "late",
 	});
@@ -188,10 +230,12 @@ test("pending repair moves signal and usage atomically and rolls back conflicts"
 		input_tokens: 100,
 		output_tokens: 20,
 	});
+	const [check, measure] = events;
+	if (!check || !measure) throw new Error("missing repair events");
 	expect(() =>
 		store.recordAttemptEvents([
-			{ ...events[0]!, event_id: "other", value: 1 },
-			{ ...events[1]!, output_tokens: -1 },
+			{ ...check, event_id: "other", value: 1 },
+			{ ...measure, output_tokens: -1 },
 		]),
 	).toThrow();
 	expect(store.outcome("s1")).toMatchObject({ quality: 0, output_tokens: 20 });
@@ -200,7 +244,8 @@ test("pending repair moves signal and usage atomically and rolls back conflicts"
 test("exact identity without time works, revisions replace snapshots, invalid duplicate rejects", () => {
 	const store = openStore(":memory:");
 	store.insertSuggestion(suggestion({ session_id: "session" }));
-	const a = store.outcome("s1")!.attempt_id!;
+	const a = store.outcome("s1")?.attempt_id;
+	if (!a) throw new Error("missing attempt");
 	store.bindAttempt({
 		...context,
 		attempt_id: a,
@@ -859,12 +904,14 @@ test("report events retain rounds, note and source turn across corrections", () 
 		).toEqual({ rounds: 3, note: "fixed", turn_id: "turn" });
 		const retry = store.reportAttempt({ ...input, result: "fail", at: 4000 });
 		expect(retry).toMatchObject({ ordinal: 2, quality: 0 });
+		const retryId = retry.attempt_id;
+		if (!retryId) throw new Error("missing retry attempt");
 		expect(
 			db
 				.query(
 					"SELECT rounds,note,turn_id FROM latest_attempt_events WHERE attempt_id=? AND kind='report'",
 				)
-				.get(retry.attempt_id!),
+				.get(retryId),
 		).toEqual({ rounds: 2, note: "second try", turn_id: "turn" });
 
 		expect(() => store.reportAttempt({ ...input, rounds: -1 })).toThrow();
@@ -887,7 +934,8 @@ test("confirm requires an existing attempt and cannot create a retry or change a
 		confirm: true,
 	};
 	expect(() => store.reportAttempt(input)).toThrow(/--attempt/);
-	const attempt_id = store.outcome("s1")!.attempt_id!;
+	const attempt_id = store.outcome("s1")?.attempt_id;
+	if (!attempt_id) throw new Error("missing attempt");
 	expect(store.reportAttempt({ ...input, attempt_id })).toMatchObject({
 		attempt_id,
 		quality: 1,
@@ -991,4 +1039,45 @@ test("expired pending revisions are pruned with their history without restoring 
 		store.dispose();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("late mod start adopts matching hook evidence without creating a retry", () => {
+	const store = openStore(":memory:");
+	store.insertSuggestion(suggestion({ session_id: "session" }));
+	store.recordAttemptEvents([
+		{
+			...context,
+			event_id: "early-hook",
+			revision: 0,
+			call_id: "call",
+			kind: "test",
+			value: 0,
+			weight: 1,
+			model: "m/a",
+			effort: "low",
+			occurred_at: 1100,
+			received_at: 1200,
+		},
+	]);
+	const implicit = store.outcome("s1")?.attempt_id;
+	if (!implicit) throw new Error("missing implicit attempt");
+	const started = store.startAttempt({
+		...context,
+		suggestion_id: "s1",
+		key: "step:0",
+		model: "m/a",
+		effort: "low",
+		at: 1300,
+		owns_usage: true,
+	});
+	expect(started.id).toBe(implicit);
+	expect(started.ordinal).toBe(1);
+	store.bindAttempt({
+		...context,
+		attempt_id: started.id,
+		id_kind: "call",
+		external_id: "call",
+	});
+	expect(store.outcome("s1")).toMatchObject({ ordinal: 1, quality: 0 });
+	store.dispose();
 });

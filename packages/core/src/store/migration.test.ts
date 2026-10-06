@@ -257,15 +257,14 @@ test("attempt migration failure rolls back every statement and the version", asy
 	).toBe(false);
 });
 
-test("v8 event migration preserves evidence and adds nullable report metadata", async () => {
+test("v7 migration creates report metadata and indexed latest revisions", async () => {
 	const dir = directory();
-	const { path, db } = await fixture(dir, 7);
-	const previous = await previousStore(dir);
-	previous.openDatabase(path).close();
-	db.run(`INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at,output_tokens)
- VALUES('claude-code','session','','event',0,'pending','usage','transcript',1000,20)`);
+	const { path } = await fixture(dir, 7);
 	const migrated = openDatabase(path);
 	handles.push(migrated);
+	migrated.run(`INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at,output_tokens)
+ VALUES('claude-code','session','','event',0,'pending','usage','transcript',1000,20),
+ ('claude-code','session','','event',1,'pending','usage','transcript',1001,30)`);
 	expect(
 		migrated
 			.query(
@@ -273,27 +272,33 @@ test("v8 event migration preserves evidence and adds nullable report metadata", 
 			)
 			.all(),
 	).toEqual([
-		{ event_id: "event", output_tokens: 20, rounds: null, note: null },
+		{ event_id: "event", output_tokens: 30, rounds: null, note: null },
 	]);
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
-		user_version: SCHEMA_VERSION,
+		user_version: 8,
 	});
+	expect(
+		migrated
+			.query(
+				"SELECT name FROM sqlite_master WHERE type='index' AND name='events_attempt'",
+			)
+			.get(),
+	).toEqual({ name: "events_attempt" });
 });
 
-test("v9 failure rolls back report columns and keeps v8 evidence", async () => {
+test("v8 index failure rolls back the whole ledger and keeps v7 rows", async () => {
 	const dir = directory();
 	const { path, db } = await fixture(dir, 7);
-	const previous = await previousStore(dir);
-	previous.openDatabase(path).close();
-	db.run("CREATE INDEX events_attempt ON attempt_events(event_id)");
+	db.run("CREATE INDEX events_attempt ON suggestions(id)");
 	const before = rows(db);
 	expect(() => openDatabase(path)).toThrow();
 	expect(rows(db)).toEqual(before);
-	expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+	expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
 	expect(
 		db
-			.query("PRAGMA table_info(attempt_events)")
-			.all()
-			.some((r) => (r as { name: string }).name === "rounds"),
-	).toBe(false);
+			.query(
+				"SELECT name FROM sqlite_master WHERE type='table' AND name='attempt_events'",
+			)
+			.get(),
+	).toBeNull();
 });

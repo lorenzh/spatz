@@ -273,14 +273,25 @@ test("linked retries use the root scope and first verdict for comparison", async
 });
 
 function signal(id: string, value: number) {
-	store.insertSignal({
-		suggestion_id: id,
-		kind: "test",
-		value,
-		weight: 1,
-		source: "PostToolUse",
-		observed_at: 1,
-	});
+	const suggestion = store.getSuggestion(id);
+	const attempt = store.outcome(id)?.attempt_id;
+	if (!suggestion || !attempt) throw new Error("missing signal attempt");
+	store.recordAttemptEvents([
+		{
+			harness: suggestion.agent === "codex" ? "codex" : "claude-code",
+			session_key: suggestion.session_id ?? `suggestion:${id}`,
+			agent_key: suggestion.agent_id ?? "",
+			event_id: `test:${id}`,
+			revision: 0,
+			attempt_id: attempt,
+			kind: "test",
+			value,
+			weight: 1,
+			source: "PostToolUse",
+			occurred_at: 1,
+			received_at: 1,
+		},
+	]);
 }
 
 test("empty db: no types, coverage 0, no comparison", async () => {

@@ -46,11 +46,8 @@ const WRITES = [
 	"recordAttemptEvents",
 	"insertSuggestion",
 	"linkSession",
-	"touch",
 	"closeSuggestion",
-	"insertSignal",
 	"upsertUsage",
-	"rewriteScope",
 ];
 
 const config = (over: Partial<Config> = {}): Config => ({
@@ -117,15 +114,6 @@ function spyStore(): { store: Store; calls: Call[] } {
 			(...args: unknown[]) => {
 				calls.push([name, args]);
 				if (name === "dispose") return undefined;
-				if (name === "rewriteScope") {
-					// The real store upserts these rows internally: record them as upsertUsage calls.
-					const [scope, rows] = args as Parameters<Store["rewriteScope"]>;
-					return real.rewriteScope(scope, (windows) => {
-						const out = rows(windows);
-						for (const u of out) calls.push(["upsertUsage", [u]]);
-						return out;
-					});
-				}
 				return (fn as (...a: unknown[]) => unknown)(...args);
 			},
 		]),
@@ -1556,7 +1544,7 @@ describe("failure diagnostics", () => {
 			"hook",
 			"hook",
 		]);
-		s.store.findOpenSuggestion = () => {
+		s.store.recordAttemptEvents = () => {
 			throw new Error("private");
 		};
 		await s.api.handleHook("PostToolUse", bash("bun test"));
@@ -2092,29 +2080,40 @@ test("Agent hooks persist unlinked dispatches and use the child id, not the pare
 });
 
 describe("attempt adapter identity", () => {
-	test("missing Claude transcript stays pending instead of crediting the newest suggestion", async () => {
-		const s = setup();
-		const first = await s.api.suggest({ ...suggestInput(), session: SESSION });
-		await s.api.handleHook(
-			"PostToolUse",
-			JSON.stringify({
-				hook_event_name: "PostToolUse",
-				session_id: SESSION,
-				prompt_id: "unknown-prompt",
-				transcript_path: join(dir, "missing.jsonl"),
-				tool_name: "Bash",
-				tool_use_id: "call-missing",
-				tool_input: { command: "bun test" },
-				tool_response: { stdout: "ok" },
-			}),
-		);
-		expect(s.store.outcome(first.suggestion_id)?.quality).toBeNull();
-		expect(
-			s.argsOf("recordAttemptEvents").flatMap((args) => args[0] as unknown[]),
-		).toContainEqual(
-			expect.objectContaining({ call_id: "call-missing", occurred_at: null }),
-		);
-	});
+	for (const sub of [false, true]) {
+		test(`${sub ? "subagent" : "main"} missing Claude transcript stays pending instead of crediting the newest suggestion`, async () => {
+			const s = setup();
+			const first = await s.api.suggest({
+				...suggestInput(),
+				session: SESSION,
+				agentId: sub ? "worker" : undefined,
+			});
+			await s.api.handleHook(
+				"PostToolUseFailure",
+				JSON.stringify({
+					hook_event_name: "PostToolUseFailure",
+					session_id: SESSION,
+					agent_id: sub ? "worker" : undefined,
+					prompt_id: "unknown-prompt",
+					transcript_path: join(dir, "missing.jsonl"),
+					tool_name: "Bash",
+					tool_use_id: "call-missing",
+					tool_input: { command: "bun test" },
+					tool_response: { stderr: "failed" },
+				}),
+			);
+			expect(s.store.outcome(first.suggestion_id)?.quality).toBeNull();
+			expect(
+				s.argsOf("recordAttemptEvents").flatMap((args) => args[0] as unknown[]),
+			).toContainEqual(
+				expect.objectContaining({
+					call_id: "call-missing",
+					occurred_at: null,
+					agent_key: sub ? "worker" : "",
+				}),
+			);
+		});
+	}
 	test("report returns the selected attempt and explicit correction keeps identity", async () => {
 		const s = setup();
 		const { suggestion_id } = await s.api.suggest(suggestInput());
@@ -2727,6 +2726,37 @@ test("same-pair Codex follow-up turns reuse the execution and A B A retains thre
 			{ ordinal: 1, model: "openai/gpt-6-luna" },
 			{ ordinal: 2, model: "openai/gpt-6-sol" },
 			{ ordinal: 3, model: "openai/gpt-6-luna" },
+		]);
+		for (const attempt of db
+			.query<{ id: string; model: string; ordinal: number }, []>(
+				"SELECT id,model,ordinal FROM attempts ORDER BY ordinal",
+			)
+			.all()) {
+			await s.api.report({
+				suggestionId: ID1,
+				attempt: attempt.id,
+				model: attempt.model,
+				effort: "low",
+				result: attempt.ordinal === 3 ? "pass" : "fail",
+			});
+		}
+		expect(
+			db
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_outcomes WHERE suggestion_id=?",
+				)
+				.get(ID1),
+		).toEqual({ n: 3 });
+		expect(
+			db
+				.query(
+					"SELECT ordinal,model,effort,quality FROM attempt_outcomes ORDER BY ordinal",
+				)
+				.all(),
+		).toEqual([
+			{ ordinal: 1, model: "openai/gpt-6-luna", effort: "low", quality: 0 },
+			{ ordinal: 2, model: "openai/gpt-6-sol", effort: "low", quality: 0 },
+			{ ordinal: 3, model: "openai/gpt-6-luna", effort: "low", quality: 1 },
 		]);
 		expect(
 			db.query("SELECT SUM(output_tokens) AS output FROM usage_totals").get(),

@@ -16,7 +16,6 @@ import type {
 	SuggestionRecord,
 	UsageRecord,
 } from "../contracts/types.ts";
-import { EFFORTS } from "../contracts/types.ts";
 import { ATTEMPT_SCHEMA } from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
 
@@ -209,21 +208,6 @@ const SCHEMA_V8 = [
 	`CREATE VIEW outcomes AS SELECT suggestion_id,quality,model,effort FROM legacy_outcomes UNION ALL SELECT suggestion_id,quality,model,effort FROM attempt_outcomes`,
 ];
 
-const SCHEMA_V9 = [
-	"ALTER TABLE attempt_events ADD COLUMN rounds INTEGER CHECK(rounds >= 0)",
-	"ALTER TABLE attempt_events ADD COLUMN note TEXT",
-	"CREATE INDEX attempts_context ON attempts(harness,session_key,agent_key)",
-	"CREATE INDEX attempts_root ON attempts(root_id)",
-	"CREATE INDEX events_attempt ON attempt_events(attempt_id,kind)",
-	"CREATE INDEX events_suggestion ON attempt_events(suggestion_id,kind)",
-	"CREATE INDEX events_context_binding ON attempt_events(harness,session_key,agent_key,binding)",
-	"CREATE INDEX events_pending_expiry ON attempt_events(received_at) WHERE binding='pending'",
-	// A window function here prevents attempt/suggestion filters from reaching the event indexes.
-	"DROP VIEW latest_attempt_events",
-	`CREATE VIEW latest_attempt_events AS SELECT e.*,1 AS event_rank FROM attempt_events e
- WHERE revision=(SELECT MAX(n.revision) FROM attempt_events n WHERE n.harness=e.harness AND n.session_key=e.session_key AND n.agent_key=e.agent_key AND n.event_id=e.event_id)`,
-];
-
 const MIGRATIONS = [
 	SCHEMA_V1,
 	SCHEMA_V2,
@@ -233,7 +217,6 @@ const MIGRATIONS = [
 	SCHEMA_V6,
 	SCHEMA_V7,
 	SCHEMA_V8,
-	SCHEMA_V9,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -552,49 +535,8 @@ export function openStore(
 					agent: windowAgent(sessionId, agentId),
 				});
 		},
-		findOpenSuggestion(sessionId, now, openWindowMs, agentId = null) {
-			const row = db
-				.query<{ id: string }, [string, string | null, number]>(
-					`SELECT id FROM suggestions
-					WHERE session_id = ? AND agent_id IS ? AND closed_at IS NULL AND last_event_at >= ?
-					ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-				)
-				.get(sessionId, windowAgent(sessionId, agentId), now - openWindowMs);
-			return row?.id ?? null;
-		},
-		touch(id, at) {
-			db.query("UPDATE suggestions SET last_event_at = ? WHERE id = ?").run(
-				at,
-				id,
-			);
-		},
 		closeSuggestion(id, at) {
 			db.query("UPDATE suggestions SET closed_at = ? WHERE id = ?").run(at, id);
-		},
-		insertSignal(r) {
-			const suggestion = store.getSuggestion(r.suggestion_id);
-			if (!suggestion || suggestion.is_legacy) {
-				console.error("spatz: dropped late legacy signal");
-				return;
-			}
-			const attempt = store.outcome(r.suggestion_id)!;
-			ledger.recordAttemptEvents([
-				{
-					harness: suggestion.agent === "codex" ? "codex" : "claude-code",
-					session_key: suggestion.session_id ?? `suggestion:${r.suggestion_id}`,
-					agent_key: suggestion.agent_id ?? "",
-					event_id: `signal:${r.source}:${r.turn_id ?? r.observed_at}:${r.kind}`,
-					revision: r.observed_at,
-					attempt_id: attempt.attempt_id!,
-					suggestion_id: r.suggestion_id,
-					kind: r.kind,
-					value: r.value,
-					weight: r.weight,
-					source: r.source,
-					occurred_at: r.observed_at,
-					received_at: r.observed_at,
-				},
-			]);
 		},
 		upsertUsage(r) {
 			return db
@@ -629,14 +571,15 @@ export function openStore(
 							.get(session ?? `suggestion:${r.suggestion_id}`, agent ?? "")
 					)
 						return;
-					const current = store.outcome(r.suggestion_id)!;
+					const current = store.outcome(r.suggestion_id);
+					if (!current?.attempt_id) throw new Error("missing usage attempt");
 					const context = {
 						harness: suggestion.agent === "codex" ? "codex" : "claude-code",
 						session_key:
 							suggestion.session_id ?? `suggestion:${r.suggestion_id}`,
 						agent_key: suggestion.agent_id ?? "",
 					};
-					let attempt = current.attempt_id!;
+					let attempt = current.attempt_id;
 					const effort = noneOnly.has(r.model) ? "none" : r.effort;
 					if (
 						current.model &&
@@ -713,69 +656,6 @@ export function openStore(
 				)
 				.get(suggestionId, source, scopeKey, model);
 			return row ? { ...row, is_sidechain: row.is_sidechain === 1 } : null;
-		},
-		usageScopes(ids) {
-			return db
-				.query<Pick<UsageRecord, "source" | "scope_key" | "effort">, string[]>(
-					`SELECT source, scope_key, effort FROM (
-					SELECT source, scope_key, effort, ROW_NUMBER() OVER (
-						PARTITION BY source, scope_key ORDER BY CASE effort ${EFFORTS.map((e, i) => `WHEN '${e}' THEN ${i}`).join(" ")} ELSE -1 END DESC
-					) AS rank FROM (SELECT suggestion_id,source,scope_key,effort FROM usages UNION ALL SELECT suggestion_id,source,substr(event_id,length('usage:' || source || ':')+1,length(event_id)-length('usage:' || source || ':')-length(model)-1) AS scope_key,effort FROM latest_attempt_events WHERE kind='usage' AND event_id LIKE 'usage:%')
-					WHERE source IN ('transcript', 'subagent') AND suggestion_id IN (${ids.map(() => "?").join()})
-					) WHERE rank = 1`,
-				)
-				.all(...ids);
-		},
-		rewriteScope(scope, rows) {
-			const key = {
-				session: scope.session_id,
-				source: scope.source,
-				scope_key: scope.scope_key,
-			};
-			return db
-				.transaction(() => {
-					const mark = db
-						.query<{ message_count: number; last_at: number }, typeof key>(
-							`SELECT message_count, last_at FROM usage_scopes
-							WHERE session_id = $session AND source = $source AND scope_key = $scope_key`,
-						)
-						.get(key);
-					// The last message decides (a compacted transcript has fewer messages); the count breaks ties.
-					if (
-						mark &&
-						(scope.last_at < mark.last_at ||
-							(scope.last_at === mark.last_at &&
-								scope.message_count < mark.message_count))
-					)
-						return false;
-					const replacement = rows(
-						store.sessionWindows(
-							scope.session_id,
-							scope.from,
-							scope.last_at,
-							scope.openWindowMs,
-							scope.agent_id,
-						),
-					);
-					db.query(
-						`DELETE FROM attempt_events WHERE source=$source AND event_id LIKE $prefix AND session_key=$session`,
-					).run({
-						source: scope.source,
-						prefix: `usage:${scope.source}:${scope.scope_key}:%`,
-						session: scope.session_id,
-					});
-					for (const r of replacement) store.upsertUsage(r);
-					db.query(
-						`INSERT OR REPLACE INTO usage_scopes
-						VALUES ($session, $source, $scope_key, $message_count, $last_at)`,
-					).run({
-						...key,
-						message_count: scope.message_count,
-						last_at: scope.last_at,
-					});
-					return true;
-				})
-				.immediate();
 		},
 		outcome(id) {
 			if (store.getSuggestion(id)?.is_legacy)

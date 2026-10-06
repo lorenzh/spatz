@@ -129,14 +129,22 @@ test("first-attempt learning keeps legacy eval rows and normalizes none-only pai
 		store.reportAttempt({ ...report, result: "fail" });
 		store.reportAttempt({ ...report, result: "pass" });
 		store.insertSuggestion(suggestion({ id: "unknown" }));
-		store.insertSignal({
-			suggestion_id: "unknown",
-			kind: "test",
-			value: 1,
-			weight: 1,
-			source: "PostToolUse",
-			observed_at: 2000,
-		});
+		store.recordAttemptEvents([
+			{
+				harness: "claude-code",
+				session_key: "suggestion:unknown",
+				agent_key: "",
+				event_id: "unknown",
+				revision: 0,
+				suggestion_id: "unknown",
+				kind: "test",
+				value: 1,
+				weight: 1,
+				source: "PostToolUse",
+				occurred_at: 2000,
+				received_at: 2000,
+			},
+		]);
 		expect(store.cellStats("code.bugfix")).toEqual([
 			{
 				task_type: "code.bugfix",

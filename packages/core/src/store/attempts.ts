@@ -4,7 +4,6 @@ import type {
 	AttemptContext,
 	AttemptEvent,
 	AttemptRecord,
-	AttemptStart,
 	AttemptStore,
 } from "../contracts/attempts.ts";
 import type { Store } from "../contracts/deps.ts";
@@ -112,7 +111,9 @@ export function attemptStore(
 			c.session_key,
 			c.agent_key,
 		);
-		return get(uuid)!;
+		const attempt = get(uuid);
+		if (!attempt) throw new Error("missing inserted attempt");
+		return attempt;
 	};
 	const alias = (b: AttemptBinding, provisional = 0) => {
 		const a = get(b.attempt_id);
@@ -127,8 +128,9 @@ export function attemptStore(
 				{ harness: string; session_key: string; agent_key: string },
 				[string]
 			>("SELECT harness,session_key,agent_key FROM attempts WHERE id=?")
-			.get(a.id)!;
+			.get(a.id);
 		if (
+			!owner ||
 			owner.harness !== b.harness ||
 			owner.session_key !== b.session_key ||
 			owner.agent_key !== b.agent_key
@@ -181,7 +183,8 @@ export function attemptStore(
 			.query<Record<(typeof tokenKeys)[number], number | null>, [string]>(
 				`SELECT ${tokenKeys.map((t) => `SUM(${t}) AS ${t}`).join(",")} FROM attempt_usage WHERE attempt_id=?`,
 			)
-			.get(a.id)!;
+			.get(a.id);
+		if (!tokens) throw new Error("missing usage totals");
 		return {
 			suggestion_id: a.suggestion_id,
 			attempt_id: a.id,
@@ -194,6 +197,8 @@ export function attemptStore(
 		};
 	};
 	const resolve = (e: Row, idle: number, roots: Set<string>) => {
+		const occurredAt = e.occurred_at;
+		const sourceSeq = e.source_seq;
 		if (
 			e.requested_suggestion_id &&
 			store().getSuggestion(e.requested_suggestion_id)?.is_legacy
@@ -252,8 +257,9 @@ export function attemptStore(
 				.all(e.harness, e.session_key, e.agent_key, kind, id)
 				.map((x) => x.attempt_id);
 			if (ids.length) {
-				candidates = candidates
-					? new Set(ids.filter((id) => candidates!.has(id)))
+				const previous = candidates;
+				candidates = previous
+					? new Set(ids.filter((id) => previous.has(id)))
 					: new Set(ids);
 				if (kind === "call" || kind === "message") exact = true;
 				if (!candidates.size) conflict = true;
@@ -261,7 +267,11 @@ export function attemptStore(
 		}
 		let choices: AttemptRecord[] = [];
 		if (candidates) {
-			choices = [...candidates].map((id) => get(id)!);
+			choices = [...candidates].map((id) => {
+				const attempt = get(id);
+				if (!attempt) throw new Error("unknown bound attempt");
+				return attempt;
+			});
 			if (e.requested_suggestion_id)
 				choices = choices.filter(
 					(a) => a.suggestion_id === e.requested_suggestion_id,
@@ -299,8 +309,8 @@ export function attemptStore(
 			!e.suggestion_only &&
 			!exact &&
 			choices.length > 1 &&
-			e.occurred_at == null &&
-			e.source_seq != null &&
+			occurredAt == null &&
+			sourceSeq != null &&
 			(e.turn_id || e.prompt_id)
 		) {
 			const ordered = choices
@@ -322,19 +332,22 @@ export function attemptStore(
 							e.prompt_id,
 						)?.seq,
 				}))
-				.filter((x) => x.seq != null && x.seq <= e.source_seq!);
-			const seq = Math.max(...ordered.map((x) => x.seq!));
+				.flatMap((x) => {
+					const seq = x.seq;
+					return seq != null && seq <= sourceSeq ? [{ a: x.a, seq }] : [];
+				});
+			const seq = Math.max(...ordered.map((x) => x.seq));
 			choices = ordered.filter((x) => x.seq === seq).map((x) => x.a);
 		}
 		if (
 			!e.suggestion_only &&
 			!exact &&
 			(!candidates || choices.length > 1) &&
-			e.occurred_at != null
+			occurredAt != null
 		)
 			choices = choices.filter((a) => {
-				if (a.opened_at != null && a.opened_at > e.occurred_at!) return false;
-				if (a.closed_at == null || e.occurred_at! < a.closed_at) return true;
+				if (a.opened_at != null && a.opened_at > occurredAt) return false;
+				if (a.closed_at == null || occurredAt < a.closed_at) return true;
 				const stopped = db
 					.query(
 						"SELECT 1 FROM attempts a JOIN suggestions s ON s.id=a.suggestion_id WHERE a.id=? AND a.finalized_at IS NOT NULL AND s.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM attempts n WHERE n.suggestion_id=a.suggestion_id AND n.harness=a.harness AND n.session_key=a.session_key AND n.agent_key=a.agent_key AND n.ordinal>a.ordinal)",
@@ -399,9 +412,10 @@ export function attemptStore(
 							e.occurred_at ?? target.opened_at ?? 0,
 							c,
 						);
+					if (!child) throw new Error("missing dispatch attempt");
 					alias({
 						...c,
-						attempt_id: child!.id,
+						attempt_id: child.id,
 						id_kind: "start",
 						external_id: `dispatch:${dispatch.agent_id}`,
 					});
@@ -409,7 +423,7 @@ export function attemptStore(
 						"UPDATE dispatches SET suggestion_id=COALESCE(suggestion_id,?),attempt_id=? WHERE session_id=? AND agent_id=?",
 					).run(
 						target.suggestion_id,
-						child!.id,
+						child.id,
 						e.session_key,
 						dispatch.agent_id,
 					);
@@ -533,11 +547,10 @@ export function attemptStore(
 				const counts = tokenKeys.map((k) => e[k]);
 				if (
 					counts.some((n) => n != null) &&
-					counts.every(
-						(n, i) =>
-							!n ||
-							(rates[i] != null && Number.isFinite(rates[i]) && rates[i]! >= 0),
-					)
+					counts.every((n, i) => {
+						const rate = rates[i];
+						return !n || (rate != null && Number.isFinite(rate) && rate >= 0);
+					})
 				) {
 					const sum = counts.reduce<number>(
 						(sum, n, i) => sum + (n ?? 0) * (rates[i] ?? 0),
@@ -715,7 +728,7 @@ export function attemptStore(
 					a = latest(input.suggestion_id);
 					if (
 						a?.execution_key === "implicit" &&
-						a.model === null &&
+						(a.model === null || (input.owns_usage && compatible(a, input))) &&
 						a.closed_at === null
 					) {
 						db.query(
@@ -724,7 +737,7 @@ export function attemptStore(
 							input.key,
 							input.model,
 							input.effort,
-							input.at,
+							a.model ? Math.min(a.opened_at ?? input.at, input.at) : input.at,
 							input.harness,
 							input.session_key,
 							input.agent_key,
@@ -741,8 +754,9 @@ export function attemptStore(
 							input.at,
 							input,
 						);
+					if (!a) throw new Error("missing started attempt");
 					if (input.owns_usage)
-						db.query("UPDATE attempts SET owns_usage=1 WHERE id=?").run(a!.id);
+						db.query("UPDATE attempts SET owns_usage=1 WHERE id=?").run(a.id);
 					for (const [kind, id] of [
 						["start", input.key],
 						["turn", input.turn_id],
@@ -752,16 +766,18 @@ export function attemptStore(
 						if (id)
 							alias({
 								...input,
-								attempt_id: a!.id,
+								attempt_id: a.id,
 								id_kind: kind,
 								external_id: id,
 							});
 					if (input.agent_key)
 						db.query(
 							"UPDATE dispatches SET attempt_id=COALESCE(attempt_id,?) WHERE session_id=? AND agent_id=?",
-						).run(a!.id, input.session_key, input.agent_key);
+						).run(a.id, input.session_key, input.agent_key);
 					repair(input, DEFAULT_TUNING.openWindowMs);
-					return get(a!.id)!;
+					const started = get(a.id);
+					if (!started) throw new Error("missing started attempt");
+					return started;
 				})
 				.immediate();
 		},
@@ -827,14 +843,13 @@ export function attemptStore(
 						input.revision < 0
 					)
 						throw new Error("invalid event identity");
-					for (const key of tokenKeys)
-						if (
-							input[key] != null &&
-							(!Number.isSafeInteger(input[key]) || input[key]! < 0)
-						)
+					for (const key of tokenKeys) {
+						const count = input[key];
+						if (count != null && (!Number.isSafeInteger(count) || count < 0))
 							throw new Error(
 								"tokens must be null or non-negative safe integers",
 							);
+					}
 					if (
 						input.cost_usd != null &&
 						(!Number.isFinite(input.cost_usd) || input.cost_usd < 0)
@@ -858,8 +873,9 @@ export function attemptStore(
 							.query<AttemptContext, [string]>(
 								"SELECT harness,session_key,agent_key FROM attempts WHERE id=?",
 							)
-							.get(a.id)!;
+							.get(a.id);
 						if (
+							!owner ||
 							owner.harness !== input.harness ||
 							owner.session_key !== input.session_key ||
 							owner.agent_key !== input.agent_key
@@ -1047,10 +1063,11 @@ export function attemptStore(
 						);
 					if (
 						!input.correct &&
+						a &&
 						report &&
 						report.value === REPORT_VALUES[input.result]
 					)
-						return outcome(a!);
+						return outcome(a);
 					if (!a || (report && !input.correct))
 						a = add(
 							input.suggestion_id,
@@ -1060,25 +1077,26 @@ export function attemptStore(
 							input.at,
 							context(input.suggestion_id),
 						);
-					fill(a!, input);
+					fill(a, input);
 					const c = db
 						.query<AttemptContext, [string]>(
 							"SELECT harness,session_key,agent_key FROM attempts WHERE id=?",
 						)
-						.get(a!.id)!;
+						.get(a.id);
+					if (!c) throw new Error("missing report context");
 					if (input.turn_id)
 						alias({
 							...c,
-							attempt_id: a!.id,
+							attempt_id: a.id,
 							id_kind: "turn",
 							external_id: input.turn_id,
 						});
 					api.recordAttemptEvents([
 						{
 							...c,
-							event_id: `report:${a!.id}`,
-							revision: input.correct ? report!.revision + 1 : 0,
-							attempt_id: a!.id,
+							event_id: `report:${a.id}`,
+							revision: input.correct && report ? report.revision + 1 : 0,
+							attempt_id: a.id,
 							suggestion_id: input.suggestion_id,
 							kind: "report",
 							source: "report",
@@ -1095,10 +1113,12 @@ export function attemptStore(
 					]);
 					db.query(
 						"UPDATE attempts SET closed_at=?,finalized_at=? WHERE id=?",
-					).run(input.at, input.at, a!.id);
+					).run(input.at, input.at, a.id);
 					store().closeSuggestion(input.suggestion_id, input.at);
-					chain(a!.root_id);
-					return outcome(get(a!.id)!);
+					chain(a.root_id);
+					const reported = get(a.id);
+					if (!reported) throw new Error("missing reported attempt");
+					return outcome(reported);
 				})
 				.immediate();
 		},

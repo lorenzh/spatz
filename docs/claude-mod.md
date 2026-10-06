@@ -158,6 +158,8 @@ Usage alone does not imply success.
 The mod's start bindings mark which sessions and agents it owns for usage.
 Hooks still record test/build signals. They skip usage owned by the mod.
 This rule also applies to manual hooks.
+The model request starts without waiting for attempt registration.
+The mod records step usage after registration resolves.
 The mod links `tool.call` IDs to hook `tool_use_id` values.
 The tool starts without waiting for this link to finish.
 If a link arrives after the tool result, the ledger reconciles hook events.

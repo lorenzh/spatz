@@ -92,10 +92,13 @@ export function register(on: On, options: PluginOptions = {}) {
 		string,
 		Pick<Link, "requested" | "requestedAgent">
 	>();
-	const active = new Map<
-		string,
-		StepUsage & { turn: string; model: string; suggestionId: string }
-	>();
+	type Segment = Omit<StepUsage, "attempt"> & {
+		attempt: Promise<string | undefined>;
+		turn: string;
+		model: string;
+		suggestionId: string;
+	};
+	const active = new Map<string, Segment>();
 	const failures = new Map<string, number>();
 	let lastTurn: Decision | undefined;
 	let sessionDecision: Decision | undefined;
@@ -298,7 +301,7 @@ export function register(on: On, options: PluginOptions = {}) {
 						...(d.effort !== "none" && { effort: d.effort }),
 					}
 				: e;
-		let identity: StepUsage | undefined;
+		let identity: Segment | undefined;
 		const agentKey = e.agentId ?? "";
 		if (!d || s.record === "off") active.delete(agentKey);
 		try {
@@ -316,7 +319,7 @@ export function register(on: On, options: PluginOptions = {}) {
 					if (!samePair) active.delete(agentKey);
 					const attempt = samePair
 						? previous.attempt
-						: await attemptCommand(
+						: attemptCommand(
 								io.run,
 								[
 									"start",
@@ -336,21 +339,26 @@ export function register(on: On, options: PluginOptions = {}) {
 								],
 								s.spatz,
 							);
-					if (attempt) {
-						identity = { attempt, key, session, agentId: e.agentId, effort };
-						active.set(agentKey, {
-							...identity,
-							turn: e.turnId,
-							model: sent.model,
-							suggestionId: d.suggestionId,
-						});
-					}
+					identity = {
+						attempt,
+						key,
+						session,
+						agentId: e.agentId,
+						effort,
+						turn: e.turnId,
+						model: sent.model,
+						suggestionId: d.suggestionId,
+					};
+					active.set(agentKey, identity);
 				}
 			}
 		} catch {}
 		const result = yield* next(sent);
 		try {
-			if (d && result.usage && identity) {
+			const attempt = await identity?.attempt;
+			if (identity && !attempt && active.get(agentKey) === identity)
+				active.delete(agentKey);
+			if (d && result.usage && identity && attempt) {
 				await recordUsage(
 					io.run,
 					d.suggestionId,
@@ -358,7 +366,7 @@ export function register(on: On, options: PluginOptions = {}) {
 					e.turnId,
 					tokens(result.usage),
 					s.spatz,
-					identity,
+					{ ...identity, attempt },
 				);
 			}
 		} catch {}
@@ -370,7 +378,7 @@ export function register(on: On, options: PluginOptions = {}) {
 		const result = await next(e);
 		const key = e.agentId ?? "";
 		const identity = active.get(key);
-		if (identity?.turn === e.turnId) {
+		if (identity?.turn === e.turnId && (await identity.attempt)) {
 			await attemptCommand(
 				io.run,
 				[
@@ -391,18 +399,22 @@ export function register(on: On, options: PluginOptions = {}) {
 		const io = bind($, s.spatz);
 		const identity = active.get(e.agentId ?? "");
 		if (identity && s.mode !== "off" && s.record !== "off")
-			void attemptCommand(
-				io.run,
-				[
-					"bind",
-					identity.attempt,
-					"--call",
-					e.tool_use_id,
-					"--session",
-					identity.session,
-					...(e.agentId ? ["--agent-id", e.agentId] : []),
-				],
-				s.spatz,
+			void identity.attempt.then(
+				(attempt) =>
+					attempt &&
+					attemptCommand(
+						io.run,
+						[
+							"bind",
+							attempt,
+							"--call",
+							e.tool_use_id,
+							"--session",
+							identity.session,
+							...(e.agentId ? ["--agent-id", e.agentId] : []),
+						],
+						s.spatz,
+					),
 			);
 		const result = await next(e);
 		try {

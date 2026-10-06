@@ -36,10 +36,17 @@ export const ATTEMPT_SCHEMA = [
  tokens_complete INTEGER NOT NULL DEFAULT 0, tokens_schema INTEGER NOT NULL DEFAULT 2,
  suggestion_only INTEGER NOT NULL DEFAULT 0,
  requested_attempt_id TEXT, requested_suggestion_id TEXT,
+ rounds INTEGER CHECK(rounds >= 0), note TEXT,
  PRIMARY KEY(harness,session_key,agent_key,event_id,revision))`,
-	`CREATE VIEW latest_attempt_events AS SELECT * FROM (
- SELECT *, ROW_NUMBER() OVER(PARTITION BY harness,session_key,agent_key,event_id ORDER BY revision DESC) AS event_rank
- FROM attempt_events) WHERE event_rank = 1`,
+	"CREATE INDEX attempts_context ON attempts(harness,session_key,agent_key)",
+	"CREATE INDEX attempts_root ON attempts(root_id)",
+	"CREATE INDEX events_attempt ON attempt_events(attempt_id,kind)",
+	"CREATE INDEX events_suggestion ON attempt_events(suggestion_id,kind)",
+	"CREATE INDEX events_context_binding ON attempt_events(harness,session_key,agent_key,binding)",
+	"CREATE INDEX events_pending_expiry ON attempt_events(received_at) WHERE binding='pending'",
+	// A window function prevents attempt/suggestion filters from reaching the event indexes.
+	`CREATE VIEW latest_attempt_events AS SELECT e.*,1 AS event_rank FROM attempt_events e
+ WHERE revision=(SELECT MAX(n.revision) FROM attempt_events n WHERE n.harness=e.harness AND n.session_key=e.session_key AND n.agent_key=e.agent_key AND n.event_id=e.event_id)`,
 	`CREATE VIEW attempt_usage AS SELECT suggestion_id,attempt_id,model,effort,
  ${tokens.map((t) => `SUM(${t}) AS ${t}`).join(",")},
  CASE WHEN COUNT(cost_usd)=COUNT(*) AND MIN(tokens_schema)=2 THEN SUM(cost_usd) END AS cost_usd,

@@ -26,6 +26,8 @@ function session(
 		plugins?: Out;
 		link?: Out;
 		bind?: () => Out | Promise<Out>;
+		startAttempt?: () => Out | Promise<Out>;
+		onStep?: () => void;
 		sessionIdThrows?: boolean;
 	} = {},
 ) {
@@ -60,6 +62,8 @@ function session(
 				const args = argv[0] === "sh" ? argv.slice(2) : argv.slice(1);
 				if (args[0] === "attempt" && args[1] === "bind" && over.bind)
 					return over.bind();
+				if (args[0] === "attempt" && args[1] === "start" && over.startAttempt)
+					return over.startAttempt();
 				if (args[0] === "attempt")
 					return {
 						exitCode: 0,
@@ -183,6 +187,7 @@ function session(
 			{ index: 0, model: "inherited", messageCount: 1, ...e } as TurnStepInput,
 			async function* (input) {
 				seen = input;
+				over.onStep?.();
 				events.push(`yield after ${suggests().length} suggests`);
 				yield { kind: "text", index: 0, text: "x" };
 				return {
@@ -1212,9 +1217,39 @@ test("tool calls execute while their attempt binding is pending", async () => {
 	const tool = s.bash("bun test", undefined, false, undefined, () => calls++);
 	try {
 		expect(calls).toBe(1);
+		await tool;
 		expect(s.argvs.some((a) => a.includes("bind"))).toBe(true);
 	} finally {
 		release({ exitCode: 0, stdout: "{}", stderr: "" });
 		await tool;
 	}
+});
+
+test("model requests and tools execute while their attempt start is pending", async () => {
+	const start = Promise.withResolvers<Out>();
+	const executing = Promise.withResolvers<void>();
+	const s = session(
+		{ mode: "show", scope: "turn", record: "auto" },
+		{ startAttempt: () => start.promise, onStep: () => executing.resolve() },
+	);
+	await s.start("t1", LONG);
+	const step = s.step({ turnId: "t1" });
+	try {
+		await executing.promise;
+		let calls = 0;
+		await s.bash("bun test", undefined, false, undefined, () => calls++);
+		expect(calls).toBe(1);
+		expect(s.usages()).toHaveLength(0);
+	} finally {
+		start.resolve({
+			exitCode: 0,
+			stdout: '{"id":"delayed-attempt"}',
+			stderr: "",
+		});
+		await step;
+	}
+	expect(s.flag(s.usages()[0] ?? [], "--attempt")).toBe("delayed-attempt");
+	expect(s.argvs.find((a) => a.includes("bind"))).toContain("delayed-attempt");
+	await s.complete({ turnId: "t1" });
+	expect(s.argvs.some((a) => a.includes("finalize"))).toBe(true);
 });
