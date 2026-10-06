@@ -299,6 +299,7 @@ test("empty db: no types, coverage 0, no comparison", async () => {
 		by_type: [],
 		coverage: 0,
 		learned_success: null,
+		fallback_success: null,
 		control_success: null,
 		dispatches: 0,
 		routed_by_mod: 0,
@@ -485,6 +486,7 @@ test("only dry-run suggestions: counts nothing", async () => {
 		by_type: [],
 		coverage: 0,
 		learned_success: null,
+		fallback_success: null,
 		control_success: null,
 		dispatches: 0,
 		routed_by_mod: 0,
@@ -534,6 +536,24 @@ test("learned success counts only learned picks: no exploration, jev-choice or r
 	expect(r.control_success).toBe(1);
 });
 
+test("learned-fallback picks get their own row, compared against control in the same cell", async () => {
+	sug("l1");
+	report("l1", "m/a", "low", "pass");
+	sug("f1", { strategy: "learned-fallback" });
+	report("f1", "m/a", "low", "fail");
+	sug("f2", { strategy: "learned-fallback" });
+	report("f2", "m/a", "low", "pass");
+	sug("k1", { control: true });
+	report("k1", "m/b", "high", "pass");
+	// fallback only in another cell without control: ignored
+	sug("f3", { strategy: "learned-fallback", difficulty: "hard" });
+	report("f3", "m/a", "low", "pass");
+	const r = await stats();
+	expect(r.learned_success).toBe(1);
+	expect(r.fallback_success).toBe(0.5);
+	expect(r.control_success).toBe(1);
+});
+
 test("success is quality >= 0.8; pairs and adoption distinguish effort", async () => {
 	const t = "code.feature";
 	sug("e1", { task_type: t, top: ["m/a", "low"] }); // adopted, quality 0.8
@@ -580,6 +600,7 @@ test("learned vs control cells are (task_type, difficulty), not difficulty alone
 	report("x2", "m/b", "high", "fail");
 	expect(await stats()).toMatchObject({
 		learned_success: null,
+		fallback_success: null,
 		control_success: null,
 		dispatches: 0,
 		routed_by_mod: 0,

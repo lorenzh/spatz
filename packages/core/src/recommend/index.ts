@@ -21,14 +21,39 @@ export interface StrategyContext {
 	tuning: Tuning;
 }
 
-/** Beta mean: (1 + sumQuality) / (2 + n). */
-export function estimate(sumQuality: number, n: number): number {
-	return (1 + sumQuality) / (2 + n);
+/** Beta mean: (1 + successes) / (2 + n). */
+export function estimate(successes: number, n: number): number {
+	return (1 + successes) / (2 + n);
+}
+
+/** 5 % quantile of Beta(1 + s, 1 + n - s), by bisection on the binomial form of the CDF (integer s and n). */
+export function lowerBound(successes: number, n: number): number {
+	const a = Math.round(successes) + 1;
+	const m = Math.round(n) + 1; // a + b - 1
+	const cdf = (x: number) => {
+		// I_x(a, b) = P(Binomial(m, x) >= a)
+		let p = 0;
+		let term = (1 - x) ** m; // j = 0
+		for (let j = 0; j <= m; j++) {
+			if (j >= a) p += term;
+			term *= ((m - j) / (j + 1)) * (x / (1 - x));
+		}
+		return p;
+	};
+	let lo = 0;
+	let hi = 1;
+	for (let i = 0; i < 50; i++) {
+		const mid = (lo + hi) / 2;
+		if (cdf(mid) < 0.05) lo = mid;
+		else hi = mid;
+	}
+	return lo;
 }
 
 interface Est {
 	n: number;
 	estimate: number;
+	successes: number;
 }
 /** Estimate and n per catalog candidate on one level. */
 type Level = (c: Candidate) => Est;
@@ -43,18 +68,19 @@ function level(
 	difficulties: readonly Difficulty[],
 ): Level {
 	const sums = new Map<string, { n: number; sum: number }>();
+	// sum counts successes; quality-mean learning overrated partial-heavy pairs.
 	for (const s of history) {
 		if (s.task_type !== ctx.classification.task_type) continue;
 		if (!difficulties.includes(normalizeDifficulty(s.difficulty))) continue;
 		const k = keyOf(s);
 		const cur = sums.get(k) ?? { n: 0, sum: 0 };
 		cur.n += s.n;
-		cur.sum += s.sum_quality;
+		cur.sum += s.successes;
 		sums.set(k, cur);
 	}
 	return (c) => {
 		const s = sums.get(keyOf(c)) ?? { n: 0, sum: 0 };
-		return { n: s.n, estimate: estimate(s.sum, s.n) };
+		return { n: s.n, estimate: estimate(s.sum, s.n), successes: s.sum };
 	};
 }
 
@@ -71,11 +97,10 @@ function decision(
 ): Decision {
 	return {
 		strategy,
-		ranking: catalog.slice(index, index + 3).map((c) => ({
-			model: c.model,
-			effort: c.effort,
-			...at(c),
-		})),
+		ranking: catalog.slice(index, index + 3).map((c) => {
+			const { n, estimate } = at(c);
+			return { model: c.model, effort: c.effort, estimate, n };
+		}),
 		reason,
 		explored: flags.explored ?? false,
 		control: flags.control ?? false,
@@ -125,7 +150,7 @@ export function learned(
 			catalog,
 			i,
 			at,
-			"learned",
+			qualified ? "learned" : "learned-fallback",
 			`${label(c)} ${why} on the ${name}.`,
 		);
 	}
@@ -184,7 +209,7 @@ export function strongest(
 	);
 }
 
-/** Critical tasks: most expensive pair unless a cheaper one has cell n >= criticalMinN and estimate >= criticalMinEstimate. */
+/** Critical tasks: most expensive pair unless a cheaper one has cell n >= criticalMinN and a 5 % lower Beta bound >= criticalMinEstimate. */
 function critical(
 	ctx: StrategyContext,
 	catalog: Catalog,
@@ -198,7 +223,7 @@ function critical(
 		return (
 			j < catalog.length - 1 &&
 			e.n >= t.criticalMinN &&
-			e.estimate >= t.criticalMinEstimate
+			lowerBound(e.successes, e.n) >= t.criticalMinEstimate
 		);
 	});
 	if (i >= 0)

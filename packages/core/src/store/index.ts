@@ -10,11 +10,12 @@ import {
 	normalizeProbabilities,
 	normalizeReason,
 } from "../contracts/difficulty.ts";
-import type {
-	CellStat,
-	Outcome,
-	SuggestionRecord,
-	UsageRecord,
+import {
+	type CellStat,
+	DEFAULT_TUNING,
+	type Outcome,
+	type SuggestionRecord,
+	type UsageRecord,
 } from "../contracts/types.ts";
 import { ATTEMPT_SCHEMA, USAGE_COMPLETENESS_SCHEMA } from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
@@ -329,9 +330,13 @@ export function openStore(
 ): Store {
 	const db = openDatabase(dbPath);
 	const noneOnly = new Set(noneOnlyModels);
-	const historyStats = (taskType: CellStat["task_type"], retries: boolean) =>
+	const historyStats = (
+		taskType: CellStat["task_type"],
+		retries: boolean,
+		successQuality: number,
+	) =>
 		db
-			.query<CellStat, string[]>(
+			.query<CellStat, (string | number)[]>(
 				`WITH history AS (
 					SELECT suggestion_id,quality,model,effort,model_version FROM attempt_outcomes
 					WHERE ${retries ? "ordinal>1 OR attempt_id<>root_id" : "ordinal=1 AND attempt_id=root_id"}
@@ -348,12 +353,12 @@ export function openStore(
 					FROM history h LEFT JOIN live l ON l.model = h.model
 					WHERE h.model_version IS NULL OR l.model_version IS NULL OR h.model_version = l.model_version
 				)
-				SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
+				SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality, SUM(o.quality >= ?) AS successes
 				FROM suggestions s JOIN normalized o ON o.suggestion_id = s.id
 				WHERE s.task_type = ? AND s.is_test = 0 AND o.quality IS NOT NULL AND o.model IS NOT NULL AND o.known_effort IS NOT NULL
 				GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.known_effort`,
 			)
-			.all(...noneOnlyModels, taskType);
+			.all(...noneOnlyModels, successQuality, taskType);
 	// Legacy agents share the main sequence until they have an explicit link.
 	const windowAgent = (session: string, agent: string | null) =>
 		agent !== null &&
@@ -446,11 +451,11 @@ export function openStore(
 				is_test: row.is_test === 1,
 			};
 		},
-		cellStats(taskType) {
-			return historyStats(taskType, false);
+		cellStats(taskType, successQuality = DEFAULT_TUNING.successQuality) {
+			return historyStats(taskType, false, successQuality);
 		},
-		retryStats(taskType) {
-			return historyStats(taskType, true);
+		retryStats(taskType, successQuality = DEFAULT_TUNING.successQuality) {
+			return historyStats(taskType, true, successQuality);
 		},
 		linkSession(id, sessionId, promptId, at, agentId, harness) {
 			if (store.getSuggestion(id)?.is_legacy) {

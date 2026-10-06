@@ -718,7 +718,7 @@ export function createApi(
 				const d = recommend(
 					{ classification: c, random: deps.random(), tuning: cfg.tuning },
 					catalog,
-					store.cellStats(c.task_type),
+					store.cellStats(c.task_type, cfg.tuning.successQuality),
 				);
 				const id = deps.newId();
 				const now = deps.clock.now();

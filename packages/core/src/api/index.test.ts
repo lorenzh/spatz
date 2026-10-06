@@ -217,7 +217,7 @@ describe("suggest", () => {
 		expect(s.draws()).toBe(1);
 		expect(jev.requests).toHaveLength(1);
 		expect(jev.requests[0]?.state).toBe(task);
-		expect(s.argsOf("cellStats")).toEqual([["code.bugfix"]]);
+		expect(s.argsOf("cellStats")).toEqual([["code.bugfix", 0.8]]);
 
 		const [[record]] = s.argsOf("insertSuggestion") as [[unknown]];
 		expect(record).toMatchObject({
@@ -755,6 +755,7 @@ describe("stats", () => {
 			by_type: [],
 			coverage: 0,
 			learned_success: null,
+			fallback_success: null,
 			control_success: null,
 			dispatches: 0,
 			routed_by_mod: 0,
@@ -854,6 +855,7 @@ describe("direct mod attribution", () => {
 						by_type: [],
 						coverage: 0,
 						learned_success: null,
+						fallback_success: null,
 						control_success: null,
 						dispatches: 0,
 						routed_by_mod: 0,
@@ -1564,6 +1566,7 @@ describe("failure diagnostics", () => {
 				by_type: [],
 				coverage: 0,
 				learned_success: null,
+				fallback_success: null,
 				control_success: null,
 				dispatches: 0,
 				routed_by_mod: 0,
@@ -2680,6 +2683,7 @@ test.each(["low", "high"] as const)(
 				effort: "low",
 				n: 1,
 				sum_quality: 1,
+				successes: 1,
 			}),
 		]);
 		expect(s.store.retryStats(classification.task_type)).toEqual([]);
