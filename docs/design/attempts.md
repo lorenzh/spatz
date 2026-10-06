@@ -57,7 +57,7 @@ With hooks plus mod, bind `tool.call.e.tool_use_id` to hook `tool_use_id`; this 
 
 Do not assign the mod's mixed turn total to its last pair. Use disjoint step measurements. For Codex, an in-turn pair change without separate counters leaves pair cost incomplete. Keep its measured total once in suggestion totals with a null attempt. Never invent a split or a `root_hint`.
 
-The fixture spike is in `packages/core/src/signals/fixtures/`. It confirms that `SubagentStart`, `SubagentStop`, and subagent `PostToolUse` have no effort; only main-session hooks carry `effort.level`. A mod rewrite may set subagent effort, so keep hook effort null unless the mod supplies it. `tool.call.e.tool_use_id` matches `PostToolUse.tool_use_id`, including subagent calls; `TurnStepResult.toolUses` has no ID. Filter the extra `UserPromptSubmit` whose prompt starts `<agent-message` and `PostToolUse` named `SubagentHandback`.
+The fixture spike is in `packages/core/src/signals/fixtures/`. Trust the mod's `turn.step` sent effort per step and Codex `turn_context.payload.effort`. Trust main-hook `effort.level` only when no mod rewrites main steps: the spike confirms main hooks carry the field, but does not establish that it still matches the effort sent by a rewriting mod. `SubagentStart`, `SubagentStop`, and subagent `PostToolUse` have no effort in the captured session. Subagent effort stays null unless the mod sets it. `tool.call.e.tool_use_id` matches `PostToolUse.tool_use_id`, including subagent calls; `TurnStepResult.toolUses` has no ID. Filter the extra `UserPromptSubmit` whose prompt starts `<agent-message` and `PostToolUse` named `SubagentHandback`.
 
 ## Storage sketch
 

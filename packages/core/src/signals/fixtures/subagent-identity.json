@@ -8,14 +8,48 @@
 	},
 	"hook": {
 		"hook_event_name": "PostToolUse",
-		"prompt_id": "942c038e-03f2-4e2a-9d32-161eda5c68b4",
+		"session_id": "65b03e3f-2566-4b94-a68c-fd6bd86bcc62",
+		"transcript_path": "[redacted]",
+		"cwd": "[redacted]",
+		"prompt_id": "2b0d3409-04c2-45fb-a590-f6b611bda576",
+		"permission_mode": "auto",
 		"agent_id": "a2a01570eb2d1361b",
 		"agent_type": "general-purpose",
 		"tool_name": "Bash",
-		"tool_use_id": "toolu_01AcYxn3o796j2ggY4o9mZNw"
+		"tool_input": { "command": "[redacted]", "description": "[redacted]" },
+		"tool_response": {
+			"stdout": "sub-hi",
+			"stderr": "",
+			"interrupted": false,
+			"isImage": false,
+			"noOutputExpected": false
+		},
+		"tool_use_id": "toolu_01AcYxn3o796j2ggY4o9mZNw",
+		"duration_ms": 65
 	},
-	"start": { "hook_event_name": "SubagentStart" },
-	"stop": { "hook_event_name": "SubagentStop" },
+	"start": {
+		"session_id": "65b03e3f-2566-4b94-a68c-fd6bd86bcc62",
+		"transcript_path": "[redacted]",
+		"cwd": "[redacted]",
+		"prompt_id": "2b0d3409-04c2-45fb-a590-f6b611bda576",
+		"agent_id": "a2a01570eb2d1361b",
+		"agent_type": "general-purpose",
+		"hook_event_name": "SubagentStart"
+	},
+	"stop": {
+		"session_id": "65b03e3f-2566-4b94-a68c-fd6bd86bcc62",
+		"transcript_path": "[redacted]",
+		"cwd": "[redacted]",
+		"prompt_id": "2b0d3409-04c2-45fb-a590-f6b611bda576",
+		"permission_mode": "auto",
+		"agent_id": "a2a01570eb2d1361b",
+		"agent_type": "general-purpose",
+		"hook_event_name": "SubagentStop",
+		"stop_hook_active": false,
+		"agent_transcript_path": "[redacted]",
+		"background_tasks": [],
+		"session_crons": []
+	},
 	"handback": {
 		"hook_event_name": "PostToolUse",
 		"tool_name": "SubagentHandback"
