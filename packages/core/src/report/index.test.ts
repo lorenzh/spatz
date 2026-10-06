@@ -350,6 +350,40 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 	]);
 });
 
+test("stats filters by model_version and keeps old versions visible under their own", async () => {
+	for (const [id, version, result] of [
+		["v1", "20250101", "pass"],
+		["v2", "20260101", "fail"],
+	] as const) {
+		sug(id);
+		store.reportAttempt({
+			suggestion_id: id,
+			model: "m/a",
+			effort: "low",
+			result,
+			at: 2,
+			model_version: version,
+		});
+	}
+	const by = async (modelVersion: string) =>
+		(
+			await runStats({
+				dbPath,
+				extensionDir,
+				successQuality: 0.8,
+				modelVersion,
+				onSql: noInstall,
+			})
+		).by_type[0]?.pairs;
+	expect(await by("20250101")).toEqual([
+		{ model: "m/a", effort: "low", n: 1, success_rate: 1 },
+	]);
+	expect(await by("20260101")).toEqual([
+		{ model: "m/a", effort: "low", n: 1, success_rate: 0 },
+	]);
+	expect(await by("x'y")).toEqual([]);
+});
+
 test("missing extension: INSTALL is attempted only after LOAD fails (guard stops it)", async () => {
 	const empty = join(dir, "no-ext");
 	const sqls: string[] = [];

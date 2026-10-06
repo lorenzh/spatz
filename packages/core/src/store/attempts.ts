@@ -158,12 +158,12 @@ export function attemptStore(
 	};
 	const fill = (
 		a: AttemptRecord,
-		e: Pick<AttemptEvent, "model" | "effort">,
+		e: Pick<AttemptEvent, "model" | "effort" | "model_version">,
 	) => {
 		if (!compatible(a, e)) throw new Error("attempt pair conflict");
 		db.query(
-			"UPDATE attempts SET model=COALESCE(model,?),effort=COALESCE(effort,?) WHERE id=?",
-		).run(e.model ?? null, e.effort ?? null, a.id);
+			"UPDATE attempts SET model=COALESCE(model,?),effort=COALESCE(effort,?),model_version=COALESCE(model_version,?) WHERE id=?",
+		).run(e.model ?? null, e.effort ?? null, e.model_version ?? null, a.id);
 	};
 	const chain = (root: string) => {
 		const success = db
@@ -916,6 +916,7 @@ export function attemptStore(
 						rounds: input.rounds ?? null,
 						note: input.note ?? null,
 						model: input.model ?? null,
+						model_version: input.model_version ?? null,
 						effort: input.effort ?? null,
 						kind: input.kind,
 						source: input.source ?? input.harness,
@@ -1127,6 +1128,7 @@ export function attemptStore(
 							note: input.note,
 							turn_id: input.turn_id,
 							model: input.model,
+							model_version: input.model_version ?? null,
 							effort: input.effort,
 							value: REPORT_VALUES[input.result],
 							weight: 1,

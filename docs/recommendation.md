@@ -40,6 +40,12 @@ Retry outcomes cannot change the first-attempt estimate.
 An internal test-fix-test loop stays in one attempt. Its latest ordered result supplies the quality.
 A sequence `A → B → A` keeps three attempts even when the first and last pairs match.
 
+### Model versions
+
+Outcomes do not decay with age. Instead, each attempt stores a `model_version` when the harness shows a dated model id (for example `claude-sonnet-4-5-20250929` gives `20250929`). Otherwise it stores null.
+For each model, the newest known version is the live one. Outcomes of an older known version do not count, so a new version starts with an empty estimate. Outcomes with a null version count for every version.
+The old outcomes stay in the database. `spatz stats --model-version <v>` shows them.
+
 ### Enough data and pooling
 
 A cell has enough data when at least one candidate of the catalog has `n ≥ 5` in it.

@@ -376,6 +376,7 @@ describe("report", () => {
 				{
 					suggestion_id: ID1,
 					model: "anthropic/claude-opus-5.5",
+					model_version: null,
 					effort: "high",
 					result: "partial",
 					at: T0 + 1000,
