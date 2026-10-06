@@ -86,6 +86,7 @@ export function register(on: On, options: PluginOptions = {}) {
 	const turns = new Map<string, Decision>();
 	/** Task text held only for the step scope, until the turn or agent ends. */
 	const prompts = new Map<string, string>();
+	const requested = new Map<string, string>();
 	/** The decision each turn or agent run actually used, for usage recording. */
 	const used = new Map<string, Decision>();
 	const totals = new Map<string, Tokens>();
@@ -154,6 +155,7 @@ export function register(on: On, options: PluginOptions = {}) {
 						scope: "step",
 						turn: e.turnId,
 						agentId: e.agentId,
+						requested: requested.get(key),
 					})
 				: undefined;
 		}
@@ -165,7 +167,9 @@ export function register(on: On, options: PluginOptions = {}) {
 		return s.scope === "subagent" ? undefined : turns.get(e.turnId);
 	}
 
-	async function recording(io: Io): Promise<boolean> {
+	async function recording(io: Io, agentId?: string): Promise<boolean> {
+		// #86: only the mod has complete subagent output counters.
+		if (agentId) return s.record !== "off";
 		if (s.record !== "auto") return s.record === "on";
 		hooksPlugin ??= io
 			.run(["claude", "plugin", "list", "--json"], {
@@ -186,7 +190,9 @@ export function register(on: On, options: PluginOptions = {}) {
 		if (!noticed) {
 			noticed = true;
 			try {
-				io.toast("spatz: usage recording is off, the spatz plugin records");
+				io.toast(
+					"spatz: hooks record main usage; the mod records subagent usage",
+				);
 			} catch {}
 		}
 		return false;
@@ -222,7 +228,7 @@ export function register(on: On, options: PluginOptions = {}) {
 		if (args === "" || args === "status") {
 			const record =
 				s.record === "auto"
-					? `auto (${(await recording(io)) ? "on" : "off, spatz is enabled"})`
+					? `auto (${(await recording(io)) ? "on" : "main off, subagents on; spatz is enabled"})`
 					: s.record;
 			return {
 				text: `spatz\nmode: ${s.mode}\nscope: ${s.scope}\nmain: ${s.main ? "on" : "off"}\nrecord: ${record}\nlast: ${describeDecision(last)}`,
@@ -244,12 +250,20 @@ export function register(on: On, options: PluginOptions = {}) {
 			return next(e);
 		if (s.scope === "step") {
 			const result = await next(e);
-			if (result.agentId && !result.deny) prompts.set(result.agentId, e.prompt);
+			if (result.agentId && !result.deny) {
+				prompts.set(result.agentId, e.prompt);
+				requested.set(result.agentId, e.model ?? "-");
+			}
 			return result;
 		}
 		if (s.scope !== "subagent" && s.scope !== "escalate") return next(e);
 		// The agent id exists only after the spawn: ask without session or agent, then link.
-		const d = await decide(io, e.prompt, { scope: s.scope }, false);
+		const d = await decide(
+			io,
+			e.prompt,
+			{ scope: s.scope, requested: e.model },
+			false,
+		);
 		if (!d) return next(e);
 		const alias = s.mode === "apply" ? aliasFor(d.model) : undefined;
 		const result = await next(alias ? { ...e, model: alias } : e);
@@ -314,7 +328,7 @@ export function register(on: On, options: PluginOptions = {}) {
 				: e,
 		);
 		try {
-			if (d && result.usage && (await recording(io))) {
+			if (d && result.usage && (await recording(io, e.agentId))) {
 				const t =
 					d.scope === "step"
 						? tokens(result.usage)
@@ -337,7 +351,12 @@ export function register(on: On, options: PluginOptions = {}) {
 		const result = await next(e);
 		const d = used.get(e.turnId);
 		try {
-			if (d && d.scope !== "step" && e.usage && (await recording(io)))
+			if (
+				d &&
+				d.scope !== "step" &&
+				e.usage &&
+				(await recording(io, e.agentId))
+			)
 				await recordUsage(
 					io.run,
 					d.suggestionId,

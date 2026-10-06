@@ -187,6 +187,16 @@ const SCHEMA_V6 = [
 	SCHEMA_V1.slice(SCHEMA_V1.indexOf("CREATE VIEW outcomes")),
 ];
 
+const SCHEMA_V7 = [
+	"ALTER TABLE suggestions ADD COLUMN requested_model TEXT",
+	`CREATE TABLE dispatches (
+		session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+		tool_use_id TEXT, requested_model TEXT, requested_agent_type TEXT,
+		answered_model TEXT, suggestion_id TEXT,
+		PRIMARY KEY (session_id, agent_id)
+	)`,
+];
+
 const MIGRATIONS = [
 	SCHEMA_V1,
 	SCHEMA_V2,
@@ -194,6 +204,7 @@ const MIGRATIONS = [
 	SCHEMA_V4,
 	SCHEMA_V5,
 	SCHEMA_V6,
+	SCHEMA_V7,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -300,6 +311,18 @@ export function openStore(
 			? agent
 			: null;
 	const store: Store = {
+		upsertDispatch(r) {
+			db.query(`INSERT INTO dispatches VALUES ($session_id, $agent_id, $tool_use_id,
+				$requested_model, $requested_agent_type, $answered_model, $suggestion_id)
+				ON CONFLICT (session_id, agent_id) DO UPDATE SET
+				tool_use_id = COALESCE(dispatches.tool_use_id, excluded.tool_use_id),
+				requested_model = COALESCE(dispatches.requested_model, excluded.requested_model),
+				requested_agent_type = COALESCE(dispatches.requested_agent_type, excluded.requested_agent_type),
+				answered_model = COALESCE(dispatches.answered_model, excluded.answered_model),
+				suggestion_id = COALESCE(dispatches.suggestion_id, excluded.suggestion_id)`).run(
+				{ ...r },
+			);
+		},
 		recordFailure(kind, event, at, sessionId, turnId) {
 			db.query("INSERT OR IGNORE INTO failures VALUES (?, ?, ?, ?, ?)").run(
 				kind,
@@ -313,13 +336,14 @@ export function openStore(
 			db.query(
 				`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
 				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
-				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason, $price_snapshot, $price_date)`,
+				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason, $price_snapshot, $price_date, $requested_model)`,
 			).run({
 				...r,
 				price_snapshot: r.price_snapshot
 					? JSON.stringify(r.price_snapshot)
 					: null,
 				price_date: r.price_date ?? null,
+				requested_model: r.requested_model ?? null,
 				difficulty: normalizeDifficulty(r.difficulty),
 				reason: normalizeReason(r.reason),
 				probabilities:
@@ -426,6 +450,18 @@ export function openStore(
 							)
 							.all(next.created_at, id),
 					);
+				const suggestion = store.getSuggestion(id);
+				if (suggestion?.agent === "claude-code-mod" && suggestion.agent_id) {
+					store.upsertDispatch({
+						session_id: sessionId,
+						agent_id: suggestion.agent_id,
+						requested_model: suggestion.requested_model ?? null,
+						requested_agent_type: null,
+						answered_model: null,
+						tool_use_id: null,
+						suggestion_id: id,
+					});
+				}
 				return shrunk.map((r) => r.id);
 			});
 			return link.immediate();
@@ -482,65 +518,103 @@ export function openStore(
 			).run({ ...r, turn_id: r.turn_id ?? null, agent_id: r.agent_id ?? null });
 		},
 		upsertUsage(r) {
-			const counts = [
-				r.input_tokens,
-				r.output_tokens,
-				r.cache_read_tokens,
-				r.cache_creation_tokens,
-			];
-			if (counts.some((n) => n !== null && (!Number.isSafeInteger(n) || n < 0)))
-				throw new Error("tokens must be null or non-negative safe integers");
-			let cost_usd: number | null = null;
-			let cost_source: UsageRecord["cost_source"] = "unavailable";
-			if (r.cost_source === "reported" && r.cost_usd != null) {
-				if (!Number.isFinite(r.cost_usd) || r.cost_usd < 0)
-					throw new Error("cost must be finite and non-negative");
-				cost_usd = r.cost_usd;
-				cost_source = "reported";
-			} else {
-				const price = store.getSuggestion(r.suggestion_id)?.price_snapshot?.[
-					r.model
-				];
-				if (price && counts.some((n) => n !== null)) {
-					const rates = [
-						price.price_prompt,
-						price.price_completion,
-						price.price_cache_read,
-						price.price_cache_write,
+			return db
+				.transaction(() => {
+					const suggestion = store.getSuggestion(r.suggestion_id);
+					const session = suggestion?.session_id;
+					const agent = r.agent_id ?? suggestion?.agent_id;
+					if (
+						(r.source === "subagent" || r.source === "agent_tool") &&
+						session &&
+						db
+							.query(`SELECT 1 FROM usages u JOIN suggestions s ON s.id = u.suggestion_id
+					WHERE s.session_id = ? AND s.agent_id = ? AND u.source = 'claude-code-mod' LIMIT 1`)
+							.get(session, r.scope_key)
+					)
+						return;
+					if (r.source === "claude-code-mod" && session && agent) {
+						// #86: transcript output is a stale streaming snapshot; the mod owns subagent usage.
+						db.query(`DELETE FROM usages WHERE source IN ('subagent', 'agent_tool') AND scope_key = ?
+					AND suggestion_id IN (SELECT id FROM suggestions WHERE session_id = ?)`).run(
+							agent,
+							session,
+						);
+						store.upsertDispatch({
+							session_id: session,
+							agent_id: agent,
+							requested_model: suggestion?.requested_model ?? null,
+							requested_agent_type: null,
+							answered_model: r.model,
+							tool_use_id: null,
+							suggestion_id: r.suggestion_id,
+						});
+					}
+					const counts = [
+						r.input_tokens,
+						r.output_tokens,
+						r.cache_read_tokens,
+						r.cache_creation_tokens,
 					];
 					if (
-						counts.every(
-							(n, i) =>
-								!n ||
-								(rates[i] != null &&
-									Number.isFinite(rates[i]) &&
-									(rates[i] as number) >= 0),
+						counts.some(
+							(n) => n !== null && (!Number.isSafeInteger(n) || n < 0),
 						)
-					) {
-						cost_usd = counts.reduce<number>(
-							(sum, n, i) => sum + (n ?? 0) * (rates[i] ?? 0),
-							0,
+					)
+						throw new Error(
+							"tokens must be null or non-negative safe integers",
 						);
-						if (Number.isFinite(cost_usd)) cost_source = "priced";
-						else cost_usd = null;
+					let cost_usd: number | null = null;
+					let cost_source: UsageRecord["cost_source"] = "unavailable";
+					if (r.cost_source === "reported" && r.cost_usd != null) {
+						if (!Number.isFinite(r.cost_usd) || r.cost_usd < 0)
+							throw new Error("cost must be finite and non-negative");
+						cost_usd = r.cost_usd;
+						cost_source = "reported";
+					} else {
+						const price = store.getSuggestion(r.suggestion_id)
+							?.price_snapshot?.[r.model];
+						if (price && counts.some((n) => n !== null)) {
+							const rates = [
+								price.price_prompt,
+								price.price_completion,
+								price.price_cache_read,
+								price.price_cache_write,
+							];
+							if (
+								counts.every(
+									(n, i) =>
+										!n ||
+										(rates[i] != null &&
+											Number.isFinite(rates[i]) &&
+											(rates[i] as number) >= 0),
+								)
+							) {
+								cost_usd = counts.reduce<number>(
+									(sum, n, i) => sum + (n ?? 0) * (rates[i] ?? 0),
+									0,
+								);
+								if (Number.isFinite(cost_usd)) cost_source = "priced";
+								else cost_usd = null;
+							}
+						}
 					}
-				}
-			}
-			db.query(
-				`INSERT OR REPLACE INTO usages VALUES ($suggestion_id, $model, $effort, $source, $scope_key,
+					db.query(
+						`INSERT OR REPLACE INTO usages VALUES ($suggestion_id, $model, $effort, $source, $scope_key,
 				$input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $is_sidechain,
 				$rounds, $note, $reported_at, $turn_id, $agent_id, $tokens_schema, $tokens_complete, $cost_usd, $cost_source)`,
-			).run({
-				...r,
-				tokens_schema: 2,
-				tokens_complete: Number(counts.every((n) => n !== null)),
-				cost_usd,
-				cost_source,
-				effort: noneOnly.has(r.model) ? "none" : (r.effort ?? null),
-				turn_id: r.turn_id ?? null,
-				agent_id: r.agent_id ?? null,
-				is_sidechain: Number(r.is_sidechain),
-			});
+					).run({
+						...r,
+						tokens_schema: 2,
+						tokens_complete: Number(counts.every((n) => n !== null)),
+						cost_usd,
+						cost_source,
+						effort: noneOnly.has(r.model) ? "none" : (r.effort ?? null),
+						turn_id: r.turn_id ?? null,
+						agent_id: r.agent_id ?? null,
+						is_sidechain: Number(r.is_sidechain),
+					});
+				})
+				.immediate();
 		},
 		getUsage(suggestionId, source, scopeKey, model) {
 			const row = db

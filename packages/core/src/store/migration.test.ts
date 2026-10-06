@@ -189,3 +189,32 @@ console.log("ready"); openDatabase(process.argv[1]).close();`;
 		}
 	}
 });
+
+test("previous-version fixture preserves all data and adds an empty dispatch ledger", async () => {
+	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
+	const before = rows(db);
+	const migrated = openDatabase(path);
+	handles.push(migrated);
+	expect(rows(migrated)).toMatchObject(before);
+	expect(migrated.query("SELECT * FROM dispatches").all()).toEqual([]);
+	expect(migrated.query("PRAGMA user_version").get()).toEqual({
+		user_version: SCHEMA_VERSION,
+	});
+});
+
+test("dispatch migration failure rolls back every statement and the version", async () => {
+	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
+	db.run("CREATE TABLE dispatches (conflict TEXT)");
+	const before = rows(db);
+	expect(() => openDatabase(path)).toThrow();
+	expect(rows(db)).toEqual(before);
+	expect(db.query("PRAGMA user_version").get()).toEqual({
+		user_version: SCHEMA_VERSION - 1,
+	});
+	expect(
+		db
+			.query("PRAGMA table_info(suggestions)")
+			.all()
+			.some((r) => (r as { name: string }).name === "requested_model"),
+	).toBe(false);
+});

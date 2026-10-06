@@ -1409,6 +1409,9 @@ describe("stats", () => {
 			coverage: 0,
 			learned_success: null,
 			control_success: null,
+			dispatches: 0,
+			routed_by_mod: 0,
+			swapped: 0,
 			fallbacks: {},
 			failures: { parse: 0, hook: 0, launcher: 0 },
 		};
@@ -1505,6 +1508,9 @@ describe("direct mod attribution", () => {
 						coverage: 0,
 						learned_success: null,
 						control_success: null,
+						dispatches: 0,
+						routed_by_mod: 0,
+						swapped: 0,
 						fallbacks: {},
 						failures: { parse: 0, hook: 0, launcher: 0 },
 					};
@@ -2208,6 +2214,9 @@ describe("failure diagnostics", () => {
 				coverage: 0,
 				learned_success: null,
 				control_success: null,
+				dispatches: 0,
+				routed_by_mod: 0,
+				swapped: 0,
 				fallbacks: {},
 				failures: { parse: 0, hook: 0, launcher: 0 },
 			}),
@@ -2362,7 +2371,7 @@ describe("explicit Codex run attribution", () => {
 				await s.api.importRollout({ file, suggestionId: ID1 });
 				expect(db.query(query).all()).toEqual(expected);
 				expect(db.query("PRAGMA user_version").get()).toEqual({
-					user_version: 6,
+					user_version: 7,
 				});
 			} finally {
 				db.close();
@@ -2409,4 +2418,158 @@ describe("explicit Codex run attribution", () => {
 		expect(s.writes()).toEqual([]);
 		expect(s.argsOf("recordFailure")).toHaveLength(1);
 	});
+});
+
+describe("dispatch observations", () => {
+	for (const hookFirst of [true, false]) {
+		test(`hook and mod merge by agent identity (hook first: ${hookFirst})`, async () => {
+			const identity = await Bun.file(
+				join(import.meta.dir, "../signals/fixtures/subagent-identity.json"),
+			).json();
+			const step = await Bun.file(
+				join(
+					import.meta.dir,
+					"../signals/fixtures/mod-routed-step-identity.json",
+				),
+			).json();
+			const s = setup({ openStore });
+			const event = {
+				...identity.hook,
+				...identity.agentCallHook,
+				tool_input: { model: "opus", subagent_type: "gp-opus-5-5-high" },
+				tool_response: {
+					agentId: identity.modAgentId,
+					resolvedModel: "claude-sonnet-5-5",
+				},
+			};
+			const hook = () => s.api.handleHook("PostToolUse", JSON.stringify(event));
+			if (hookFirst) await hook();
+			const suggestion = await s.api.suggest({
+				...suggestInput(),
+				source: "claude-code-mod",
+				scope: "subagent",
+				requested: "claude-opus-5-5",
+			});
+			await s.api.link({
+				suggestionId: suggestion.suggestion_id,
+				session: identity.hook.session_id,
+				agentId: step.mod.input.agentId,
+			});
+			if (!hookFirst) await hook();
+			await hook();
+			const db = new Database(s.deps.dbPath, { readonly: true });
+			try {
+				expect(db.query("SELECT * FROM dispatches").all()).toMatchObject([
+					{
+						session_id: identity.hook.session_id,
+						agent_id: identity.modAgentId,
+						tool_use_id: identity.modAgentSpawnId,
+						suggestion_id: suggestion.suggestion_id,
+						requested_model: "anthropic/claude-opus-5.5",
+						requested_agent_type: "gp-opus-5-5-high",
+						answered_model: "anthropic/claude-sonnet-5.5",
+					},
+				]);
+				expect(db.query("SELECT prompt_id FROM suggestions").get()).toEqual({
+					prompt_id: null,
+				});
+			} finally {
+				db.close();
+			}
+		});
+	}
+	test("mod subagent usage replaces hook estimates in either order without matching turn and prompt", async () => {
+		for (const modFirst of [true, false]) {
+			const s = setup();
+			const { suggestion_id: id } = await s.api.suggest({
+				...suggestInput(),
+				source: "claude-code-mod",
+				scope: "subagent",
+				session: SESSION,
+				agentId: "child",
+				requested: "-",
+			});
+			const hookUsage = {
+				suggestion_id: id,
+				model: "anthropic/claude-sonnet-5.5",
+				effort: null,
+				source: "subagent" as const,
+				scope_key: "child",
+				input_tokens: 1,
+				output_tokens: 3,
+				cache_read_tokens: 0,
+				cache_creation_tokens: 0,
+				is_sidechain: true,
+				rounds: null,
+				note: null,
+				reported_at: T0,
+			};
+			if (!modFirst) s.store.upsertUsage(hookUsage);
+			await s.api.usage({
+				suggestionId: id,
+				source: "claude-code-mod",
+				turn: "mod-turn",
+				model: "claude-sonnet-5-5",
+				input: 1,
+				output: 156,
+				cacheRead: 0,
+				cacheCreation: 0,
+			});
+			if (modFirst) s.store.upsertUsage(hookUsage);
+			expect(
+				s.store.getUsage(id, "subagent", "child", hookUsage.model),
+			).toBeNull();
+			expect(
+				s.store.getUsage(id, "claude-code-mod", "mod-turn", hookUsage.model)
+					?.output_tokens,
+			).toBe(156);
+		}
+	});
+});
+
+test("Agent hooks persist unlinked dispatches and use the child id, not the parent", async () => {
+	const s = setup({ openStore });
+	const hook = (agent: string, model: string | undefined) =>
+		s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				hook_event_name: "PostToolUse",
+				session_id: SESSION,
+				agent_id: "parent",
+				tool_name: "Agent",
+				tool_input: { model, subagent_type: "gp-opus-5-5-high" },
+				tool_use_id: `call-${agent}`,
+				tool_response: { agentId: agent, resolvedModel: "claude-opus-5-5" },
+			}),
+		);
+	await hook("pinned", "opus");
+	await hook("unknown", undefined);
+	const db = new Database(s.deps.dbPath, { readonly: true });
+	try {
+		expect(
+			db
+				.query(
+					"SELECT agent_id, requested_model, answered_model, suggestion_id FROM dispatches ORDER BY agent_id",
+				)
+				.all(),
+		).toEqual([
+			{
+				agent_id: "pinned",
+				requested_model: "anthropic/claude-opus-5.5",
+				answered_model: "anthropic/claude-opus-5.5",
+				suggestion_id: null,
+			},
+			{
+				agent_id: "unknown",
+				requested_model: null,
+				answered_model: "anthropic/claude-opus-5.5",
+				suggestion_id: null,
+			},
+		]);
+		expect(db.query("SELECT count(*) AS n FROM suggestions").get()).toEqual({
+			n: 0,
+		});
+	} finally {
+		db.close();
+	}
 });

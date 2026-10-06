@@ -1,6 +1,7 @@
 // api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
 import { join } from "node:path";
+import harnessModels from "../../../../catalog/harness-models.json";
 import {
 	formatHarnessModels,
 	type Harness,
@@ -141,6 +142,23 @@ export function createApi(
 		}
 	}
 
+	async function dispatchModel(model: unknown): Promise<string | null> {
+		if (
+			typeof model !== "string" ||
+			!model.trim() ||
+			model === "-" ||
+			model === "inherit"
+		)
+			return null;
+		const cfg = await getConfig();
+		const alias = harnessModels.harnesses["claude-code"].models.find((m) =>
+			m.id.startsWith(`claude-${model}-`),
+		);
+		return toCanonicalId(model, cfg.aliases) !== model
+			? toCanonicalId(model, cfg.aliases)
+			: toCanonicalId(alias?.id ?? model, cfg.aliases);
+	}
+
 	async function onHook(input: HookInput, cfg: Config): Promise<void> {
 		if (isIgnoredHookInput(input)) return;
 		const now = deps.clock.now();
@@ -262,7 +280,32 @@ export function createApi(
 						input.tool_name === "Agent"
 					) {
 						const r = input.tool_response as AgentToolResponse | null;
-						if (!r?.resolvedModel || !r.agentId) return;
+						if (
+							typeof r?.agentId !== "string" ||
+							!r.agentId ||
+							!input.session_id
+						)
+							return;
+						const requested = input.tool_input as {
+							model?: unknown;
+							subagent_type?: unknown;
+						} | null;
+						store.upsertDispatch({
+							session_id: input.session_id,
+							agent_id: r.agentId,
+							tool_use_id:
+								typeof input.tool_use_id === "string"
+									? input.tool_use_id
+									: null,
+							requested_model: await dispatchModel(requested?.model),
+							requested_agent_type:
+								typeof requested?.subagent_type === "string"
+									? requested.subagent_type
+									: null,
+							answered_model: await dispatchModel(r.resolvedModel),
+							suggestion_id: null,
+						});
+						if (!r.resolvedModel) return;
 						const target = store.findOpenSuggestion(
 							input.session_id,
 							now,
@@ -595,6 +638,7 @@ export function createApi(
 			session,
 			turn,
 			agentId,
+			requested: requestedModel,
 		}) {
 			if (scope !== undefined && !(SCOPES as readonly string[]).includes(scope))
 				throw new Error("invalid scope");
@@ -603,7 +647,12 @@ export function createApi(
 				!(AGENTS as readonly string[]).includes(source)
 			)
 				throw new Error("invalid source");
-			for (const [name, value] of Object.entries({ session, turn, agentId })) {
+			for (const [name, value] of Object.entries({
+				session,
+				turn,
+				agentId,
+				requested: requestedModel,
+			})) {
 				if (value !== undefined && !value.trim())
 					throw new Error(`invalid ${name}`);
 			}
@@ -612,6 +661,7 @@ export function createApi(
 				throw new Error(
 					"a mod suggestion with --session needs --turn or --agent-id",
 				);
+			const originalModel = await dispatchModel(requestedModel);
 			const cfg = await getConfig();
 			const resolved = resolveModels(models, deps.env, cfg);
 			const parseRequested = () => {
@@ -685,6 +735,7 @@ export function createApi(
 				const now = deps.clock.now();
 				store.insertSuggestion({
 					id,
+					requested_model: originalModel,
 					created_at: now,
 					price_date: now,
 					price_snapshot: Object.fromEntries(
@@ -753,6 +804,10 @@ export function createApi(
 				const suggestion = store.getSuggestion(suggestionId);
 				if (!suggestion)
 					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				if (suggestion.session_id !== null && suggestion.session_id !== session)
+					throw new Error(
+						`${suggestionId} is already linked to another session`,
+					);
 				if (suggestion.agent_id === agentId) return;
 				if (suggestion.agent_id !== null)
 					throw new Error(`${suggestionId} is already linked to another agent`);

@@ -59,6 +59,14 @@ Do not assign the mod's mixed turn total to its last pair. Use disjoint step mea
 
 The fixture spike is in `packages/core/src/signals/fixtures/`. Trust the mod's `turn.step` sent effort per step and Codex `turn_context.payload.effort`. Trust main-hook `effort.level` only when no mod rewrites main steps: the spike confirms main hooks carry the field, but does not establish that it still matches the effort sent by a rewriting mod. `SubagentStart`, `SubagentStop`, and subagent `PostToolUse` have no effort in the captured session. Subagent effort stays null unless the mod sets it. `tool.call.e.tool_use_id` matches `PostToolUse.tool_use_id`, including subagent calls; `TurnStepResult.toolUses` has no ID. Filter the extra `UserPromptSubmit` whose prompt starts `<agent-message` and `PostToolUse` named `SubagentHandback`.
 
+Subagent transcript `output_tokens` are stale streaming snapshots ([#86](https://github.com/lorenzh/spatz/issues/86)).
+The fixture's transcript counts of 3 and 2 correspond to mod counts of 156 and 116.
+The mod is authoritative for subagent usage. Hooks-only totals are lower-bound estimates.
+Schema v7 dispatch tracking merges observations by `(session_id, agent_id)`.
+It preserves `tool_use_id` and fills missing fields only.
+The current store removes hook subagent usage when mod usage arrives for the same session and agent.
+The attempt ledger still needs per-step attribution and explicit main-session ownership.
+
 The mod's sent effort records the requested value. The spike does not confirm that the API received or applied it.
 
 The sanitized `main-identity-transcript.jsonl` and `subagent-identity-transcript.jsonl` excerpts each contain two assistant entries from one API message. Their entry `uuid`s differ but their `message.id` and usage repeat. Deduplicate usage by `message.id` within the session and agent transcript. Do not use the entry `uuid` or `tool_use` block ID as the message deduplication key. The block's `id` matches hook/mod `tool_use_id` and binds the tool call. The fixture tests check both transcript variants through the production usage parsers.
@@ -191,9 +199,9 @@ The store evaluates chain completion after a report or finalized Stop/SubagentSt
 
 Chain statistics use the root suggestion's `task_type × difficulty`, learned/control flags and first actual pair. Each execution keeps its own tokens. Decision cost sums the chain once under the root pair. Costs `10 → 20 → 70` produce root cost `100`, not repeated charges on each outcome. Failed completed chains also contribute cost. Orchestration usage (null attempt, suggestion totals) counts in the chain's decision cost and is also reported separately as orchestration overhead, like review cost. Divide by successful chains. Zero successes gives null. Incomplete Codex pair costs still belong to chain tokens through the suggestion total; mark only per-attempt execution cost and its dollar slice incomplete, so #41 cost per success is not biased low. #41 owns dollar conversion and confidence intervals.
 
-## Migration after v6
+## Migration after v7
 
-The outcomes view is unchanged since v4; v5 only added `suggestions.fallback_reason` and the `failures` table. Schema v6 adds normalized tokens and cost (#67). The attempt migration must use the next free version after v6.
+The outcomes view is unchanged since v4; v5 only added `suggestions.fallback_reason` and the `failures` table. Schema v6 adds normalized tokens and cost (#67). Schema v7 adds dispatch tracking (#66). The attempt migration must use the next free version after v7.
 
 Close and mark all existing suggestions as legacy in one migration. Keep signals, usages, rowids and usage watermarks unchanged. Recheck `user_version` inside the existing `IMMEDIATE` transaction. Each migration array entry is one SQL statement.
 

@@ -4,6 +4,7 @@ import type {
 	Agent,
 	CellStat,
 	Config,
+	DispatchRecord,
 	Outcome,
 	ReportResult,
 	RoutingScope,
@@ -91,6 +92,8 @@ export type RandomFn = () => number;
 // ---------- Store (implemented by store module with bun:sqlite) ----------
 
 export interface Store {
+	/** One observation per session and agent; fill missing fields only. */
+	upsertDispatch(record: DispatchRecord): void;
 	/** Count once per kind, event, session and turn; count each call when either id is absent. */
 	recordFailure(
 		kind: "parse" | "hook",
@@ -202,6 +205,8 @@ export interface CoreDeps {
 // ---------- Use-case API (what the CLI and a later MCP server call) ----------
 
 export interface SuggestInput {
+	/** Original model before routing; "-" means no requested model. */
+	requested?: string;
 	task: string;
 	/** Raw --models value, e.g. "claude-opus-5-5:low+medium+high,gpt-6-sol:medium". */
 	models?: string;

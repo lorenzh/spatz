@@ -97,6 +97,18 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		const failures = await rows<{ kind: "parse" | "hook"; n: number }>(
 			"SELECT kind, COUNT(*)::INTEGER AS n FROM db.failures GROUP BY ALL",
 		);
+		const [dispatch] = await rows<{
+			dispatches: number;
+			routed_by_mod: number;
+			swapped: number;
+		}>(
+			`SELECT COUNT(*)::INTEGER AS dispatches,
+				COUNT(d.suggestion_id)::INTEGER AS routed_by_mod,
+				COUNT(*) FILTER (WHERE d.requested_model IS NOT NULL AND d.answered_model IS NOT NULL
+					AND d.requested_model <> d.answered_model)::INTEGER AS swapped
+			FROM db.dispatches d LEFT JOIN db.suggestions ds ON ds.id = d.suggestion_id
+			WHERE COALESCE(ds.is_test, 0) = 0`,
+		);
 		// Learned picks (strategy learned, no exploration) vs the control group, per cell (task_type, difficulty)
 		// with both groups, weighted by the cell's count of these outcomes. Exploration, jev-choice and rules are no learned pick.
 		const [cmp] = await rows<{
@@ -140,6 +152,9 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				: undefined;
 
 		return {
+			dispatches: dispatch?.dispatches ?? 0,
+			routed_by_mod: dispatch?.routed_by_mod ?? 0,
+			swapped: dispatch?.swapped ?? 0,
 			fallbacks: Object.fromEntries(fallbacks.map((f) => [f.reason, f.n])),
 			failures: {
 				parse: failures.find((f) => f.kind === "parse")?.n ?? 0,

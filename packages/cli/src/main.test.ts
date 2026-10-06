@@ -73,6 +73,9 @@ const statsReport: StatsReport = {
 	coverage: 0.8,
 	learned_success: 0.7,
 	control_success: null,
+	dispatches: 0,
+	routed_by_mod: 0,
+	swapped: 0,
 	fallbacks: {},
 	failures: { parse: 0, hook: 0, launcher: 0 },
 };
@@ -674,6 +677,7 @@ describe("stats", () => {
 				"  openai/gpt-6-sol:medium  n=3  success=67%",
 				"  anthropic/claude-opus-5.5:-  n=1  success=100%",
 				"coverage: 80%  learned_success: 70%  control_success: -",
+				"dispatches: 0  routed_by_mod: 0  swapped: 0",
 				"fallbacks: -",
 				"failures: parse=0  hook=0  launcher=0",
 			].join("\n"),
@@ -688,13 +692,16 @@ describe("stats", () => {
 				coverage: 0,
 				learned_success: null,
 				control_success: 0.5,
+				dispatches: 0,
+				routed_by_mod: 0,
+				swapped: 0,
 				fallbacks: {},
 				failures: { parse: 0, hook: 0, launcher: 0 },
 			}),
 		});
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
-			"coverage: 0%  learned_success: -  control_success: 50%\nfallbacks: -\nfailures: parse=0  hook=0  launcher=0",
+			"coverage: 0%  learned_success: -  control_success: 50%\ndispatches: 0  routed_by_mod: 0  swapped: 0\nfallbacks: -\nfailures: parse=0  hook=0  launcher=0",
 		);
 	});
 
@@ -1055,4 +1062,13 @@ test("import-rollout validates arguments and calls core", async () => {
 		["import-rollout", "--suggestion", "id"],
 	])
 		expect(await main(args, fakeIO().io, api)).toBe(2);
+});
+
+test("suggestion CLI forwards requested models and the explicit absent marker", async () => {
+	for (const requested of ["opus", "-"]) {
+		const { io } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(await main(["task", "--requested", requested], io, api)).toBe(0);
+		expect(calls[0]?.args[0]).toMatchObject({ requested });
+	}
 });

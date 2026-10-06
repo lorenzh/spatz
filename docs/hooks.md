@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
+keywords: [dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
 ---
 
 # Claude Code hooks for spatz
@@ -33,12 +33,13 @@ No separate CLI install is needed when either package runner is available.
 The first run downloads about 60 MB. Package runners use the plugin's version.
 Remove hand-written `spatz hook` entries from `~/.claude/settings.json` and project settings to avoid duplicate calls.
 Keep unrelated hooks.
-With the `spatz-mod` plugin, leave `record: auto` so the `spatz` hooks plugin handles recording.
+With both plugins, leave `record: auto`. Hooks record signals and main usage; the mod records routed subagent usage.
 
 ### Manual settings
 
 If you do not install the hooks plugin, use these settings instead.
-With the mod and manual hooks, set the mod's `record: off`.
+With manual hooks and main-session mod routing, set the mod's `record: off`.
+For subagent-only routing, `auto` keeps the mod's more complete usage.
 Automatic detection checks installed plugins only.
 
 1. Make sure that `spatz` is on the `PATH` of a non-interactive shell. A shell alias is not enough. The [README](../README.md) shows a small wrapper script.
@@ -81,7 +82,7 @@ spatz handles these four events. Other events do no harm, but they give no signa
 | `PostToolUse` | Bash command is a spatz suggestion call | Links the session to the suggestion. See [Link a suggestion to a session](#link-a-suggestion-to-a-session). |
 | `PostToolUse` | Bash command is a test or a build | Signal `test` or `build` with value 1 (success). |
 | `PostToolUseFailure` | Bash command is a test or a build | Signal `test` or `build` with value 0 (failure). |
-| `PostToolUse` | Tool is `Agent` | The subagent model from `tool_response.resolvedModel`, with unknown token counts and no effort. |
+| `PostToolUse` | Tool is `Agent` | Requested model, requested agent type and answering model in `dispatches`, even without an open suggestion. Linked usage has unknown tokens and effort. |
 | `Stop` | Event has a `prompt_id` | Model, effort and tokens of the main session for this turn, read from the transcript. |
 | `SubagentStop` | Always | Model, effort and tokens of the subagent, read from the subagent transcript. |
 
@@ -195,6 +196,28 @@ If it has a linked suggestion, closure does not send later events back to the ma
 
 Without a report, the used pair is the model with the most output tokens assigned to the suggestion. Its effort is the newest effort that a hook gave for that model. A report always sets the used pair.
 
+## Dispatch observations
+
+Schema v7 adds one `dispatches` row per `(session_id, agent_id)`.
+The Agent hook reads the child id from `tool_response.agentId`.
+The hook's own `agent_id` can identify the parent and is not the child key.
+It stores `tool_input.model`, `tool_input.subagent_type` and `tool_response.resolvedModel`.
+The column names are `requested_model`, `requested_agent_type` and `answered_model`.
+It also stores `tool_use_id`. Unknown fields remain null.
+
+A hook observation needs no open suggestion.
+The mod's linked suggestion fills `suggestion_id` and the original requested model.
+An insert with the same session and agent fills only missing columns.
+Replays and conflicting later values do not replace known values.
+Model comparison uses canonical ids and known Claude aliases.
+The agent type is preserved as given; spatz does not infer a model from its name.
+No prompt text or tool output is stored.
+
+The identity fixtures confirm that `agent_id` joins hook and mod observations.
+Agent tool calls also share `tool_use_id`.
+Mod `turnId` and hook `prompt_id` are different ids.
+See [dispatch counts](cli.md#dispatch-counts) for the stats fields.
+
 ## Mod and hooks together
 
 The core accepts explicitly linked `claude-code-mod` suggestions in hook windows.
@@ -202,10 +225,14 @@ It does not exclude them by provenance. This supports separate routing and recor
 The mod routes through the CLI. Hooks can record signals and transcript usage for those suggestions.
 Direct `spatz usage` records tokens without a transcript.
 
-The mod can record usage directly, use the hooks, or select a recorder automatically when the hooks plugin is enabled. This avoids counting the same usage twice.
+With `record: auto`, the mod records routed subagent usage even when the hooks plugin is enabled.
+Subagent transcripts undercount output tokens ([#86](https://github.com/lorenzh/spatz/issues/86)).
+The first mod usage removes hook estimates for that session and agent.
+Later hook usage for the same agent is ignored. Test and build signals still count.
+Hooks-only subagent totals remain lower-bound estimates until #86 is fully resolved.
 
-Do not send both transcript usage and direct mod usage for the same run.
-The sources have different uniqueness keys, so the database keeps both.
+Main-session automatic recording still uses the hooks plugin when enabled.
+Do not force both recorders on for main usage. Their turn ids cannot safely be matched.
 When you install the hooks plugin, remove equivalent hand-written entries from `~/.claude/settings.json`.
 
 ## Limits
