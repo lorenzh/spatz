@@ -69,6 +69,8 @@ test("bridge parses a spatz suggestion and passes every link flag", async () => 
 			"subagent",
 			"--source",
 			"claude-code-mod",
+			"--requested",
+			"-",
 			"--session",
 			"sess",
 			"--turn",

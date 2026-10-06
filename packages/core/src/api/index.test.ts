@@ -1409,6 +1409,9 @@ describe("stats", () => {
 			coverage: 0,
 			learned_success: null,
 			control_success: null,
+			dispatches: 0,
+			routed_by_mod: 0,
+			swapped: 0,
 			fallbacks: {},
 			failures: { parse: 0, hook: 0, launcher: 0 },
 		};
@@ -1505,6 +1508,9 @@ describe("direct mod attribution", () => {
 						coverage: 0,
 						learned_success: null,
 						control_success: null,
+						dispatches: 0,
+						routed_by_mod: 0,
+						swapped: 0,
 						fallbacks: {},
 						failures: { parse: 0, hook: 0, launcher: 0 },
 					};
@@ -2208,6 +2214,9 @@ describe("failure diagnostics", () => {
 				coverage: 0,
 				learned_success: null,
 				control_success: null,
+				dispatches: 0,
+				routed_by_mod: 0,
+				swapped: 0,
 				fallbacks: {},
 				failures: { parse: 0, hook: 0, launcher: 0 },
 			}),
@@ -2362,7 +2371,7 @@ describe("explicit Codex run attribution", () => {
 				await s.api.importRollout({ file, suggestionId: ID1 });
 				expect(db.query(query).all()).toEqual(expected);
 				expect(db.query("PRAGMA user_version").get()).toEqual({
-					user_version: 6,
+					user_version: 7,
 				});
 			} finally {
 				db.close();
@@ -2409,4 +2418,309 @@ describe("explicit Codex run attribution", () => {
 		expect(s.writes()).toEqual([]);
 		expect(s.argsOf("recordFailure")).toHaveLength(1);
 	});
+});
+
+describe("dispatch observations", () => {
+	for (const [answered, swapped] of [
+		["claude-sonnet-5-5", 1],
+		["claude-opus-5-5", 0],
+	] as const) {
+		test(`pinned agent definition counts swaps with ${answered} answering`, async () => {
+			const cwd = join(dir, "project");
+			await Bun.write(
+				join(cwd, ".claude/agents/gp-opus-5-5-high.md"),
+				"---\nname: gp-opus-5-5-high\nmodel: claude-opus-5-5\n---\nReview code.\n",
+			);
+			const s = setup({
+				openStore,
+				duckdbExtensionDir: process.env.SPATZ_DUCKDB_EXTENSION_DIR,
+			});
+			await s.api.handleHook(
+				"PostToolUse",
+				JSON.stringify({
+					hook_event_name: "PostToolUse",
+					session_id: SESSION,
+					transcript_path: "unused",
+					cwd,
+					tool_name: "Agent",
+					tool_use_id: "toolu_x",
+					tool_input: { subagent_type: "gp-opus-5-5-high" },
+					tool_response: { agentId: "a1", resolvedModel: answered },
+				}),
+			);
+			expect(await s.api.stats({})).toMatchObject({
+				dispatches: 1,
+				routed_by_mod: 0,
+				swapped,
+			});
+		});
+	}
+	test("mod-only pinned requests use the same project and user definition resolver", async () => {
+		const cwd = join(dir, "project");
+		const configDir = join(dir, "claude-config");
+		await Bun.write(
+			join(configDir, "agents/pinned.md"),
+			"---\nmodel: 'claude-opus-5-5' # pin\n---\n",
+		);
+		const s = setup({
+			cwd,
+			env: { CLAUDE_CONFIG_DIR: configDir },
+			openStore,
+			duckdbExtensionDir: process.env.SPATZ_DUCKDB_EXTENSION_DIR,
+		});
+		for (const [model, swapped] of [
+			["claude-opus-5-5", 0],
+			["claude-sonnet-5-5", 1],
+		] as const) {
+			const suggestion = await s.api.suggest({
+				...suggestInput(),
+				dryRun: false,
+				source: "claude-code-mod",
+				scope: "subagent",
+				requested: "-",
+				requestedAgent: "pinned",
+			});
+			await s.api.link({
+				suggestionId: suggestion.suggestion_id,
+				session: SESSION,
+				agentId: model,
+			});
+			await s.api.usage({
+				suggestionId: suggestion.suggestion_id,
+				model,
+				source: "claude-code-mod",
+				turn: model,
+				input: 1,
+				output: 2,
+				cacheRead: 0,
+				cacheCreation: 0,
+			});
+			expect(await s.api.stats({})).toMatchObject({ swapped });
+		}
+		await Bun.write(
+			join(cwd, ".claude/agents/pinned.md"),
+			"---\nmodel: inherit\n---\n",
+		);
+		await s.api.suggest({ ...suggestInput(), requestedAgent: "pinned" });
+		await s.api.suggest({ ...suggestInput(), requestedAgent: "../pinned" });
+		const db = new Database(s.deps.dbPath, { readonly: true });
+		try {
+			expect(
+				db
+					.query("SELECT requested_model FROM suggestions ORDER BY rowid")
+					.all(),
+			).toEqual([
+				{ requested_model: "anthropic/claude-opus-5.5" },
+				{ requested_model: "anthropic/claude-opus-5.5" },
+				{ requested_model: null },
+				{ requested_model: null },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test.each([
+		["inherit", "---\r\nmodel: opus\r\n---\r\n", "anthropic/claude-opus-5.5"],
+		["sonnet", "---\nmodel: opus\n---\n", "anthropic/claude-sonnet-5.5"],
+		[undefined, "---\nmodel: [\n---\n", null],
+		[undefined, "---not-frontmatter\n---\nmodel: opus\n---\n", null],
+		[undefined, "---\nname: pinned\n---\nmodel: opus\n", null],
+		[undefined, null, null],
+	] as const)(
+		"agent definitions handle explicit %s and header %s",
+		async (requested, definition, expected) => {
+			if (definition !== null)
+				await Bun.write(join(dir, ".claude/agents/pinned.md"), definition);
+			const s = setup({ cwd: join(dir, "project") });
+			await s.api.suggest({
+				...suggestInput(),
+				requested,
+				requestedAgent: "pinned",
+			});
+			expect(s.store.getSuggestion(ID1)?.requested_model).toBe(expected);
+		},
+	);
+
+	test("dispatch aliases select the newest cached model, regardless of catalog order", async () => {
+		const catalog = await Bun.file(
+			join(import.meta.dir, "../../../../catalog/harness-models.json"),
+		).json();
+		catalog.harnesses["claude-code"].models = [
+			{ id: "claude-opus-5-5", efforts: ["high"] },
+			{ id: "claude-opus-10-1", efforts: ["high"] },
+			{ id: "claude-opus-9-9", efforts: ["high"] },
+		];
+		await Bun.write(
+			join(dir, ".spatz/harness-models.json"),
+			JSON.stringify({ fetched_at: T0, catalog }),
+		);
+		const s = setup();
+		await s.api.suggest({ ...suggestInput(), requested: "opus" });
+		expect(s.store.getSuggestion(ID1)?.requested_model).toBe(
+			"anthropic/claude-opus-10.1",
+		);
+	});
+
+	for (const hookFirst of [true, false]) {
+		test(`hook and mod merge by agent identity (hook first: ${hookFirst})`, async () => {
+			const identity = await Bun.file(
+				join(import.meta.dir, "../signals/fixtures/subagent-identity.json"),
+			).json();
+			const step = await Bun.file(
+				join(
+					import.meta.dir,
+					"../signals/fixtures/mod-routed-step-identity.json",
+				),
+			).json();
+			const s = setup({ openStore });
+			await Bun.write(
+				join(dir, ".claude/agents/gp-opus-5-5-high.md"),
+				"---\nname: gp-opus-5-5-high\nmodel: claude-opus-5-5\n---\nReview code.\n",
+			);
+			const event = {
+				...identity.hook,
+				...identity.agentCallHook,
+				cwd: dir,
+				tool_input: { subagent_type: "gp-opus-5-5-high" },
+				tool_response: {
+					agentId: identity.modAgentId,
+					resolvedModel: "claude-sonnet-5-5",
+				},
+			};
+			const hook = () => s.api.handleHook("PostToolUse", JSON.stringify(event));
+			if (hookFirst) await hook();
+			const suggestion = await s.api.suggest({
+				...suggestInput(),
+				source: "claude-code-mod",
+				scope: "subagent",
+				requested: "-",
+			});
+			await s.api.link({
+				suggestionId: suggestion.suggestion_id,
+				session: identity.hook.session_id,
+				agentId: step.mod.input.agentId,
+			});
+			if (!hookFirst) await hook();
+			await hook();
+			const db = new Database(s.deps.dbPath, { readonly: true });
+			try {
+				expect(db.query("SELECT * FROM dispatches").all()).toMatchObject([
+					{
+						session_id: identity.hook.session_id,
+						agent_id: identity.modAgentId,
+						tool_use_id: identity.modAgentSpawnId,
+						suggestion_id: suggestion.suggestion_id,
+						requested_model: "anthropic/claude-opus-5.5",
+						requested_agent_type: "gp-opus-5-5-high",
+						answered_model: "anthropic/claude-sonnet-5.5",
+					},
+				]);
+				expect(db.query("SELECT prompt_id FROM suggestions").get()).toEqual({
+					prompt_id: null,
+				});
+			} finally {
+				db.close();
+			}
+		});
+	}
+	test("mod subagent usage replaces hook estimates in either order without matching turn and prompt", async () => {
+		for (const modFirst of [true, false]) {
+			const s = setup();
+			const { suggestion_id: id } = await s.api.suggest({
+				...suggestInput(),
+				source: "claude-code-mod",
+				scope: "subagent",
+				session: SESSION,
+				agentId: "child",
+				requested: "-",
+			});
+			const hookUsage = {
+				suggestion_id: id,
+				model: "anthropic/claude-sonnet-5.5",
+				effort: null,
+				source: "subagent" as const,
+				scope_key: "child",
+				input_tokens: 1,
+				output_tokens: 3,
+				cache_read_tokens: 0,
+				cache_creation_tokens: 0,
+				is_sidechain: true,
+				rounds: null,
+				note: null,
+				reported_at: T0,
+			};
+			if (!modFirst) s.store.upsertUsage(hookUsage);
+			await s.api.usage({
+				suggestionId: id,
+				source: "claude-code-mod",
+				turn: "mod-turn",
+				model: "claude-sonnet-5-5",
+				input: 1,
+				output: 156,
+				cacheRead: 0,
+				cacheCreation: 0,
+			});
+			if (modFirst) s.store.upsertUsage(hookUsage);
+			expect(
+				s.store.getUsage(id, "subagent", "child", hookUsage.model),
+			).toBeNull();
+			expect(
+				s.store.getUsage(id, "claude-code-mod", "mod-turn", hookUsage.model)
+					?.output_tokens,
+			).toBe(156);
+		}
+	});
+});
+
+test("Agent hooks persist unlinked dispatches and use the child id, not the parent", async () => {
+	const s = setup({ openStore });
+	await Bun.write(
+		join(dir, ".claude/agents/gp-opus-5-5-high.md"),
+		"---\nmodel: claude-opus-5-5\n---\n",
+	);
+	const hook = (agent: string, subagentType: string) =>
+		s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				hook_event_name: "PostToolUse",
+				session_id: SESSION,
+				agent_id: "parent",
+				tool_name: "Agent",
+				cwd: dir,
+				tool_input: { subagent_type: subagentType },
+				tool_use_id: `call-${agent}`,
+				tool_response: { agentId: agent, resolvedModel: "claude-opus-5-5" },
+			}),
+		);
+	await hook("pinned", "gp-opus-5-5-high");
+	await hook("unknown", "unknown-agent");
+	const db = new Database(s.deps.dbPath, { readonly: true });
+	try {
+		expect(
+			db
+				.query(
+					"SELECT agent_id, requested_model, answered_model, suggestion_id FROM dispatches ORDER BY agent_id",
+				)
+				.all(),
+		).toEqual([
+			{
+				agent_id: "pinned",
+				requested_model: "anthropic/claude-opus-5.5",
+				answered_model: "anthropic/claude-opus-5.5",
+				suggestion_id: null,
+			},
+			{
+				agent_id: "unknown",
+				requested_model: null,
+				answered_model: "anthropic/claude-opus-5.5",
+				suggestion_id: null,
+			},
+		]);
+		expect(db.query("SELECT count(*) AS n FROM suggestions").get()).toEqual({
+			n: 0,
+		});
+	} finally {
+		db.close();
+	}
 });

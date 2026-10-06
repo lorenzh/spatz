@@ -93,16 +93,20 @@ export function createApi(
 	const debugHook = (message: string) => {
 		if (deps.env.SPATZ_DEBUG === "1") console.error(`spatz hook: ${message}`);
 	};
-	async function availableEfforts() {
+	async function cachedHarnessCatalog() {
 		const cfg = await getConfig();
 		// Recording and explicit lists use the available cache/bundle without a network request.
-		const catalog = await loadHarnessCatalog({
+		return loadHarnessCatalog({
 			fetch: deps.fetch,
 			env: { ...deps.env, SPATZ_NO_NETWORK: "1" },
 			cachePath: join(deps.homeDir, ".spatz", "harness-models.json"),
 			clock: deps.clock,
 			ttlMs: cfg.tuning.openRouterCacheMs,
 		});
+	}
+	async function availableEfforts() {
+		const cfg = await getConfig();
+		const catalog = await cachedHarnessCatalog();
 		const byModel = new Map<string, Effort[]>();
 		for (const harness of Object.values(catalog.harnesses))
 			for (const model of harness.models) {
@@ -139,6 +143,66 @@ export function createApi(
 		} finally {
 			store.dispose();
 		}
+	}
+
+	async function dispatchModel(model: unknown): Promise<string | null> {
+		if (
+			typeof model !== "string" ||
+			!model.trim() ||
+			model === "-" ||
+			model === "inherit"
+		)
+			return null;
+		const cfg = await getConfig();
+		const catalog = await cachedHarnessCatalog();
+		const alias = catalog.harnesses["claude-code"].models
+			.filter((m) => m.id.startsWith(`claude-${model}-`))
+			.sort((a, b) => b.id.localeCompare(a.id, "en", { numeric: true }))[0];
+		return toCanonicalId(model, cfg.aliases) !== model
+			? toCanonicalId(model, cfg.aliases)
+			: toCanonicalId(alias?.id ?? model, cfg.aliases);
+	}
+
+	/** Resolve the caller's pin before routing; project definitions override user definitions. */
+	async function requestedDispatchModel(
+		model: unknown,
+		agentType: unknown,
+		cwd = deps.cwd,
+	): Promise<string | null> {
+		const explicit = await dispatchModel(model);
+		if (explicit) return explicit;
+		// ponytail: local agent files only; add plugin discovery when plugin pins are needed.
+		if (typeof agentType !== "string" || !/^[a-zA-Z0-9_-]+$/.test(agentType))
+			return null;
+		for (const agents of [
+			join(cwd, ".claude", "agents"),
+			join(
+				deps.env.CLAUDE_CONFIG_DIR || join(deps.homeDir, ".claude"),
+				"agents",
+			),
+		]) {
+			let text: string;
+			try {
+				text = await Bun.file(join(agents, `${agentType}.md`)).text();
+			} catch {
+				continue;
+			}
+			try {
+				const header = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(
+					text,
+				)?.[1];
+				if (header === undefined) return null;
+				const definition = Bun.YAML.parse(header);
+				return await dispatchModel(
+					definition && typeof definition === "object" && "model" in definition
+						? definition.model
+						: null,
+				);
+			} catch {
+				return null;
+			}
+		}
+		return null;
 	}
 
 	async function onHook(input: HookInput, cfg: Config): Promise<void> {
@@ -262,7 +326,36 @@ export function createApi(
 						input.tool_name === "Agent"
 					) {
 						const r = input.tool_response as AgentToolResponse | null;
-						if (!r?.resolvedModel || !r.agentId) return;
+						if (
+							typeof r?.agentId !== "string" ||
+							!r.agentId ||
+							!input.session_id
+						)
+							return;
+						const requested = input.tool_input as {
+							model?: unknown;
+							subagent_type?: unknown;
+						} | null;
+						store.upsertDispatch({
+							session_id: input.session_id,
+							agent_id: r.agentId,
+							tool_use_id:
+								typeof input.tool_use_id === "string"
+									? input.tool_use_id
+									: null,
+							requested_model: await requestedDispatchModel(
+								requested?.model,
+								requested?.subagent_type,
+								input.cwd,
+							),
+							requested_agent_type:
+								typeof requested?.subagent_type === "string"
+									? requested.subagent_type
+									: null,
+							answered_model: await dispatchModel(r.resolvedModel),
+							suggestion_id: null,
+						});
+						if (!r.resolvedModel) return;
 						const target = store.findOpenSuggestion(
 							input.session_id,
 							now,
@@ -595,6 +688,8 @@ export function createApi(
 			session,
 			turn,
 			agentId,
+			requested: requestedModel,
+			requestedAgent,
 		}) {
 			if (scope !== undefined && !(SCOPES as readonly string[]).includes(scope))
 				throw new Error("invalid scope");
@@ -603,7 +698,13 @@ export function createApi(
 				!(AGENTS as readonly string[]).includes(source)
 			)
 				throw new Error("invalid source");
-			for (const [name, value] of Object.entries({ session, turn, agentId })) {
+			for (const [name, value] of Object.entries({
+				session,
+				turn,
+				agentId,
+				requested: requestedModel,
+				requestedAgent,
+			})) {
 				if (value !== undefined && !value.trim())
 					throw new Error(`invalid ${name}`);
 			}
@@ -612,6 +713,10 @@ export function createApi(
 				throw new Error(
 					"a mod suggestion with --session needs --turn or --agent-id",
 				);
+			const originalModel = await requestedDispatchModel(
+				requestedModel,
+				requestedAgent,
+			);
 			const cfg = await getConfig();
 			const resolved = resolveModels(models, deps.env, cfg);
 			const parseRequested = () => {
@@ -685,6 +790,7 @@ export function createApi(
 				const now = deps.clock.now();
 				store.insertSuggestion({
 					id,
+					requested_model: originalModel,
 					created_at: now,
 					price_date: now,
 					price_snapshot: Object.fromEntries(
@@ -753,6 +859,10 @@ export function createApi(
 				const suggestion = store.getSuggestion(suggestionId);
 				if (!suggestion)
 					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				if (suggestion.session_id !== null && suggestion.session_id !== session)
+					throw new Error(
+						`${suggestionId} is already linked to another session`,
+					);
 				if (suggestion.agent_id === agentId) return;
 				if (suggestion.agent_id !== null)
 					throw new Error(`${suggestionId} is already linked to another agent`);

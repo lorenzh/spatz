@@ -25,7 +25,7 @@ export interface CliIO {
 
 const USAGE = `usage:
   spatz --version
-  spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
+  spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
   spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--cost-usd <n>] [--json]
   spatz import-rollout <file> --suggestion <id> [--json]
@@ -62,6 +62,7 @@ function formatOutcome(id: string, o: Outcome | null): string {
 
 function formatStats(r: StatsReport): string {
 	const diagnostics = [
+		`dispatches: ${r.dispatches}  routed_by_mod: ${r.routed_by_mod}  swapped: ${r.swapped}`,
 		`fallbacks: ${
 			Object.entries(r.fallbacks)
 				.map(([reason, n]) => `${reason}=${n}`)
@@ -101,6 +102,8 @@ function parse(argv: string[]) {
 				version: { type: "boolean" },
 				json: { type: "boolean" },
 				models: { type: "string" },
+				requested: { type: "string" },
+				"requested-agent": { type: "string" },
 				family: { type: "string" },
 				"dry-run": { type: "boolean" },
 				model: { type: "string" },
@@ -275,6 +278,12 @@ export async function main(
 				throw new UsageError(`--source must be one of ${AGENTS.join(", ")}`);
 			const input = {
 				task,
+				...(v.requested !== undefined && {
+					requested: required(v.requested, "--requested"),
+				}),
+				...(v["requested-agent"] !== undefined && {
+					requestedAgent: required(v["requested-agent"], "--requested-agent"),
+				}),
 				...(v.models !== undefined && { models: v.models }),
 				...(v.family !== undefined && { family: v.family }),
 				dryRun: v["dry-run"] ?? false,

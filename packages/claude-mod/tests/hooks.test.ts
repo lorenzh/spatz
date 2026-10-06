@@ -851,7 +851,7 @@ describe("record", () => {
 		expect(s.usages()).toEqual([]);
 	});
 
-	test("auto disables recording for the new hooks plugin and ignores the mod id", async () => {
+	test("auto keeps authoritative subagent usage even with the hooks plugin", async () => {
 		for (const id of ["spatz@spatz", "spatz-hooks@spatz"]) {
 			const s = session(
 				{ mode: "show", record: "auto" },
@@ -869,10 +869,7 @@ describe("record", () => {
 			await s.spawn({});
 			await s.step({ turnId: "r1", agentId: "a1" });
 			await s.complete({ turnId: "r1", agentId: "a1", usage: turnUsage });
-			expect(s.usages()).toEqual([]);
-			expect(
-				s.toasts.filter((t) => t.includes("usage recording is off")),
-			).toHaveLength(1);
+			expect(s.usages()).toHaveLength(2);
 		}
 		const mod = session(
 			{ mode: "show", record: "auto" },
@@ -1057,5 +1054,26 @@ test("none changes only the model at spawn and step, then escalates to a reasoni
 		expect((await s.step({ turnId: "t1", agentId: "a1" })).seen.effort).toBe(
 			"max",
 		);
+	}
+});
+
+test("every mod suggestion carries the original requested model or the absent marker", async () => {
+	for (const scope of ["subagent", "step", "escalate"]) {
+		const pinned = session({ ...apply, scope, respectPinned: false });
+		await pinned.spawn({ subagentType: "gp-opus-5-5-high" });
+		await pinned.step({ turnId: "t1", agentId: "a1" });
+		const argv = pinned.suggests()[0] ?? [];
+		expect(pinned.flag(argv, "--requested")).toBe("-");
+		expect(pinned.flag(argv, "--requested-agent")).toBe("gp-opus-5-5-high");
+	}
+	for (const scope of ["step", "turn", "session", "subagent", "escalate"]) {
+		const s = session({ ...apply, scope });
+		await s.start("t1", LONG);
+		await s.spawn({});
+		await s.step({ turnId: "t1", agentId: "a1" });
+		for (const argv of s.suggests()) {
+			expect(argv).toContain("--requested");
+			expect(s.flag(argv, "--requested")).toBe("-");
+		}
 	}
 });

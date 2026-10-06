@@ -324,8 +324,21 @@ export type RoutingScope = (typeof SCOPES)[number];
 export const AGENTS = ["claude-code", "claude-code-mod", "codex"] as const;
 export type Agent = (typeof AGENTS)[number];
 
+/** One dispatch, joined by the session and child agent identity. */
+export interface DispatchRecord {
+	session_id: string;
+	agent_id: string;
+	tool_use_id: string | null;
+	requested_model: string | null;
+	requested_agent_type: string | null;
+	answered_model: string | null;
+	suggestion_id: string | null;
+}
+
 /** Row of table `suggestions`. No task text is ever stored. */
 export interface SuggestionRecord {
+	/** Original model before mod routing; null when absent or unknown. */
+	requested_model?: string | null;
 	/** Candidate model IDs mapped to four USD-per-token rates captured at creation. */
 	price_snapshot?: Record<string, PriceSnapshot>;
 	/** Capture time in epoch milliseconds, null for pre-v6 suggestions. */
@@ -397,6 +410,10 @@ export interface ScopeStats {
 }
 
 export interface StatsReport {
+	/** Global dispatch counts, excluding linked dry-run suggestions. */
+	dispatches: number;
+	routed_by_mod: number;
+	swapped: number;
 	/** Global non-test fallback counts; unknown means a legacy row without a reason. */
 	fallbacks: Record<string, number>;
 	/** Global failure counts, independent of suggestion filters. */

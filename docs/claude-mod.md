@@ -2,7 +2,7 @@
 title: The spatz Claude Code mod
 description: How the spatz mod for Claude Code recommends and applies model and effort, the five routing scopes with their trade-offs, the /spatz commands, all config keys with defaults, fail-open behaviour, usage recording and privacy.
 tags: [claude-mod, claude-code, routing, spatz]
-keywords: [mod, plugin, scope, step, turn, subagent, session, escalate, apply, show, off, /spatz, record, spatz, main, prompt cache, fail open, userConfig, alias, effort, model switch]
+keywords: [dispatch, dispatches, requested_model, swapped, mod, plugin, scope, step, turn, subagent, session, escalate, apply, show, off, /spatz, record, spatz, main, prompt cache, fail open, userConfig, alias, effort, model switch]
 ---
 
 # The spatz Claude Code mod
@@ -115,6 +115,26 @@ To narrow candidates, set the mod option, config `models`, or `SPATZ_MODELS`.
 For example: `claude-opus-5-5:high,claude-sonnet-5-5:low+medium+high`.
 See [model defaults](configuration.md#harness-catalog) for cache and offline behavior.
 
+## Dispatch tracking
+
+Every mod suggestion includes `--requested <model|->`.
+The model is the original spawn model before routing. `-` means that the caller supplied no model.
+Named agents also send `--requested-agent <type>` so core can read the definition's `model:` when no explicit model is supplied.
+Step routing keeps both original values for the agent's later requests.
+Main-session suggestions use `-` because turn-start events carry no model request.
+
+Once the agent exists, `spatz link` merges its suggestion into the dispatch row.
+The key is the session id plus agent id.
+The Agent hook adds the requested agent type and answering model.
+A mod usage observation can also supply the answering model.
+Each field keeps its first known value.
+The CLI normalizes model ids and known Claude aliases before comparison.
+
+`spatz stats` shows dispatch, mod-suggestion and model-swap counts.
+This includes observed pinned spawns that the mod leaves unchanged.
+The core resolver reads named agent definitions in project and user agent directories.
+See [dispatch counts](cli.md#dispatch-counts) for the exact rules.
+
 ## Recording usage
 
 After each request and at the end of each turn, the mod can call `spatz usage` with the token counts and the model that answered. It keys them by turn. The end-of-turn call holds the sum of the turn and replaces the last request's figures. The model is the one of the last response. A turn with several models is not split by model. The `step` scope records each request against its own suggestion. A turn or agent run that has no usage in its result records nothing.
@@ -123,14 +143,22 @@ After each request and at the end of each turn, the mod can call `spatz usage` w
 
 - `on`: always record.
 - `off`: never record.
-- `auto` (default): do not record when the `spatz` hooks plugin is enabled, otherwise record.
+- `auto` (default): always record routed subagents. For main-session usage, let an enabled hooks plugin record instead.
 
-For `auto`, the mod runs `claude plugin list --json` once per session.
+For main-session `auto`, the mod runs `claude plugin list --json` once per session.
 It checks for an enabled plugin whose id starts with `spatz@` or the legacy `spatz-hooks@`.
 The mod's id, `spatz-mod@spatz`, does not turn recording off.
-When the hooks plugin is enabled, the mod shows one notice that recording is off.
+When the hooks plugin is enabled, the mod shows one notice that hooks own main-session usage.
 If the lookup fails, the mod records. The mod records usage only, without outcomes.
-Hand-written hooks and `--plugin-dir` hooks are not installed plugins. With those hooks, set `record: off` yourself.
+Subagent transcript output counts are unreliable ([#86](https://github.com/lorenzh/spatz/issues/86)).
+The mod's counters replace hook usage for the same session and agent.
+Later hook replays cannot add that usage again. Signals remain available from hooks.
+With `record: off`, hooks keep their lower-bound subagent estimates.
+The replacement uses agent identity. It never assumes that mod `turnId` equals hook `prompt_id`.
+
+Hand-written hooks and `--plugin-dir` hooks are not installed plugins.
+With manual hooks and main-session routing, set `record: off` to avoid duplicate main usage.
+With subagent-only routing, `auto` keeps the more complete mod counters.
 
 ## Fail-open behaviour
 

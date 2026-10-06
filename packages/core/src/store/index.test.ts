@@ -305,7 +305,6 @@ describe("schema", () => {
 				{ name: "usage_scopes", type: "table" },
 			]),
 		);
-		expect(SCHEMA_VERSION).toBe(6);
 		expect(version?.user_version).toBe(SCHEMA_VERSION);
 	});
 
@@ -419,6 +418,7 @@ describe("suggestions", () => {
 			...record,
 			price_snapshot: {},
 			price_date: null,
+			requested_model: null,
 		});
 		expect(store.getSuggestion("missing")).toBeNull();
 	});
@@ -1100,7 +1100,7 @@ describe("normalized usage and cost", () => {
 		const migrated = openDatabase(path);
 		try {
 			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: 6,
+				user_version: SCHEMA_VERSION,
 			});
 			for (const [i, table] of tables.entries())
 				expect(
@@ -1262,4 +1262,90 @@ test("Claude measured dollars and equivalent Codex normalized tokens agree", () 
 		expect(priced?.cost_usd).toBeCloseTo(fixture.reported_cost_usd, 12);
 		expect(priced?.tokens_complete).toBe(1);
 	}
+});
+
+test("dispatch upsert only fills missing fields and isolates sessions", () => {
+	const path = tempDb();
+	const store = open(path);
+	const first = {
+		session_id: "s",
+		agent_id: "a",
+		requested_model: "opus",
+		requested_agent_type: null,
+		answered_model: null,
+		tool_use_id: null,
+		suggestion_id: null,
+	};
+	store.upsertDispatch(first);
+	store.upsertDispatch({
+		...first,
+		requested_model: "sonnet",
+		answered_model: "sonnet",
+		tool_use_id: "call",
+		suggestion_id: "suggestion",
+	});
+	store.upsertDispatch({ ...first, session_id: "other" });
+	const db = new Database(path, { readonly: true });
+	try {
+		expect(
+			db.query("SELECT * FROM dispatches WHERE session_id = 's'").get(),
+		).toEqual({
+			...first,
+			answered_model: "sonnet",
+			tool_use_id: "call",
+			suggestion_id: "suggestion",
+		});
+		expect(db.query("SELECT COUNT(*) AS n FROM dispatches").get()).toEqual({
+			n: 2,
+		});
+	} finally {
+		db.close();
+	}
+});
+
+test("mod ownership leaves other agents and sessions intact and rolls back invalid replacement", () => {
+	const store = open();
+	for (const [id, session, agent] of [
+		["s1", "session", "child"],
+		["other-agent", "session", "sibling"],
+		["other-session", "elsewhere", "child"],
+	]) {
+		store.insertSuggestion(
+			suggestion({
+				id,
+				session_id: session,
+				agent_id: agent,
+				agent: "claude-code-mod",
+			}),
+		);
+		store.upsertUsage(
+			usage({
+				suggestion_id: id,
+				source: "subagent",
+				scope_key: agent,
+				output_tokens: 3,
+			}),
+		);
+	}
+	const direct = usage({
+		suggestion_id: "s1",
+		source: "claude-code-mod",
+		scope_key: "mod-turn",
+		agent_id: "child",
+		output_tokens: -1,
+	});
+	expect(() => store.upsertUsage(direct)).toThrow();
+	expect(
+		store.getUsage("s1", "subagent", "child", direct.model)?.output_tokens,
+	).toBe(3);
+	store.upsertUsage({ ...direct, output_tokens: 156 });
+	expect(store.getUsage("s1", "subagent", "child", direct.model)).toBeNull();
+	expect(
+		store.getUsage("other-agent", "subagent", "sibling", direct.model)
+			?.output_tokens,
+	).toBe(3);
+	expect(
+		store.getUsage("other-session", "subagent", "child", direct.model)
+			?.output_tokens,
+	).toBe(3);
 });

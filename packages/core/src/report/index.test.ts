@@ -178,6 +178,9 @@ test("empty db: no types, coverage 0, no comparison", async () => {
 		coverage: 0,
 		learned_success: null,
 		control_success: null,
+		dispatches: 0,
+		routed_by_mod: 0,
+		swapped: 0,
 		fallbacks: {},
 		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
@@ -321,6 +324,9 @@ test("only dry-run suggestions: counts nothing", async () => {
 		coverage: 0,
 		learned_success: null,
 		control_success: null,
+		dispatches: 0,
+		routed_by_mod: 0,
+		swapped: 0,
 		fallbacks: {},
 		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
@@ -413,6 +419,9 @@ test("learned vs control cells are (task_type, difficulty), not difficulty alone
 	expect(await stats()).toMatchObject({
 		learned_success: null,
 		control_success: null,
+		dispatches: 0,
+		routed_by_mod: 0,
+		swapped: 0,
 		fallbacks: {},
 		failures: { parse: 0, hook: 0, launcher: 0 },
 	});
@@ -572,4 +581,39 @@ test("USD totals exclude schema 1 even with a reported cost and remain null with
 	expect(
 		result.by_scope?.find((t) => t.scope === "session")?.cost_usd,
 	).toBeNull();
+});
+
+test("dispatch counts include unlinked spawns, exclude dry runs, and do not count unknown answers as swaps", async () => {
+	sug("test", { is_test: true });
+	const row = {
+		session_id: "session",
+		agent_id: "swapped",
+		requested_model: "anthropic/claude-opus-5.5",
+		answered_model: "anthropic/claude-sonnet-5.5",
+		requested_agent_type: "gp-opus-5-5-high",
+		tool_use_id: null,
+		suggestion_id: null,
+	};
+	store.upsertDispatch(row);
+	store.upsertDispatch({
+		...row,
+		agent_id: "respected",
+		answered_model: row.requested_model,
+	});
+	store.upsertDispatch({ ...row, agent_id: "unknown", answered_model: null });
+	sug("routed");
+	store.upsertDispatch({
+		...row,
+		agent_id: "mod",
+		requested_model: null,
+		suggestion_id: "routed",
+	});
+	store.upsertDispatch({ ...row, agent_id: "dry", suggestion_id: "test" });
+	const result = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		type: "other",
+	});
+	expect(result).toMatchObject({ dispatches: 4, routed_by_mod: 1, swapped: 1 });
 });

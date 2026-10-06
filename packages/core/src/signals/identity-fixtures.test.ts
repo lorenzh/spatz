@@ -164,6 +164,7 @@ describe("identity fixtures", () => {
 			usage: {
 				model: "claude-haiku-4-5-20251001",
 				input_tokens: 10,
+				// #86: stale streaming count; the mod reports 156 for this message.
 				output_tokens: 3,
 				cache_read_tokens: 0,
 				cache_creation_tokens: 21334,

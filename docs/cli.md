@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -11,7 +11,7 @@ Each spatz command calls the `@spatz/core` API and formats the result. The CLI h
 
 ```text
 spatz --version
-spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
+spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
@@ -46,6 +46,8 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--turn <id>` | string | `null` | Store the initial turn id. |
 | `--agent-id <id>` | string | `null` | Store the subagent id. Without it, the suggestion uses the main window. |
 | `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code`, `claude-code-mod` or `codex`. |
+| `--requested <model\|->` | string | `null` | Store the original model before mod routing. `-` means no explicit model. Known Claude aliases and model ids are normalized. |
+| `--requested-agent <type>` | string | — | Read the named Claude agent's frontmatter `model:` when `--requested` is absent, `-` or `inherit`. |
 
 These fields stay in SQLite. The suggestion JSON keeps its existing fields.
 The CLI stores the scope label. The caller chooses the decision points.
@@ -230,6 +232,8 @@ It does not create a success signal or close the suggestion.
 All token counts must be non-negative safe integers.
 A replay replaces the row for the same suggestion, source, turn and canonical model.
 A follow-up turn adds a row. The suggestion's `agent_id` also goes on each row.
+For a linked subagent, mod usage replaces hook estimates by session and agent id.
+Later hook replays cannot add those estimates again.
 
 ```sh
 spatz usage <suggestion_id> --model claude-sonnet-5-5 --effort high \
@@ -266,7 +270,8 @@ Until then, the suggestion has no session and sits in no session window, so it c
 | `--json` | `false` | Print `suggestion_id` and `agent_id`. |
 
 The command is idempotent. A second call with the same agent id changes nothing.
-A call with another agent id fails with exit code 1, because the suggestion already belongs to one agent.
+A call with another agent or session id fails with exit code 1.
+For mod suggestions, linking also merges the original requested model into `dispatches`.
 After the link, the suggestion joins the window sequence of that agent.
 
 ```sh
@@ -379,12 +384,37 @@ The first run needs network access once. See [configuration.md](configuration.md
 <task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cost_usd=<amount or ->
   <model>:<effort>  n=<count>  success=<pct>
 coverage: <pct>  learned_success: <pct or ->  control_success: <pct or ->
+dispatches: <count>  routed_by_mod: <count>  swapped: <count>
 fallbacks: <reason>=<count>  ...
 failures: parse=<count>  hook=<count>  launcher=<count>
 ```
 
 There is one block per task type, with one indented line per used pair. `-` means "no data".
-The fallback and failure lines also appear with `--by scope`.
+The dispatch, fallback and failure lines also appear with `--by scope`.
+
+### Dispatch counts
+
+The global counts appear in text and JSON, including `--by scope`.
+Neither `--type` nor `--by scope` filters them.
+
+| Field | Meaning |
+| --- | --- |
+| `dispatches` | Observed session/agent pairs, including dispatches without a suggestion. |
+| `routed_by_mod` | Dispatches linked to a mod suggestion. This includes `show` mode and does not prove that a rewrite occurred. |
+| `swapped` | Dispatches whose known requested and answering model ids differ. |
+
+A linked dry-run suggestion excludes its dispatch from all three counts.
+Hook and mod observations of one spawn count once.
+Unknown requested or answering models do not count as swaps.
+A named agent supplies its requested model through the definition's frontmatter `model:`.
+Core checks the project's `.claude/agents` before `$CLAUDE_CONFIG_DIR/agents` (default `~/.claude/agents`).
+Missing or unreadable definitions leave the model unknown. See [definition lookup](hooks.md#dispatch-observations) for the limits.
+Aliases select the newest matching cached harness model, with the bundled catalog as fallback.
+With a requested Opus model and a Sonnet answer, `swapped` increases by one.
+A preserved Opus request and answer adds no swap.
+
+The counts start with observations recorded by schema v7. Historical dispatches are not inferred.
+See [hook storage](hooks.md#dispatch-observations) and [mod tracking](claude-mod.md#dispatch-tracking).
 
 ### Fallbacks and failures
 
@@ -430,6 +460,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | Success rate of learned picks. spatz compares only cells that have both learned and control outcomes, and weights each cell by its count. |
 | `control_success` | number or null | Success rate of the control group in the same cells. |
+| `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |
 | `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
 | `failures` | object | Global `parse`, `hook` and `launcher` counts. Each defaults to zero. |
 
@@ -440,13 +471,14 @@ $ spatz stats
 other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cost_usd=-
   anthropic/claude-sonnet-5.5:medium  n=1  success=100%
 coverage: 14%  learned_success: -  control_success: -
+dispatches: 0  routed_by_mod: 0  swapped: 0
 fallbacks: opt_out=7
 failures: parse=0  hook=0  launcher=0
 ```
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cost_usd":null}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cost_usd":null}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes

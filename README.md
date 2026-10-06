@@ -147,7 +147,7 @@ The mod needs Claude Code 2.1.287 or newer.
    /spatz status
    ```
 
-   When you install both plugins, keep `record: auto`. The hooks then handle recording.
+   When you install both plugins, keep `record: auto`. Hooks record signals and main usage. The mod records routed subagent usage.
    To apply recommendations to the main session too, enable `/spatz main on`.
 
 3. Remove any manual `spatz hook` entries from `~/.claude/settings.json` and project settings.
