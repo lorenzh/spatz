@@ -60,7 +60,7 @@ Codex aggregate pass rates on easy: 85.7% with all tasks, 89.6% excluding one ta
 
 ### Cost efficiency within easy difficulty
 
-On the eight tasks labeled easy (not the full 24-task easy dataset), all three pairs reach 100% pass rate.
+On the eight tasks labeled easy (not the full 24-task easy dataset), the three listed pairs reach 100% pass rate. Opus/low is 39/40 (97.5%).
 
 | Pair | n | Pass rate | Cost/pass | Median USD/run |
 |---|---|---|---|---|
@@ -87,13 +87,13 @@ The single-pick rule from the learned model selects the cheapest pair meeting n�
 
 Hard-task estimates:
 - Spatz single-pick rule: 90.3% success, 111,675 tokens/success
-- Cheapest-first cascade: 100% success, 171,985 tokens/success (54% more tokens for higher success)
+- Cheapest-first cascade: 100.0% success (rounded), 171,985 tokens/success (54% more tokens for higher success)
 
 Medium-task estimates:
-- Spatz single-pick rule: 100% success, 65,851 tokens/success
-- Cheapest-first cascade: 100% success, 103,349 tokens/success
+- Spatz single-pick rule: 100.0% success (rounded), 65,851 tokens/success
+- Cheapest-first cascade: 100.0% success (rounded), 103,349 tokens/success
 
-These are plug-in estimates pooling both model families, assuming independent cascade outcomes and using median tokens as cost. The replay implements a restricted proxy with a cheapest-pair fallback, not the full production router from recommendation.md.
+These are plug-in estimates pooling both model families, assuming independent cascade outcomes and using median tokens as cost. The 100% figures are rounded offline estimates, not measured cascade completion sequences. The replay implements a restricted proxy with a cheapest-pair fallback, not the full production router from recommendation.md.
 
 ## Synthetic policy comparison
 
@@ -102,8 +102,8 @@ A separate simulator evaluated 35 strategy variants on four synthetic worlds, ea
 Results rank by expected regret (lower is better):
 
 - Thompson threshold + escalate: regret −0.03 ± 0.01 at T=5,000 (top ranked)
-- Exploration rates, control handling, and pooling choices show small effects
-- Removal of control traffic reduces regret slightly, while strict cost/success rules increase it
+- Control traffic shows small effects in this experiment (control 0% regret 0.98 vs current 1.00)
+- Exploration rates and pooling choices show small effects
 - Decay and UCB variants rank lower
 
 This synthetic ranking uses full policy logic on synthetic worlds and cannot transfer directly to observed task distributions.
@@ -118,7 +118,7 @@ A separate 200-seed × 4-world experiment compared eight policies (including cas
 | 2 | Draft, review on weak signal | 3.35 | 4.91 | 88.27% |
 | 6 | Current single pick | 7.67 | 10.21 | 91.08% |
 
-On synthetic worlds, the cascade achieves 55.7% lower loss than the single-pick rule (comparing 4.52 vs 10.21 cost/success). This requires reliable test infrastructure to detect failures. The cost figures are synthetic units combining attempt cost, retry latency, and failure penalties, not measured USD.
+On synthetic worlds, the cascade achieves 55.7% lower loss than the single-pick rule (comparing 4.52 vs 10.21 cost/success). The simulator grants every task a usable verifier or weak signal; verifier quality and cost changes can alter this result. With false acceptance 15% and false rejection 10%, the guarded cascade still reaches 93.8% critical success. The cost figures are synthetic units combining attempt cost, retry latency, and failure penalties, not measured USD.
 
 ## Data replay
 
@@ -126,11 +126,11 @@ On synthetic worlds, the cascade achieves 55.7% lower loss than the single-pick 
 
 ### Key findings
 
-1. **Luna/low qualifies under the fractional-quality rule on review×medium.** It has 9 passes and 3 partials in 12 reports. The learned estimate (counting partials as 0.5) is 0.821, meeting the 0.8 threshold. Its observed full-pass rate is 75% (95% CI 47–91%). No measured cell/pair has a 95% lower confidence bound of 80% full-pass success.
+1. **Luna/low qualifies under the fractional-quality rule on review×medium.** It has 9 passes and 3 partials in 12 reports. The learned estimate (counting partials as 0.5) is 0.821, meeting the 0.8 threshold. However, its smoothed binary estimate is 0.714, and its observed full-pass rate is 75% (95% CI 47–91%). No measured cell/pair has a 95% lower confidence bound of 80% full-pass success.
 
 2. **Cell coverage is sparse and uncertain.** Only 4 of 41 cell/pair combinations reach five outcomes. Only 13 of 24 cells have outcomes. 47 of 139 suggestions lack reported outcomes; missing data permits whole-traffic success rates between 47.5% and 81.3%.
 
-3. **All production outcomes match the recommendation.** Only 14 of 92 outcomes have token evidence for the reported pair. Manual reports provide all outcome values; zero test or build signals appear in production data.
+3. **Production outcomes are manually reported with uncertain attribution.** Only 14 of 92 outcomes have token evidence for the reported pair. Manual reports provide all outcome values; zero test or build signals appear in production data.
 
 4. **The threshold is not a hard safety gate.** When no pair meets n≥5 and estimate≥0.8, the rule chooses the best estimate anyway. The threshold change from 0.8 to 0.9 alters zero historical picks at n≥5 with default pooling.
 
@@ -138,7 +138,7 @@ On synthetic worlds, the cascade achieves 55.7% lower loss than the single-pick 
 
 ### Strongest pair cost tradeoffs
 
-Within the easy-difficulty subset, sonnet-5-5/low (100% pass, $0.035/pass) and opus-5-5/medium (100% pass, $0.074/pass) both reach the same observed pass rate. At whole-dataset level, sonnet/low is 93.3% ($0.052/pass) versus opus/low at 96.7% ($0.095/pass)—a 3.4 percentage point gap for an 82% cost premium.
+Within the easy-difficulty subset (eight tasks), sonnet-5-5/low and opus-5-5/medium both reach 100% observed pass rate on these limited runs ($0.035 and $0.074 per pass). At whole-dataset level, sonnet/low is 93.3% ($0.052/pass) versus opus/low at 96.7% ($0.095/pass)—a 3.4 percentage point gap for an 82% cost premium.
 
 On bench2 whole dataset, opus/high reaches 93.8% ($0.328/pass) while sonnet/high reaches 92.2% ($0.174/pass). The 1.6 percentage point gap costs 89% more per pass. Both improvements and costs are subject to sampling uncertainty with n≤64 per pair and repeated-task dependency.
 
@@ -150,9 +150,9 @@ On bench2, hard-only results show sonnet reaching 72.9% (low), 83.3% (medium), a
 
 High effort does not consistently improve both models or fully justify its cost. Learned routing should weigh per-model effort tradeoffs.
 
-### Easy tasks do not separate models
+### Easy tasks show limited Claude separation
 
-All easy-task pairs except a few reach >90% pass rate. The easy set cannot rank models. Bench2 better differentiates.
+All six Claude easy-task pairs exceed 90% pass rate. All six Codex pairs remain below 90%. Bench2 better differentiates among models.
 
 ### Token cost of different rules on bench2
 
@@ -182,7 +182,7 @@ These are analytic plug-in estimates pooling both model families, not measured c
 
 3. **Mod swaps pinned models.** If a mod pin is active, the actual model differs from the recorded model.
 
-4. **Two easy-set tasks have prompt-test mismatches.** The hidden tests checked stated-behavior requirements that the prompt did not disclose: one task required exact error-message wording; another required input-format edge-case handling. These defects caused 0% Codex pass and 43% Claude pass on one task; the other shows similar low pass rates across models. These are confirmed defects; one bench2 task also has a prompt-test mismatch on whitespace and type handling, causing unusual pass-rate variance.
+4. **Prompt-test mismatches on a few tasks.** Two easy-set tasks were confirmed to have prompt/test mismatches. One bench2 task with very low pass rates is suspected of a mismatch, but it is unconfirmed.
 
 ## Limits
 
@@ -194,7 +194,7 @@ These are analytic plug-in estimates pooling both model families, not measured c
 - Production data: 92 manual reports (zero test/build signals), 47 missing outcomes, coverage 66.2%.
 - Wilson intervals treat rows as independent; task clustering and repeat dependency are not modeled.
 - Empirical replay assumes pooled independent outcomes and median-token costs across families.
-- Synthetic experiments use separate error assumptions: cascade simulator (1% false acceptance, 2% false rejection); policy simulator (10% false pass, 5% false fail).
+- Synthetic experiments use separate error assumptions: eight-policy simulator (10% false pass, 5% false fail); cascade simulator defaults are 1% false acceptance and 2% false rejection, but also tests 15% false acceptance and 10% false rejection in sensitivity runs.
 
 ## How to reproduce
 
@@ -208,7 +208,7 @@ To implement the learned rule:
 
 1. Collect outcomes (model, effort, result, task type, difficulty) with clear attempt attribution.
 2. Compute per-cell estimates: estimate = (1 + sum of quality) / (2 + n), where quality ∈ [0, 1].
-3. For each task, apply the rule from [recommendation.md#decision-order](recommendation.md#decision-order): cheapest pair with n≥5 and estimate≥0.8. If none qualify, use the highest estimate among n≥5.
+3. For each task, apply the restricted proxy rule: cheapest pair with n≥5 and estimate≥0.8. If none qualify, use the cheapest pair (the fallback in the offline replay).
 4. Compare against always using the most expensive pair to measure token savings.
 
 The measurement suite and research code are private. This study is descriptive replay; it does not establish end-to-end production quality or USD savings guarantees.
