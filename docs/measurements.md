@@ -97,11 +97,11 @@ These are plug-in estimates pooling both model families, assuming independent ca
 
 ## Synthetic policy comparison
 
-A separate simulator evaluated 35 strategy variants on four synthetic worlds, each with 256 or 5,000 decisions. Variants include Thompson sampling, threshold tuning, exploration settings, and hierarchical pooling.
+A separate simulator evaluated 35 strategy variants on four synthetic worlds, with 400 seeds per world/variant and 5,000 decisions per seed, measured at checkpoints 500, 1,000, 2,000 and 5,000. Variants include Thompson sampling, threshold tuning, exploration settings, and hierarchical pooling.
 
-Results rank by expected regret (lower is better):
+Results rank by normalized regret (regret divided by current policy's regret; lower is better):
 
-- Thompson threshold + escalate: regret −0.03 ± 0.01 at T=5,000 (top ranked)
+- Thompson threshold + escalate: normalized regret −0.03 ± 0.01 at T=5,000 (top ranked, meaning 3% better than current)
 - Control traffic shows small effects in this experiment (control 0% regret 0.98 vs current 1.00)
 - Exploration rates and pooling choices show small effects
 - Decay and UCB variants rank lower
@@ -112,13 +112,13 @@ This synthetic ranking uses full policy logic on synthetic worlds and cannot tra
 
 A separate 200-seed × 4-world experiment compared eight policies (including cascade, review, and single-pick variants). Each policy made 2,500 decisions per seed on synthetic tasks. Rankings use expected loss combining cost, failure cost, and latency.
 
-| Rank | Policy | Expected loss | Cost/success | Success % |
+| Rank | Policy | Regret/task | Cost/success | Success % |
 |---|---|---|---|---|
 | 1 | Cheapest-first cascade | 1.64 | 4.52 | 95.87% |
 | 2 | Draft, review on weak signal | 3.35 | 4.91 | 88.27% |
 | 6 | Current single pick | 7.67 | 10.21 | 91.08% |
 
-On synthetic worlds, the cascade achieves 55.7% lower loss than the single-pick rule (comparing 4.52 vs 10.21 cost/success). The simulator grants every task a usable verifier or weak signal; verifier quality and cost changes can alter this result. With false acceptance 15% and false rejection 10%, the guarded cascade still reaches 93.8% critical success. The cost figures are synthetic units combining attempt cost, retry latency, and failure penalties, not measured USD.
+On synthetic worlds, the cascade achieves 55.7% lower cost per success than the single-pick rule (4.52 vs 10.21 cost/success). The simulator grants every task a usable verifier or weak signal; the guarded cascade retains the current single-pick rule only on critical tasks, protecting high-stakes decisions. Verifier quality and cost changes can alter this result. With false acceptance 15% and false rejection 10%, the guarded cascade still reaches 93.8% critical success. Cost/success counts attempt and check/review spending; expected loss additionally includes latency and failure penalties. These are synthetic units, not measured USD.
 
 ## Data replay
 
@@ -138,7 +138,7 @@ On synthetic worlds, the cascade achieves 55.7% lower loss than the single-pick 
 
 ### Strongest pair cost tradeoffs
 
-Within the easy-difficulty subset (eight tasks), sonnet-5-5/low and opus-5-5/medium both reach 100% observed pass rate on these limited runs ($0.035 and $0.074 per pass). At whole-dataset level, sonnet/low is 93.3% ($0.052/pass) versus opus/low at 96.7% ($0.095/pass)—a 3.4 percentage point gap for an 82% cost premium.
+Within the easy-difficulty subset (eight tasks), the three displayed pairs include sonnet-5-5/low and opus-5-5/medium both at 100% observed pass rate on these limited runs ($0.035 and $0.074 per pass). Opus/low on easy-difficulty is 39/40 (97.5%), so cost-efficiency comparison applies to the displayed pairs. At whole-dataset level, sonnet/low is 93.3% ($0.052/pass) versus opus/low at 96.7% ($0.095/pass)—a 3.4 percentage point gap for an 82% cost premium.
 
 On bench2 whole dataset, opus/high reaches 93.8% ($0.328/pass) while sonnet/high reaches 92.2% ($0.174/pass). The 1.6 percentage point gap costs 89% more per pass. Both improvements and costs are subject to sampling uncertainty with n≤64 per pair and repeated-task dependency.
 
@@ -194,7 +194,7 @@ These are analytic plug-in estimates pooling both model families, not measured c
 - Production data: 92 manual reports (zero test/build signals), 47 missing outcomes, coverage 66.2%.
 - Wilson intervals treat rows as independent; task clustering and repeat dependency are not modeled.
 - Empirical replay assumes pooled independent outcomes and median-token costs across families.
-- Synthetic experiments use separate error assumptions: eight-policy simulator (10% false pass, 5% false fail); cascade simulator defaults are 1% false acceptance and 2% false rejection, but also tests 15% false acceptance and 10% false rejection in sensitivity runs.
+- Synthetic experiments use separate error assumptions: cascade simulator defaults are 1% false acceptance and 2% false rejection; policy simulator (35-variant separate experiment) uses 10% false pass and 5% false fail. Cascade also tests stress rates 15% false acceptance and 10% false rejection.
 
 ## How to reproduce
 
