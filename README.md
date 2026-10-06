@@ -12,8 +12,9 @@ Harness model defaults refresh from a [daily catalog](docs/configuration.md#harn
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/lorenzh/spatz)](https://github.com/lorenzh/spatz/releases/latest)
 [![Bun 1.4](https://img.shields.io/badge/Bun-1.4-black?logo=bun)](https://bun.sh)
-
-Do not use a cannon to shoot sparrows.
+[![CI](https://github.com/lorenzh/spatz/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lorenzh/spatz/actions/workflows/ci.yml)
+[![Harness catalog](https://github.com/lorenzh/spatz/actions/workflows/harness-catalog.yml/badge.svg)](https://github.com/lorenzh/spatz/actions/workflows/harness-catalog.yml)
+[![Nightly](https://github.com/lorenzh/spatz/actions/workflows/nightly.yml/badge.svg)](https://github.com/lorenzh/spatz/actions/workflows/nightly.yml)
 
 spatz ranks the model and effort pairs that you can use for a coding task.
 It learns from task results to help choose cheaper pairs that succeed.

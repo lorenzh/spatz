@@ -376,6 +376,9 @@ export function createApi(
 							);
 							continue;
 						}
+						// A turn without usage is not a parse failure; it must not overwrite a stored row.
+						if (!rollout.usage) continue;
+						const { usage } = rollout;
 						store.rewriteScope(
 							{
 								session_id: input.session_id,
@@ -394,11 +397,10 @@ export function createApi(
 									source: "transcript",
 									scope_key: scope.scope_key,
 									is_sidechain: false,
-									input_tokens: rollout.usage.input_tokens ?? 0,
-									output_tokens: rollout.usage.output_tokens ?? 0,
-									cache_read_tokens: rollout.usage.cache_read_input_tokens ?? 0,
-									cache_creation_tokens:
-										rollout.usage.cache_creation_input_tokens ?? 0,
+									input_tokens: usage.input_tokens ?? 0,
+									output_tokens: usage.output_tokens ?? 0,
+									cache_read_tokens: usage.cache_read_input_tokens ?? 0,
+									cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
 									rounds: null,
 									note: null,
 									reported_at: now,
@@ -443,6 +445,8 @@ export function createApi(
 						observed_at: now,
 					});
 				}
+			const { usage } = rollout;
+			if (!usage) return;
 			store.rewriteScope(
 				{
 					session_id: input.session_id,
@@ -461,11 +465,10 @@ export function createApi(
 						source: "transcript",
 						scope_key: turnId,
 						is_sidechain: false,
-						input_tokens: rollout.usage.input_tokens ?? 0,
-						output_tokens: rollout.usage.output_tokens ?? 0,
-						cache_read_tokens: rollout.usage.cache_read_input_tokens ?? 0,
-						cache_creation_tokens:
-							rollout.usage.cache_creation_input_tokens ?? 0,
+						input_tokens: usage.input_tokens ?? 0,
+						output_tokens: usage.output_tokens ?? 0,
+						cache_read_tokens: usage.cache_read_input_tokens ?? 0,
+						cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
 						rounds: null,
 						note: null,
 						reported_at: now,

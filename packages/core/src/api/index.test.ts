@@ -555,6 +555,87 @@ const assistant = (
 	});
 
 describe("handleHook", () => {
+	// Copied from a real rollout: only model, effort, token counters and anonymised turn IDs remain.
+	test.each([
+		"records",
+		"counts",
+		"thread totals",
+		"response usage",
+		"mirrors",
+	])(
+		"Codex stores per-turn tokens from %s, including reasoning exactly once",
+		async (format) => {
+			const dbPath = join(dir, "tokens.db");
+			const s = setup({ openStore: () => openStore(dbPath) });
+			const id = await linked(s);
+			const fixture = await Bun.file(
+				`${import.meta.dir}/../signals/fixtures/codex-token-usage.jsonl`,
+			).text();
+			const rows = fixture
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			const rollout = rows
+				.filter((row) => {
+					if (format === "counts") return row.type !== "token_usage_record";
+					return format === "mirrors" || row.type !== "event_msg";
+				})
+				.map((row) => {
+					if (format === "thread totals" || format === "response usage")
+						delete row.payload.turn_token_usage;
+					if (format === "response usage")
+						delete row.payload.thread_token_usage;
+					return JSON.stringify(row);
+				})
+				.join("\n");
+			const path = join(dir, "tokens.jsonl");
+			await Bun.write(path, rollout);
+			const stop = JSON.stringify({
+				session_id: SESSION,
+				turn_id: "turn-2",
+				transcript_path: path,
+				hook_event_name: "Stop",
+			});
+			await s.api.handleHook("codex:Stop", stop);
+			await s.api.handleHook("codex:Stop", stop);
+			const db = new Database(dbPath);
+			try {
+				expect(
+					db
+						.query(
+							"SELECT suggestion_id, scope_key, model, effort, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens FROM usages",
+						)
+						.all(),
+				).toEqual([
+					{
+						suggestion_id: id,
+						scope_key: "turn-2",
+						model: "openai/gpt-6.1-sol",
+						effort: "medium",
+						input_tokens: 253654,
+						output_tokens: 818, // Includes 47 reasoning tokens; the last response has only 72 output tokens.
+						cache_read_tokens: 241792,
+						cache_creation_tokens: 0,
+					},
+				]);
+				// A rollout without usage must not erase an already recorded row.
+				await Bun.write(
+					path,
+					rows
+						.filter((row) => row.type === "turn_context")
+						.map((row) => JSON.stringify(row))
+						.join("\n"),
+				);
+				s.setNow(T0 + 1000);
+				await s.api.handleHook("codex:Stop", stop);
+				expect(db.query("SELECT output_tokens FROM usages").all()).toEqual([
+					{ output_tokens: 818 },
+				]);
+			} finally {
+				db.close();
+			}
+		},
+	);
 	test("Codex command events create outcomes without a report and replay without duplicate signals", async () => {
 		const dbPath = join(dir, "recording.db");
 		const s = setup({ openStore: () => openStore(dbPath) });

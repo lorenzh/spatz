@@ -148,7 +148,7 @@ const SCHEMA_V4 = [
 const SCHEMA_V5 = [
 	"ALTER TABLE suggestions ADD COLUMN fallback_reason TEXT",
 	`CREATE TABLE failures (
-		kind TEXT NOT NULL CHECK (kind IN ('parse', 'hook')),
+		kind TEXT NOT NULL,
 		event TEXT NOT NULL,
 		observed_at INTEGER NOT NULL,
 		session_id TEXT,
