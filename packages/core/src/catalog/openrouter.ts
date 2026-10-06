@@ -99,7 +99,12 @@ async function readCache(path: string): Promise<CacheFile | null> {
 		)
 			return null;
 		return {
-			fetched_at: c.fetched_at,
+			fetched_at: c.models.some(
+				(m) =>
+					m.price_cache_read === undefined || m.price_cache_write === undefined,
+			)
+				? 0
+				: c.fetched_at,
 			models: c.models.map((m) => ({
 				...m,
 				price_cache_read: m.price_cache_read ?? null,

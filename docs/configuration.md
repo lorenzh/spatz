@@ -99,7 +99,7 @@ Deleting the database resets parse and hook counters but leaves launcher markers
 
 `spatz "<task>"` needs model prices to sort the candidates by cost. spatz gets them from `https://openrouter.ai/api/v1/models` and keeps a trimmed copy for 24 hours.
 
-- If the cache is younger than 24 hours, spatz makes no request.
+- If the cache is younger than 24 hours and includes both cache-price keys for every model, spatz makes no request.
 - If the request fails or takes more than 3 s, spatz uses the old cache.
 - If there is no cache, spatz continues without prices. All models then count as unknown and rank as most expensive.
 
@@ -125,7 +125,10 @@ Deleting the database resets parse and hook counters but leaves launcher markers
 
 The cache also stores `price_cache_read` and `price_cache_write` from OpenRouter.
 OpenRouter names these rates `input_cache_read` and `input_cache_write`.
-Missing or invalid cache rates are `null`. Old cache files remain readable with null cache rates.
+Missing or invalid cache rates are `null`.
+If any cached model lacks either key, spatz treats the cache as stale and requests fresh prices when online.
+Explicit `null` values do not trigger this refresh.
+If offline or the request fails, spatz still uses the old cache with null cache rates.
 
 Each suggestion stores a `price_snapshot` keyed by its candidate model IDs.
 Each entry holds all four rates. `price_date` records the capture time in epoch milliseconds.

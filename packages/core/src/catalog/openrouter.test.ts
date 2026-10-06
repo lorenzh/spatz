@@ -184,29 +184,66 @@ describe("loadOpenRouterModels", () => {
 		expect(f.calls).toHaveLength(0);
 	});
 
-	test("old offline cache without cache prices remains readable with null prices", async () => {
-		const cachePath = await setup();
-		const {
-			price_cache_read: _read,
-			price_cache_write: _write,
-			...old
-		} = cached[0] as OpenRouterModel;
-		await Bun.write(
-			cachePath,
-			JSON.stringify({ fetched_at: NOW, models: [old] }),
-		);
-		const f = fakeFetch(ok);
-		expect(
-			await loadOpenRouterModels({
+	test.each([
+		["price_cache_read"],
+		["price_cache_write"],
+		["price_cache_read", "price_cache_write"],
+	])(
+		"fresh legacy cache missing %j is refetched online",
+		async (...missing) => {
+			const cachePath = await setup();
+			const legacy = Object.fromEntries(
+				Object.entries(cached[0] as OpenRouterModel).filter(
+					([key]) => !missing.includes(key),
+				),
+			);
+			await Bun.write(
+				cachePath,
+				JSON.stringify({ fetched_at: NOW, models: [...cached, legacy] }),
+			);
+			const f = fakeFetch(ok);
+			const result = await loadOpenRouterModels({
 				fetch: f.fn,
-				env: { SPATZ_NO_NETWORK: "1" },
+				env: {},
 				cachePath,
 				clock,
 				ttlMs: DAY,
-			}),
-		).toEqual(cached);
-		expect(f.calls).toHaveLength(0);
-	});
+			});
+			expect(f.calls).toHaveLength(1);
+			expect(result).toEqual(parseOpenRouterModels(fixture));
+			expect(await Bun.file(cachePath).json()).toEqual({
+				fetched_at: NOW,
+				models: result,
+			});
+		},
+	);
+
+	test.each(["1", "0"])(
+		"legacy cache remains readable with null prices when offline (SPATZ_NO_NETWORK=%s)",
+		async (offline) => {
+			const cachePath = await setup();
+			const {
+				price_cache_read: _read,
+				price_cache_write: _write,
+				...old
+			} = cached[0] as OpenRouterModel;
+			await Bun.write(
+				cachePath,
+				JSON.stringify({ fetched_at: NOW, models: [old] }),
+			);
+			const f = fakeFetch(() => Promise.reject(new Error("offline")));
+			expect(
+				await loadOpenRouterModels({
+					fetch: f.fn,
+					env: { SPATZ_NO_NETWORK: offline },
+					cachePath,
+					clock,
+					ttlMs: DAY,
+				}),
+			).toEqual(cached);
+			expect(f.calls).toHaveLength(offline === "1" ? 0 : 1);
+		},
+	);
 
 	test("stale cache -> fetch with Bearer key when set, then write cache", async () => {
 		const cachePath = await setup(NOW - DAY);
