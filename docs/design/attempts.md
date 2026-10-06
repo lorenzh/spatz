@@ -15,9 +15,9 @@ Schema v4 combines all signals for a suggestion in its [outcomes view](../../pac
 
 An attempt is work by one actual model/effort pair toward a result. Each attempt has a UUID, a start key for replay, and an increasing ordinal within its suggestion. `A → B → A` creates three attempts.
 
-`spatz suggest` opens attempt 1 implicitly. Its actual pair stays null until execution evidence or a report supplies it. The first execution fills this implicit attempt. The recommended pair does not prove execution. A new attempt starts only on explicit start, pair switch, new dispatch, or new work after a report. A failed test followed by a fix stays inside the attempt. The latest test/build wins.
+`spatz suggest` opens attempt 1 implicitly and its suggestion window. Its actual pair stays null until execution evidence or a report supplies it. The first execution fills this implicit attempt. The recommended pair does not prove execution. A new attempt starts only on explicit start, pair switch, new dispatch, or new work after a report. A report closes the suggestion window as in v4; later work needs a new suggestion. A failed test followed by a fix stays inside the attempt. The latest test/build wins.
 
-Claude hooks and Codex record at turn granularity or coarser. Only the mod splits a turn into step segments. Stop/SubagentStop closes observed execution and finalizes turn evidence without implying success. Same-pair follow-up work keeps the attempt unless a listed boundary applies. A report closes the attempt. Late evidence can still bind to closed attempts.
+Claude hooks and Codex record at turn granularity or coarser. Only the mod splits a turn into step segments. Stop/SubagentStop closes observed execution and finalizes turn evidence without implying success. Same-pair follow-up work keeps the attempt unless a listed boundary applies. A report closes the attempt and suggestion window. Late evidence can still bind to closed attempts.
 
 ```text
 spatz suggest <task> [--retry-of <suggestion_id>]
@@ -53,11 +53,11 @@ close selected/new attempt; return its outcome
 | Claude mod | `turn.step`: `turnId`, `index`, `agentId`, model and effort. Map `tool.call` IDs through the step's `toolUses`. Calls lack `turnId`. | Record `TurnStepResult.usage` per step with its answering model and step effort. Add the missing effort to `recordUsage`. |
 | Codex | `turn_context` gives turn ID, model and effort. Use rollout `call_id`. Hook `tool_use_id = exec-placeholder` is not identity. | Keep the last cumulative snapshot per turn. Never sum snapshots. |
 
-With hooks plus mod, the mod always registers starts and pairs. The selected recorder alone writes signals/usage. This prevents duplicate usage while keeping the mod's step effort available to hooks.
+With hooks plus mod, the mod registers starts, pairs, and exact `call` bindings from each step's `toolUses` IDs. Hooks write signals only; their `tool_use_id` signals bind to the mod segment. The mod writes per-step usage because it knows model and effort exactly. Hooks skip usage for sessions with mod start bindings. This splits ownership by data type and avoids double counting.
 
 Do not assign the mod's mixed turn total to its last pair. Use disjoint step measurements. For Codex, an in-turn pair change without separate counters leaves pair cost incomplete. Keep its measured total once in suggestion totals with a null attempt. Never invent a split or a `root_hint`.
 
-Before implementation, run a fixture spike to check whether `SubagentStop.effort.level` belongs to the subagent. Until proved, leave subagent effort null. Check both supported Codex rollout formats and Claude transcript variants.
+Before implementation, run a fixture spike to check whether `SubagentStop.effort.level` belongs to the subagent, whether mod `turnId` equals hook `prompt_id`, and whether transcript `tool_use_id`s match the mod's step `toolUses`. Until proved, leave subagent effort null. Check both supported Codex rollout formats and Claude transcript variants.
 
 ## Storage sketch
 
@@ -126,8 +126,11 @@ bind(event):
   else:
     if no trustworthy source time: persist pending; return
     target = unique compatible suggestion/attempt window in session + agent
-  if main-session test/build and no existing binding and suggestion delegated:
-    target = latest closed delegate within the selected suggestion window
+  if main-session evidence in a suggestion with a delegated attempt:
+    # An Agent tool_use in source order within the window proves delegation.
+    # Orchestration never fills or opens an attempt; apply even with a prompt binding.
+    usage: attribute to suggestion totals with null attempt
+    signal: target = latest closed delegate within the selected suggestion window
   if no unique target: persist pending; return
   persist event and bind previously unbound prompt/turn IDs to target
   # Window-derived aliases stay provisional through their supporting events.
@@ -139,7 +142,7 @@ Time windows are half-open and use a shared source clock. Receipt time cannot re
 
 On new links or transcripts, reconcile pending/window events and their provisional aliases together. Move signals and usage in one transaction. Exact bindings stay fixed. Conflicting window credit returns to pending. Preserve message IDs and source order before aggregation. Partial or older transcripts cannot erase evidence.
 
-Main-session test signals in a delegated suggestion's window bind to its most recent closed delegated attempt. Persist that choice. Later reports cannot retarget it. The verifier's model does not replace the worker's pair. Limit: main-session self-fixes also land on that delegated attempt. Explicit attempt identity can override this fallback.
+Main-session orchestration usage in a delegated suggestion's window belongs to suggestion totals with a null attempt. Main-session test/build signals bind to the most recent closed delegated attempt, even when the prompt is already bound. Detect delegation from an Agent tool use in source order within the window, not hook arrival order. Persist the signal choice; later reports cannot retarget it. The orchestrator's model does not replace the worker's pair. Limit: main-session self-fixes also land on that delegated attempt. Explicit attempt identity can override this fallback.
 
 ## Outcomes, consumers and cost
 
@@ -173,9 +176,9 @@ Define `store.outcome(id)` as the latest ordinal of that suggestion, even when i
 
 A recovery chain groups retries under the first attempt's `root_id`. `suggest --retry-of` copies the named suggestion's root. Unlinked suggestions start new chains. Unlinked review suggestions stay separate. #41 reports their costs separately.
 
-The store evaluates chain completion after a report or finalized Stop/SubagentStop evidence. The first member verdict at least `successQuality` closes the chain successfully. Raw intermediate tests do not close it. Idle expiry or the next unlinked suggestion in the same session/agent closes it as failed. The store writes `chain_closed_at` on the root in the same transaction. Late evidence and `--correct` recompute the result and closure.
+The store evaluates chain completion after a report or finalized Stop/SubagentStop evidence. The first member verdict at least `successQuality` closes the chain successfully. Raw intermediate tests do not close it. The next unlinked suggestion in the same session/agent closes it as failed; idle expiry is derived at read time in the chain view. The store writes `chain_closed_at` on the root for transactional closures. Late evidence and `--correct` recompute the result and closure.
 
-Chain statistics use the root suggestion's `task_type × difficulty`, learned/control flags and first actual pair. Each execution keeps its own tokens. Decision cost sums the chain once under the root pair. Costs `10 → 20 → 70` produce root cost `100`, not repeated charges on each outcome. Failed completed chains also contribute cost. Divide by successful chains. Zero successes gives null. Count incomplete costs separately. #41 owns dollar conversion and confidence intervals.
+Chain statistics use the root suggestion's `task_type × difficulty`, learned/control flags and first actual pair. Each execution keeps its own tokens. Decision cost sums the chain once under the root pair. Costs `10 → 20 → 70` produce root cost `100`, not repeated charges on each outcome. Failed completed chains also contribute cost. Divide by successful chains. Zero successes gives null. Incomplete Codex pair costs still belong to chain tokens through the suggestion total; mark only per-attempt execution cost and its dollar slice incomplete, so #41 cost per success is not biased low. #41 owns dollar conversion and confidence intervals.
 
 ## Migration from v4
 
@@ -185,7 +188,7 @@ SQLite cannot rename a view. Recreate the same v4 SELECT under `legacy_outcomes`
 
 ```sql
 ALTER TABLE suggestions ADD COLUMN is_legacy INTEGER NOT NULL DEFAULT 0;
-UPDATE suggestions SET is_legacy = 1, closed_at = COALESCE(closed_at, :migration_time);
+UPDATE suggestions SET is_legacy = 1, closed_at = COALESCE(closed_at, unixepoch() * 1000);
 -- CREATE VIEW legacy_outcomes AS <unchanged v4 SELECT>;
 DROP VIEW outcomes;
 CREATE VIEW outcomes AS
