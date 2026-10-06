@@ -7,6 +7,7 @@
 #     for each issue the PR closes (or the branch names), from its current state:
 #     closed -> Done; open non-draft PR -> In review; open draft PR -> In progress;
 #     branch <prefix>/<N>-<slug> exists -> In progress; else -> Backlog
+#   An open issue with a manual Status outside this chain (e.g. Blocked) keeps it.
 #
 # Acts only for actors with write, maintain or admin on this repo (issue/branch: sender,
 # PR: author). Fork PRs get no secret and skip. The managing-spatz-projects board-sync
@@ -182,6 +183,10 @@ jobs:
               if (!STATUSES.includes(status) || !option) throw new Error(`Status "${status}" is not a board option`);
               const item = issue.projectItems.nodes.find((i) => i.project.id === project.id);
               if (item?.status?.name === status) return core.info(`#${issue.number} already ${status}`);
+              // A manual Status outside the chain (e.g. Blocked) stays until the issue closes.
+              if (item?.status?.name && !STATUSES.includes(item.status.name) && issue.state === 'OPEN') {
+                return core.notice(`#${issue.number} has manual Status "${item.status.name}"; not changed.`);
+              }
               const id =
                 item?.id ??
                 (
