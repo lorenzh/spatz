@@ -387,3 +387,23 @@ test("usage completeness migration marks stored Claude subagents and filters exi
 			.get(),
 	).toEqual({ cost_usd: null });
 });
+
+test("a v5 backup restores intact and the current CLI refuses a downgrade", async () => {
+	const dir = directory();
+	const { path, db } = await fixture(dir, 5);
+	const before = db.query("SELECT * FROM suggestions").all();
+	db.close();
+	openDatabase(path).close();
+	const restoredPath = join(dir, "restored.db");
+	copyFileSync(`${path}.bak-v5`, restoredPath);
+	const restored = new Database(restoredPath);
+	handles.push(restored);
+	expect(restored.query("PRAGMA user_version").get()).toEqual({
+		user_version: 5,
+	});
+	expect(restored.query("SELECT * FROM suggestions").all()).toEqual(before);
+	const newer = openDatabase(path);
+	newer.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+	newer.close();
+	expect(() => openDatabase(path)).toThrow(/newer than supported.*upgrade/i);
+});
