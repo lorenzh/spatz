@@ -2,7 +2,7 @@
 title: Releasing spatz
 description: The release strategy (main, nightly, release branches and candidates) and how to publish CLI and Claude Code plugin archives and npm packages, and control nightly builds and daily harness catalog updates.
 tags: [spatz, cli, releases]
-keywords: [release, release branch, release candidate, rc, cherry-pick, strategy, nightly, catalog, harness, workflow, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
+keywords: [migration, backup, rollback, downgrade, release, release branch, release candidate, rc, cherry-pick, strategy, nightly, catalog, harness, workflow, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
 ---
 
 # Releasing spatz
@@ -78,6 +78,31 @@ Nightly builds therefore carry the last released version plus the date, for exam
 - [ ] The plugins from `release/<minor>` load. Claude Code: `/spatz status` answers (mod). Codex: the hooks appear in `/hooks` and a shell command creates no error.
 - [ ] Docs describe every user-visible change of the release.
 - [ ] npm shows the final version (`latest` for the newest minor), and only then is the release branch merged back into `main`.
+
+### Migration checklist for breaking releases
+
+The release owner completes this checklist before the first breaking candidate.
+Repeat the checks after changes to migrations or consumer contracts.
+This gate covers [#78](https://github.com/lorenzh/spatz/issues/78).
+
+- [ ] Record the old and new schema versions. Check that an upgrade creates a backup before the first migration write.
+- [ ] Restore a populated v5 backup with the previous CLI. Compare rows, outcomes, learning statistics and token totals.
+- [ ] Check that the previous CLI refuses the newer schema with an upgrade instruction. Both hook families must exit 0 silently.
+- [ ] Test migration rollback on failure and concurrent writers. Keep the backup when migration fails.
+- [ ] For [#67](https://github.com/lorenzh/spatz/issues/67), check `tokens_schema` in every cost query. Exclude legacy Codex rows (`tokens_schema = 1`) from USD comparisons.
+- [ ] Check normalized input and cache counters across Claude and Codex fixtures ([#60](https://github.com/lorenzh/spatz/issues/60)).
+- [ ] Run compatibility fixtures for hooks, mod and skill against the candidate CLI output and strategy strings: `default`, `retry`, `learned-fallback`.
+- [ ] Check requested-versus-answered dispatch fields ([#66](https://github.com/lorenzh/spatz/issues/66)) and unknown-model errors ([#71](https://github.com/lorenzh/spatz/issues/71)).
+- [ ] Check taxonomy values and CLI filters ([#72](https://github.com/lorenzh/spatz/issues/72)). Check stats JSON consumers after [#44](https://github.com/lorenzh/spatz/issues/44).
+- [ ] Run the legacy and delayed-event fixtures for [#34](https://github.com/lorenzh/spatz/issues/34) and [#35](https://github.com/lorenzh/spatz/issues/35). Use the [attempt design](docs/design/attempts.md#implementation-checks).
+- [ ] Update docs for each user-visible change. Record checks that do not apply to this release and explain why.
+- [ ] Add a **Breaking changes and migration** section to the release notes before publication. List each break and its required user action.
+
+Release notes must name the schema versions and compatible CLI/plugin versions.
+Include the backup location and [restore procedure](docs/configuration.md#database-backup-and-restore).
+List token semantics, strategy strings, model validation, taxonomy and stats JSON changes that ship in this release.
+Generated commit lists do not replace these instructions.
+The owner of the first breaking release must complete these notes when that release is prepared.
 
 ## Release and nightly workflows
 
