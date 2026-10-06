@@ -88,6 +88,7 @@ This gate covers [#78](https://github.com/lorenzh/spatz/issues/78).
 - [ ] To rely on the previous CLI refusing newer schemas, a non-breaking release containing the guard must ship before the first schema-breaking release. Otherwise, the breaking release notes must state that CLIs up to v0.1.6 do not refuse newer schemas and that users must restore a compatible backup before installing them.
 - [ ] Record the old and new schema versions. Check that an upgrade creates a backup before the first migration write.
 - [ ] Restore a populated v5 backup with the previous CLI. Compare rows, outcomes, learning statistics and token totals.
+  The test `a v5 backup restores intact and the current CLI refuses a downgrade` in `packages/core/src/store/migration.test.ts` covers the v5 restore and the refusal.
 - [ ] With a previous CLI that contains the guard, check that it refuses the newer schema with an upgrade instruction. Both hook families must exit 0 silently. For CLIs up to v0.1.6, verify the restore-before-install warning in the release notes instead; they do not refuse newer schemas.
 - [ ] Test migration rollback on failure and concurrent writers. Keep the backup when migration fails.
 - [ ] For [#67](https://github.com/lorenzh/spatz/issues/67), check `tokens_schema` in every cost query. Exclude legacy Codex rows (`tokens_schema = 1`) from USD comparisons.

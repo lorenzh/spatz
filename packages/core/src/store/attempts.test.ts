@@ -64,6 +64,7 @@ test("same-pair retries preserve failure, correction and replay preserve the slo
 	expect(store.cellStats("code.bugfix")[0]).toMatchObject({
 		n: 1,
 		sum_quality: 0,
+		successes: 0,
 	});
 	expect(
 		store.reportAttempt({ ...report, result: "partial", correct: true })
@@ -1096,6 +1097,7 @@ test.each([
 				effort: sentEffort,
 				n: 1,
 				sum_quality: 1,
+				successes: 1,
 			}),
 		]);
 		expect(store.retryStats("code.bugfix")).toEqual([]);

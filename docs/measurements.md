@@ -207,7 +207,7 @@ To run the benchmark suite:
 To implement the learned rule:
 
 1. Collect outcomes (model, effort, result, task type, difficulty) with clear attempt attribution.
-2. Compute per-cell estimates: estimate = (1 + sum of quality) / (2 + n), where quality ∈ [0, 1].
+2. Compute per-cell estimates: estimate = (1 + successes) / (2 + n), where a success has quality ≥ 0.8.
 3. For each task, apply the restricted proxy rule: cheapest pair with n≥5 and estimate≥0.8. If none qualify, use the cheapest pair (the fallback in the offline replay).
 4. Compare against always using the most expensive pair to measure token savings.
 

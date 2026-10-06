@@ -236,6 +236,7 @@ describe("schema", () => {
 					effort: "low",
 					n: 2,
 					sum_quality: 2,
+					successes: 2,
 				},
 			]);
 		} finally {
@@ -675,6 +676,7 @@ describe("cellStats", () => {
 					effort: "high",
 					n: 2,
 					sum_quality: 1.5,
+					successes: 1,
 				},
 				{
 					task_type: "code.bugfix",
@@ -683,6 +685,7 @@ describe("cellStats", () => {
 					effort: "high",
 					n: 1,
 					sum_quality: 1,
+					successes: 1,
 				},
 				{
 					task_type: "code.bugfix",
@@ -691,6 +694,7 @@ describe("cellStats", () => {
 					effort: "low",
 					n: 1,
 					sum_quality: 1,
+					successes: 1,
 				},
 			]),
 		);
@@ -718,8 +722,8 @@ describe("cellStats", () => {
 		expect(stats).toHaveLength(2);
 		expect(stats).toEqual(
 			expect.arrayContaining([
-				{ ...cell, effort: "low", n: 2, sum_quality: 1 },
-				{ ...cell, effort: "high", n: 3, sum_quality: 2.5 },
+				{ ...cell, effort: "low", n: 2, sum_quality: 1, successes: 1 },
+				{ ...cell, effort: "high", n: 3, sum_quality: 2.5, successes: 2 },
 			]),
 		);
 	});
@@ -882,6 +886,7 @@ test("none-only models normalize missing usage effort and pool legacy null rows"
 			effort: "none",
 			n: 3,
 			sum_quality: 3,
+			successes: 3,
 		},
 	]);
 });
