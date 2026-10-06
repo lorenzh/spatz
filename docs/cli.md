@@ -11,7 +11,7 @@ Each spatz command calls the `@spatz/core` API and formats the result. The CLI h
 
 ```text
 spatz --version
-spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->]
+spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
@@ -46,7 +46,8 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--turn <id>` | string | `null` | Store the initial turn id. |
 | `--agent-id <id>` | string | `null` | Store the subagent id. Without it, the suggestion uses the main window. |
 | `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code`, `claude-code-mod` or `codex`. |
-| `--requested <model\|->` | string | `null` | Store the original model before mod routing. `-` means no requested model. Known Claude aliases and model ids are normalized. |
+| `--requested <model\|->` | string | `null` | Store the original model before mod routing. `-` means no explicit model. Known Claude aliases and model ids are normalized. |
+| `--requested-agent <type>` | string | — | Read the named Claude agent's frontmatter `model:` when `--requested` is absent, `-` or `inherit`. |
 
 These fields stay in SQLite. The suggestion JSON keeps its existing fields.
 The CLI stores the scope label. The caller chooses the decision points.
@@ -405,7 +406,10 @@ Neither `--type` nor `--by scope` filters them.
 A linked dry-run suggestion excludes its dispatch from all three counts.
 Hook and mod observations of one spawn count once.
 Unknown requested or answering models do not count as swaps.
-A named agent type alone does not supply a requested model.
+A named agent supplies its requested model through the definition's frontmatter `model:`.
+Core checks the project's `.claude/agents` before `$CLAUDE_CONFIG_DIR/agents` (default `~/.claude/agents`).
+Missing or unreadable definitions leave the model unknown. See [definition lookup](hooks.md#dispatch-observations) for the limits.
+Aliases select the newest matching cached harness model, with the bundled catalog as fallback.
 With a requested Opus model and a Sonnet answer, `swapped` increases by one.
 A preserved Opus request and answer adds no swap.
 

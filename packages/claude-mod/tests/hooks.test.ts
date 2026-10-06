@@ -1058,9 +1058,14 @@ test("none changes only the model at spawn and step, then escalates to a reasoni
 });
 
 test("every mod suggestion carries the original requested model or the absent marker", async () => {
-	const pinned = session({ ...apply, respectPinned: false });
-	await pinned.spawn({ model: "opus", subagentType: "gp-opus-5-5-high" });
-	expect(pinned.flag(pinned.suggests()[0] ?? [], "--requested")).toBe("opus");
+	for (const scope of ["subagent", "step", "escalate"]) {
+		const pinned = session({ ...apply, scope, respectPinned: false });
+		await pinned.spawn({ subagentType: "gp-opus-5-5-high" });
+		await pinned.step({ turnId: "t1", agentId: "a1" });
+		const argv = pinned.suggests()[0] ?? [];
+		expect(pinned.flag(argv, "--requested")).toBe("-");
+		expect(pinned.flag(argv, "--requested-agent")).toBe("gp-opus-5-5-high");
+	}
 	for (const scope of ["step", "turn", "session", "subagent", "escalate"]) {
 		const s = session({ ...apply, scope });
 		await s.start("t1", LONG);

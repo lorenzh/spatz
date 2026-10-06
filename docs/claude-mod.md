@@ -119,7 +119,8 @@ See [model defaults](configuration.md#harness-catalog) for cache and offline beh
 
 Every mod suggestion includes `--requested <model|->`.
 The model is the original spawn model before routing. `-` means that the caller supplied no model.
-Step routing keeps that original value for the agent's later requests.
+Named agents also send `--requested-agent <type>` so core can read the definition's `model:` when no explicit model is supplied.
+Step routing keeps both original values for the agent's later requests.
 Main-session suggestions use `-` because turn-start events carry no model request.
 
 Once the agent exists, `spatz link` merges its suggestion into the dispatch row.
@@ -131,7 +132,7 @@ The CLI normalizes model ids and known Claude aliases before comparison.
 
 `spatz stats` shows dispatch, mod-suggestion and model-swap counts.
 This includes observed pinned spawns that the mod leaves unchanged.
-A named agent type alone does not identify the requested model.
+The core resolver reads named agent definitions in project and user agent directories.
 See [dispatch counts](cli.md#dispatch-counts) for the exact rules.
 
 ## Recording usage

@@ -86,7 +86,10 @@ export function register(on: On, options: PluginOptions = {}) {
 	const turns = new Map<string, Decision>();
 	/** Task text held only for the step scope, until the turn or agent ends. */
 	const prompts = new Map<string, string>();
-	const requested = new Map<string, string>();
+	const requested = new Map<
+		string,
+		Pick<Link, "requested" | "requestedAgent">
+	>();
 	/** The decision each turn or agent run actually used, for usage recording. */
 	const used = new Map<string, Decision>();
 	const totals = new Map<string, Tokens>();
@@ -155,7 +158,7 @@ export function register(on: On, options: PluginOptions = {}) {
 						scope: "step",
 						turn: e.turnId,
 						agentId: e.agentId,
-						requested: requested.get(key),
+						...requested.get(key),
 					})
 				: undefined;
 		}
@@ -252,7 +255,10 @@ export function register(on: On, options: PluginOptions = {}) {
 			const result = await next(e);
 			if (result.agentId && !result.deny) {
 				prompts.set(result.agentId, e.prompt);
-				requested.set(result.agentId, e.model ?? "-");
+				requested.set(result.agentId, {
+					requested: e.model,
+					requestedAgent: e.subagentType,
+				});
 			}
 			return result;
 		}
@@ -261,7 +267,7 @@ export function register(on: On, options: PluginOptions = {}) {
 		const d = await decide(
 			io,
 			e.prompt,
-			{ scope: s.scope, requested: e.model },
+			{ scope: s.scope, requested: e.model, requestedAgent: e.subagentType },
 			false,
 		);
 		if (!d) return next(e);

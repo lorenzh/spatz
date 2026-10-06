@@ -1068,7 +1068,16 @@ test("suggestion CLI forwards requested models and the explicit absent marker", 
 	for (const requested of ["opus", "-"]) {
 		const { io } = fakeIO();
 		const { api, calls } = fakeApi();
-		expect(await main(["task", "--requested", requested], io, api)).toBe(0);
-		expect(calls[0]?.args[0]).toMatchObject({ requested });
+		expect(
+			await main(
+				["task", "--requested", requested, "--requested-agent", "pinned"],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(calls[0]?.args[0]).toMatchObject({
+			requested,
+			requestedAgent: "pinned",
+		});
 	}
 });

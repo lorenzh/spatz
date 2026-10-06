@@ -205,8 +205,10 @@ export interface CoreDeps {
 // ---------- Use-case API (what the CLI and a later MCP server call) ----------
 
 export interface SuggestInput {
-	/** Original model before routing; "-" means no requested model. */
+	/** Original explicit model before routing; "-" means no explicit model. */
 	requested?: string;
+	/** Custom Claude agent whose definition supplies the model when none is explicit. */
+	requestedAgent?: string;
 	task: string;
 	/** Raw --models value, e.g. "claude-opus-5-5:low+medium+high,gpt-6-sol:medium". */
 	models?: string;

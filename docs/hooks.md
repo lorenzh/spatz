@@ -201,7 +201,7 @@ Without a report, the used pair is the model with the most output tokens assigne
 Schema v7 adds one `dispatches` row per `(session_id, agent_id)`.
 The Agent hook reads the child id from `tool_response.agentId`.
 The hook's own `agent_id` can identify the parent and is not the child key.
-It stores `tool_input.model`, `tool_input.subagent_type` and `tool_response.resolvedModel`.
+It stores the requested model, `tool_input.subagent_type` and `tool_response.resolvedModel`.
 The column names are `requested_model`, `requested_agent_type` and `answered_model`.
 It also stores `tool_use_id`. Unknown fields remain null.
 
@@ -210,7 +210,15 @@ The mod's linked suggestion fills `suggestion_id` and the original requested mod
 An insert with the same session and agent fills only missing columns.
 Replays and conflicting later values do not replace known values.
 Model comparison uses canonical ids and known Claude aliases.
-The agent type is preserved as given; spatz does not infer a model from its name.
+If `tool_input.model` is absent or `inherit`, core reads the named agent definition's frontmatter `model:`.
+It checks `<cwd>/.claude/agents/<type>.md` first, using the hook's `cwd`.
+It then checks `($CLAUDE_CONFIG_DIR or ~/.claude)/agents/<type>.md`.
+The first readable definition takes precedence, including one with `model: inherit`.
+Missing or unreadable definitions, invalid frontmatter and absent or inherited pins leave the requested model null.
+Plugin-qualified types (`plugin:name`) remain unresolved.
+The mod passes `--requested-agent <type>` through the CLI to the same core resolver.
+Claude aliases use the newest matching model in the cached harness catalog, with the bundled catalog as fallback.
+The agent type is preserved as given. Core reads definitions without changing them.
 No prompt text or tool output is stored.
 
 The identity fixtures confirm that `agent_id` joins hook and mod observations.

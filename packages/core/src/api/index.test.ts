@@ -2421,6 +2421,147 @@ describe("explicit Codex run attribution", () => {
 });
 
 describe("dispatch observations", () => {
+	for (const [answered, swapped] of [
+		["claude-sonnet-5-5", 1],
+		["claude-opus-5-5", 0],
+	] as const) {
+		test(`pinned agent definition counts swaps with ${answered} answering`, async () => {
+			const cwd = join(dir, "project");
+			await Bun.write(
+				join(cwd, ".claude/agents/gp-opus-5-5-high.md"),
+				"---\nname: gp-opus-5-5-high\nmodel: claude-opus-5-5\n---\nReview code.\n",
+			);
+			const s = setup({
+				openStore,
+				duckdbExtensionDir: process.env.SPATZ_DUCKDB_EXTENSION_DIR,
+			});
+			await s.api.handleHook(
+				"PostToolUse",
+				JSON.stringify({
+					hook_event_name: "PostToolUse",
+					session_id: SESSION,
+					transcript_path: "unused",
+					cwd,
+					tool_name: "Agent",
+					tool_use_id: "toolu_x",
+					tool_input: { subagent_type: "gp-opus-5-5-high" },
+					tool_response: { agentId: "a1", resolvedModel: answered },
+				}),
+			);
+			expect(await s.api.stats({})).toMatchObject({
+				dispatches: 1,
+				routed_by_mod: 0,
+				swapped,
+			});
+		});
+	}
+	test("mod-only pinned requests use the same project and user definition resolver", async () => {
+		const cwd = join(dir, "project");
+		const configDir = join(dir, "claude-config");
+		await Bun.write(
+			join(configDir, "agents/pinned.md"),
+			"---\nmodel: 'claude-opus-5-5' # pin\n---\n",
+		);
+		const s = setup({
+			cwd,
+			env: { CLAUDE_CONFIG_DIR: configDir },
+			openStore,
+			duckdbExtensionDir: process.env.SPATZ_DUCKDB_EXTENSION_DIR,
+		});
+		for (const [model, swapped] of [
+			["claude-opus-5-5", 0],
+			["claude-sonnet-5-5", 1],
+		] as const) {
+			const suggestion = await s.api.suggest({
+				...suggestInput(),
+				dryRun: false,
+				source: "claude-code-mod",
+				scope: "subagent",
+				requested: "-",
+				requestedAgent: "pinned",
+			});
+			await s.api.link({
+				suggestionId: suggestion.suggestion_id,
+				session: SESSION,
+				agentId: model,
+			});
+			await s.api.usage({
+				suggestionId: suggestion.suggestion_id,
+				model,
+				source: "claude-code-mod",
+				turn: model,
+				input: 1,
+				output: 2,
+				cacheRead: 0,
+				cacheCreation: 0,
+			});
+			expect(await s.api.stats({})).toMatchObject({ swapped });
+		}
+		await Bun.write(
+			join(cwd, ".claude/agents/pinned.md"),
+			"---\nmodel: inherit\n---\n",
+		);
+		await s.api.suggest({ ...suggestInput(), requestedAgent: "pinned" });
+		await s.api.suggest({ ...suggestInput(), requestedAgent: "../pinned" });
+		const db = new Database(s.deps.dbPath, { readonly: true });
+		try {
+			expect(
+				db
+					.query("SELECT requested_model FROM suggestions ORDER BY rowid")
+					.all(),
+			).toEqual([
+				{ requested_model: "anthropic/claude-opus-5.5" },
+				{ requested_model: "anthropic/claude-opus-5.5" },
+				{ requested_model: null },
+				{ requested_model: null },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test.each([
+		["inherit", "---\r\nmodel: opus\r\n---\r\n", "anthropic/claude-opus-5.5"],
+		["sonnet", "---\nmodel: opus\n---\n", "anthropic/claude-sonnet-5.5"],
+		[undefined, "---\nmodel: [\n---\n", null],
+		[undefined, "---not-frontmatter\n---\nmodel: opus\n---\n", null],
+		[undefined, "---\nname: pinned\n---\nmodel: opus\n", null],
+		[undefined, null, null],
+	] as const)(
+		"agent definitions handle explicit %s and header %s",
+		async (requested, definition, expected) => {
+			if (definition !== null)
+				await Bun.write(join(dir, ".claude/agents/pinned.md"), definition);
+			const s = setup({ cwd: join(dir, "project") });
+			await s.api.suggest({
+				...suggestInput(),
+				requested,
+				requestedAgent: "pinned",
+			});
+			expect(s.store.getSuggestion(ID1)?.requested_model).toBe(expected);
+		},
+	);
+
+	test("dispatch aliases select the newest cached model, regardless of catalog order", async () => {
+		const catalog = await Bun.file(
+			join(import.meta.dir, "../../../../catalog/harness-models.json"),
+		).json();
+		catalog.harnesses["claude-code"].models = [
+			{ id: "claude-opus-5-5", efforts: ["high"] },
+			{ id: "claude-opus-10-1", efforts: ["high"] },
+			{ id: "claude-opus-9-9", efforts: ["high"] },
+		];
+		await Bun.write(
+			join(dir, ".spatz/harness-models.json"),
+			JSON.stringify({ fetched_at: T0, catalog }),
+		);
+		const s = setup();
+		await s.api.suggest({ ...suggestInput(), requested: "opus" });
+		expect(s.store.getSuggestion(ID1)?.requested_model).toBe(
+			"anthropic/claude-opus-10.1",
+		);
+	});
+
 	for (const hookFirst of [true, false]) {
 		test(`hook and mod merge by agent identity (hook first: ${hookFirst})`, async () => {
 			const identity = await Bun.file(
@@ -2433,10 +2574,15 @@ describe("dispatch observations", () => {
 				),
 			).json();
 			const s = setup({ openStore });
+			await Bun.write(
+				join(dir, ".claude/agents/gp-opus-5-5-high.md"),
+				"---\nname: gp-opus-5-5-high\nmodel: claude-opus-5-5\n---\nReview code.\n",
+			);
 			const event = {
 				...identity.hook,
 				...identity.agentCallHook,
-				tool_input: { model: "opus", subagent_type: "gp-opus-5-5-high" },
+				cwd: dir,
+				tool_input: { subagent_type: "gp-opus-5-5-high" },
 				tool_response: {
 					agentId: identity.modAgentId,
 					resolvedModel: "claude-sonnet-5-5",
@@ -2448,7 +2594,7 @@ describe("dispatch observations", () => {
 				...suggestInput(),
 				source: "claude-code-mod",
 				scope: "subagent",
-				requested: "claude-opus-5-5",
+				requested: "-",
 			});
 			await s.api.link({
 				suggestionId: suggestion.suggestion_id,
@@ -2529,7 +2675,11 @@ describe("dispatch observations", () => {
 
 test("Agent hooks persist unlinked dispatches and use the child id, not the parent", async () => {
 	const s = setup({ openStore });
-	const hook = (agent: string, model: string | undefined) =>
+	await Bun.write(
+		join(dir, ".claude/agents/gp-opus-5-5-high.md"),
+		"---\nmodel: claude-opus-5-5\n---\n",
+	);
+	const hook = (agent: string, subagentType: string) =>
 		s.api.handleHook(
 			"PostToolUse",
 			JSON.stringify({
@@ -2537,13 +2687,14 @@ test("Agent hooks persist unlinked dispatches and use the child id, not the pare
 				session_id: SESSION,
 				agent_id: "parent",
 				tool_name: "Agent",
-				tool_input: { model, subagent_type: "gp-opus-5-5-high" },
+				cwd: dir,
+				tool_input: { subagent_type: subagentType },
 				tool_use_id: `call-${agent}`,
 				tool_response: { agentId: agent, resolvedModel: "claude-opus-5-5" },
 			}),
 		);
-	await hook("pinned", "opus");
-	await hook("unknown", undefined);
+	await hook("pinned", "gp-opus-5-5-high");
+	await hook("unknown", "unknown-agent");
 	const db = new Database(s.deps.dbPath, { readonly: true });
 	try {
 		expect(

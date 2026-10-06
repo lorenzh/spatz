@@ -1,7 +1,6 @@
 // api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
 import { join } from "node:path";
-import harnessModels from "../../../../catalog/harness-models.json";
 import {
 	formatHarnessModels,
 	type Harness,
@@ -94,16 +93,20 @@ export function createApi(
 	const debugHook = (message: string) => {
 		if (deps.env.SPATZ_DEBUG === "1") console.error(`spatz hook: ${message}`);
 	};
-	async function availableEfforts() {
+	async function cachedHarnessCatalog() {
 		const cfg = await getConfig();
 		// Recording and explicit lists use the available cache/bundle without a network request.
-		const catalog = await loadHarnessCatalog({
+		return loadHarnessCatalog({
 			fetch: deps.fetch,
 			env: { ...deps.env, SPATZ_NO_NETWORK: "1" },
 			cachePath: join(deps.homeDir, ".spatz", "harness-models.json"),
 			clock: deps.clock,
 			ttlMs: cfg.tuning.openRouterCacheMs,
 		});
+	}
+	async function availableEfforts() {
+		const cfg = await getConfig();
+		const catalog = await cachedHarnessCatalog();
 		const byModel = new Map<string, Effort[]>();
 		for (const harness of Object.values(catalog.harnesses))
 			for (const model of harness.models) {
@@ -151,12 +154,55 @@ export function createApi(
 		)
 			return null;
 		const cfg = await getConfig();
-		const alias = harnessModels.harnesses["claude-code"].models.find((m) =>
-			m.id.startsWith(`claude-${model}-`),
-		);
+		const catalog = await cachedHarnessCatalog();
+		const alias = catalog.harnesses["claude-code"].models
+			.filter((m) => m.id.startsWith(`claude-${model}-`))
+			.sort((a, b) => b.id.localeCompare(a.id, "en", { numeric: true }))[0];
 		return toCanonicalId(model, cfg.aliases) !== model
 			? toCanonicalId(model, cfg.aliases)
 			: toCanonicalId(alias?.id ?? model, cfg.aliases);
+	}
+
+	/** Resolve the caller's pin before routing; project definitions override user definitions. */
+	async function requestedDispatchModel(
+		model: unknown,
+		agentType: unknown,
+		cwd = deps.cwd,
+	): Promise<string | null> {
+		const explicit = await dispatchModel(model);
+		if (explicit) return explicit;
+		// ponytail: local agent files only; add plugin discovery when plugin pins are needed.
+		if (typeof agentType !== "string" || !/^[a-zA-Z0-9_-]+$/.test(agentType))
+			return null;
+		for (const agents of [
+			join(cwd, ".claude", "agents"),
+			join(
+				deps.env.CLAUDE_CONFIG_DIR || join(deps.homeDir, ".claude"),
+				"agents",
+			),
+		]) {
+			let text: string;
+			try {
+				text = await Bun.file(join(agents, `${agentType}.md`)).text();
+			} catch {
+				continue;
+			}
+			try {
+				const header = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(
+					text,
+				)?.[1];
+				if (header === undefined) return null;
+				const definition = Bun.YAML.parse(header);
+				return await dispatchModel(
+					definition && typeof definition === "object" && "model" in definition
+						? definition.model
+						: null,
+				);
+			} catch {
+				return null;
+			}
+		}
+		return null;
 	}
 
 	async function onHook(input: HookInput, cfg: Config): Promise<void> {
@@ -297,7 +343,11 @@ export function createApi(
 								typeof input.tool_use_id === "string"
 									? input.tool_use_id
 									: null,
-							requested_model: await dispatchModel(requested?.model),
+							requested_model: await requestedDispatchModel(
+								requested?.model,
+								requested?.subagent_type,
+								input.cwd,
+							),
 							requested_agent_type:
 								typeof requested?.subagent_type === "string"
 									? requested.subagent_type
@@ -639,6 +689,7 @@ export function createApi(
 			turn,
 			agentId,
 			requested: requestedModel,
+			requestedAgent,
 		}) {
 			if (scope !== undefined && !(SCOPES as readonly string[]).includes(scope))
 				throw new Error("invalid scope");
@@ -652,6 +703,7 @@ export function createApi(
 				turn,
 				agentId,
 				requested: requestedModel,
+				requestedAgent,
 			})) {
 				if (value !== undefined && !value.trim())
 					throw new Error(`invalid ${name}`);
@@ -661,7 +713,10 @@ export function createApi(
 				throw new Error(
 					"a mod suggestion with --session needs --turn or --agent-id",
 				);
-			const originalModel = await dispatchModel(requestedModel);
+			const originalModel = await requestedDispatchModel(
+				requestedModel,
+				requestedAgent,
+			);
 			const cfg = await getConfig();
 			const resolved = resolveModels(models, deps.env, cfg);
 			const parseRequested = () => {

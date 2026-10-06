@@ -36,6 +36,7 @@ export interface Decision {
 /** What links a suggestion to the session: passed to the CLI as flags. */
 export interface Link {
 	requested?: string;
+	requestedAgent?: string;
 	scope: Scope;
 	session?: string;
 	turn?: string;
@@ -113,6 +114,9 @@ export async function suggest(
 				"claude-code-mod",
 				"--requested",
 				link.requested ?? "-",
+				...(link.requestedAgent
+					? ["--requested-agent", link.requestedAgent]
+					: []),
 				...(link.session ? ["--session", link.session] : []),
 				...(link.turn ? ["--turn", link.turn] : []),
 				...(link.agentId ? ["--agent-id", link.agentId] : []),
