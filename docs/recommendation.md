@@ -9,7 +9,7 @@ keywords: [decision rule, strategy, learned, jev-choice, rules, strongest, estim
 
 spatz recommends the cheapest candidate that has proven good enough for this kind of task. A candidate is one pair of model and effort. Without enough data, spatz uses the pick of Jev or the most expensive candidate.
 
-The terms are explained in [how-it-works.md](how-it-works.md#terms).
+The terms are explained in [how-it-works.md](how-it-works.md#terms). For benchmark results and policy comparisons, see [measurements.md](measurements.md).
 
 ## Cells and the estimate
 
