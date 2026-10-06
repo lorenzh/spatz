@@ -111,6 +111,13 @@ describe("estimate", () => {
 });
 
 describe("lowerBound", () => {
+	test("stays stable on large histories", () => {
+		expect(lowerBound(0, 1100)).toBeCloseTo(1 - 0.95 ** (1 / 1101), 9);
+		expect(lowerBound(1100, 1100)).toBeCloseTo(0.05 ** (1 / 1101), 6);
+		const x = lowerBound(550, 1100);
+		expect(x).toBeGreaterThan(0.47);
+		expect(x).toBeLessThan(0.5);
+	});
 	test("is the 5 % quantile of Beta(1 + s, 1 + n - s)", () => {
 		// Beta(s+1, 1) has CDF x^(s+1).
 		expect(lowerBound(10, 10)).toBeCloseTo(0.05 ** (1 / 11), 6);

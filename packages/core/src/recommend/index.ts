@@ -32,11 +32,13 @@ export function lowerBound(successes: number, n: number): number {
 	const m = Math.round(n) + 1; // a + b - 1
 	const cdf = (x: number) => {
 		// I_x(a, b) = P(Binomial(m, x) >= a)
+		// Terms in log space: (1 - x) ** m underflows on large histories.
 		let p = 0;
-		let term = (1 - x) ** m; // j = 0
+		let logTerm = m * Math.log1p(-x); // j = 0
+		const logRatio = Math.log(x) - Math.log1p(-x);
 		for (let j = 0; j <= m; j++) {
-			if (j >= a) p += term;
-			term *= ((m - j) / (j + 1)) * (x / (1 - x));
+			if (j >= a) p += Math.exp(logTerm);
+			logTerm += Math.log((m - j) / (j + 1)) + logRatio;
 		}
 		return p;
 	};
