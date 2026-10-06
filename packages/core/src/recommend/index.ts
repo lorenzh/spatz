@@ -11,6 +11,8 @@ import {
 	type Difficulty,
 	type RankingEntry,
 	type StrategyName,
+	TASK_FAMILY,
+	type TaskType,
 	type Tuning,
 } from "../contracts/types.ts";
 
@@ -41,10 +43,12 @@ function level(
 	ctx: StrategyContext,
 	history: CellStat[],
 	difficulties: readonly Difficulty[],
+	sameType: (t: TaskType) => boolean = (t) =>
+		t === ctx.classification.task_type,
 ): Level {
 	const sums = new Map<string, { n: number; sum: number }>();
 	for (const s of history) {
-		if (s.task_type !== ctx.classification.task_type) continue;
+		if (!sameType(s.task_type)) continue;
 		if (!difficulties.includes(normalizeDifficulty(s.difficulty))) continue;
 		const k = keyOf(s);
 		const cur = sums.get(k) ?? { n: 0, sum: 0 };
@@ -100,7 +104,7 @@ function pickOnLevel(catalog: Catalog, at: Level, t: Tuning): number | null {
 	return best;
 }
 
-/** Cell, then extended level (same task_type, same and harder difficulties). null when even the extended level has too little data. */
+/** Cell, then extended level (same task_type, same and harder difficulties), then (flag) the same family at the same level. null when even the extended level has too little data. */
 export function learned(
 	ctx: StrategyContext,
 	catalog: Catalog,
@@ -111,6 +115,13 @@ export function learned(
 	if (difficulty !== "hard") {
 		const harder = DIFFICULTIES.slice(DIFFICULTIES.indexOf(difficulty));
 		levels.push([level(ctx, history, harder), `${harder.join("+")} level`]);
+	}
+	if (ctx.tuning.familyPooling) {
+		const family = TASK_FAMILY[ctx.classification.task_type];
+		levels.push([
+			level(ctx, history, [difficulty], (t) => TASK_FAMILY[t] === family),
+			`${difficulty} level of the ${family} family`,
+		]);
 	}
 	for (const [at, name] of levels) {
 		const i = pickOnLevel(catalog, at, ctx.tuning);
