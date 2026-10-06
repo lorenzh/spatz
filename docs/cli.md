@@ -223,7 +223,7 @@ It does not create a success signal or close the suggestion.
 | `--cache-creation <n>` | required | Input tokens written to cache. |
 | `--turn <id>` | required | The run's turn id. Also stored as `scope_key`. |
 | `--source claude-code-mod` | required | The direct usage source. |
-| `--cost-usd <n>` | absent | Optional harness-reported USD cost. Must be finite and non-negative. |
+| `--cost-usd <n>` | absent | Optional harness-reported USD cost. Must be a finite non-negative decimal. The CLI accepts scientific notation. It rejects empty values, whitespace and hexadecimal values. |
 | `--json` | `false` | Print the stored usage record. |
 
 All token counts must be non-negative safe integers.

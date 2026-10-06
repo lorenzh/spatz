@@ -228,7 +228,8 @@ describe("identity fixtures", () => {
 			...expected,
 			calls: [{ command: "[redacted]", exit_code: 0 }],
 			usage: {
-				input_tokens: 22390,
+				// Codex input includes cached tokens; normalized input excludes them.
+				input_tokens: 10102,
 				cache_read_input_tokens: 12288,
 				cache_creation_input_tokens: 0,
 				output_tokens: 96,

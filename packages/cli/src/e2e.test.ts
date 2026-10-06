@@ -136,7 +136,9 @@ test("newer database schemas fail CLI commands but both hook families exit silen
 			});
 			expect(result.code).toBe(1);
 			expect(result.stdout).toBe("");
-			expect(result.stderr).toMatch(/schema.*6.*upgrade.*CLI/i);
+			expect(result.stderr).toMatch(
+				new RegExp(`schema.*${SCHEMA_VERSION + 1}.*upgrade.*CLI`, "i"),
+			);
 		}
 		for (const args of [
 			["hook", "Stop"],

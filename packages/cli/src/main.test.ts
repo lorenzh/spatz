@@ -830,6 +830,63 @@ describe("mod CLI", () => {
 		]);
 		expect(JSON.parse(stdout())).toEqual({ suggestion_id: "id" });
 	});
+	test.each([
+		["0", 0],
+		["0.123", 0.123],
+		[".5", 0.5],
+		["1.", 1],
+		["1e-7", 1e-7],
+		["", null],
+		[" ", null],
+		[" 1 ", null],
+		["1\n", null],
+		["0x10", null],
+		["0b10", null],
+		["0o10", null],
+		["-1", null],
+		["NaN", null],
+		["Infinity", null],
+		["1e309", null],
+		["1usd", null],
+	])("usage validates decimal --cost-usd %j", async (value, expected) => {
+		const { io, err, out } = fakeIO();
+		const seen: unknown[] = [];
+		const { api } = fakeApi({
+			usage: async (input) => {
+				seen.push(input.costUsd);
+				return { suggestion_id: input.suggestionId } as never;
+			},
+		});
+		const code = await main(
+			[
+				"usage",
+				"id",
+				"--model",
+				"m",
+				"--input",
+				"0",
+				"--output",
+				"0",
+				"--cache-read",
+				"0",
+				"--cache-creation",
+				"0",
+				"--turn",
+				"t",
+				"--source",
+				"claude-code-mod",
+				`--cost-usd=${value}`,
+			],
+			io,
+			api,
+		);
+		expect(code).toBe(expected === null ? 2 : 0);
+		expect(seen).toEqual(expected === null ? [] : [expected]);
+		if (expected === null) {
+			expect(err.join("\n")).toContain("--cost-usd must be");
+			expect(out).toEqual([]);
+		} else expect(err).toEqual([]);
+	});
 	test("report passes the direct turn and source", async () => {
 		const { io } = fakeIO();
 		const { api, calls } = fakeApi();

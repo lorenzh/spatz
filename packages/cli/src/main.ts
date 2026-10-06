@@ -177,7 +177,7 @@ export async function main(
 					required(v["cache-creation"], "--cache-creation"),
 					"--cache-creation",
 				),
-				...(v["cost-usd"] !== undefined && { costUsd: Number(v["cost-usd"]) }),
+				...(v["cost-usd"] !== undefined && { costUsd: toCost(v["cost-usd"]) }),
 				turn: required(v.turn, "--turn"),
 				source: "claude-code-mod" as const,
 			};
@@ -302,5 +302,16 @@ function toInt(s: string, flag = "--rounds"): number {
 	const n = Number(s);
 	if (!/^\d+$/.test(s) || !Number.isSafeInteger(n))
 		throw new UsageError(`${flag} must be a non-negative safe integer`);
+	return n;
+}
+
+function toCost(s: string): number {
+	const n = Number(s);
+	if (
+		!/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(s) ||
+		s.trim() !== s ||
+		!Number.isFinite(n)
+	)
+		throw new UsageError("--cost-usd must be a finite non-negative decimal");
 	return n;
 }
