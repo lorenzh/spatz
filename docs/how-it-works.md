@@ -193,7 +193,11 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 
 ### Migrations
 
-`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz link`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through DuckDB. Each migration runs in its own `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
+`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz link`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through DuckDB.
+
+All pending migrations run in one `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
+
+Before the first migration write, a separate read-only connection creates a backup with `VACUUM INTO`. The write lock prevents other writers from changing the database during backup and migration. A failure rolls back all pending migrations. See [backup and restore](configuration.md#database-backup-and-restore) for retention and downgrade behavior.
 
 | Version | Change |
 |---|---|

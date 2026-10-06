@@ -10,6 +10,7 @@ import type { Outcome, StatsReport, Suggestion } from "@spatz/core";
 import openRouterFixture from "../../core/src/catalog/fixtures/openrouter-models.json";
 import { parseOpenRouterModels } from "../../core/src/catalog/openrouter.ts";
 import codexHooks from "../../core/src/signals/fixtures/codex-hook-inputs.json";
+import { SCHEMA_VERSION } from "../../core/src/store/index.ts";
 import hookEvents from "./fixtures/hook-events.json";
 
 const CLI = join(import.meta.dir, "cli.ts");
@@ -112,6 +113,57 @@ function db() {
 let firstId: string;
 let linkedId: string;
 let linkedStdout: string;
+
+test("newer database schemas fail CLI commands but both hook families exit silently", async () => {
+	const futureHome = await mkdtemp(join(tmpdir(), "spatz-future-"));
+	const path = join(futureHome, ".spatz", "spatz.db");
+	await Bun.write(path, "");
+	const future = new Database(path);
+	try {
+		future.run(
+			await Bun.file(
+				join(import.meta.dir, "../../core/src/store/fixtures/v5.sql"),
+			).text(),
+		);
+		future.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+		for (const args of [
+			["stats", "--json"],
+			[TASK, "--models", MODELS, "--dry-run", "--json"],
+		]) {
+			const result = await spatz(args, undefined, {
+				HOME: futureHome,
+				SPATZ_NO_NETWORK: "1",
+			});
+			expect(result.code).toBe(1);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toMatch(/schema.*6.*upgrade.*CLI/i);
+		}
+		for (const args of [
+			["hook", "Stop"],
+			["hook", "Stop", "--agent", "codex"],
+		]) {
+			const result = await spatz(
+				args,
+				JSON.stringify({
+					hook_event_name: "Stop",
+					session_id: "session",
+					cwd: futureHome,
+				}),
+				{ HOME: futureHome, SPATZ_NO_NETWORK: "1" },
+			);
+			expect(result).toEqual({ code: 0, stdout: "", stderr: "" });
+		}
+		expect(future.query("PRAGMA user_version").get()).toEqual({
+			user_version: SCHEMA_VERSION + 1,
+		});
+		expect(future.query("SELECT COUNT(*) AS n FROM failures").get()).toEqual({
+			n: 1,
+		});
+	} finally {
+		future.close();
+		await rm(futureHome, { recursive: true, force: true });
+	}
+});
 
 describe("suggest", () => {
 	test("without Jev: rule fallback picks the most expensive pair (--json)", async () => {

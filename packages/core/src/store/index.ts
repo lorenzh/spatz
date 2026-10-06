@@ -1,8 +1,8 @@
 // store: bun:sqlite with schema, migrations (PRAGMA user_version), WAL and busy_timeout.
 // Spec: "Storage", outcomes view per "Signals".
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { Store } from "../contracts/deps.ts";
 import {
 	difficultySql,
@@ -160,24 +160,70 @@ const SCHEMA_V5 = [
 const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
+/** The caller holds IMMEDIATE, before any writes, so this reader sees all committed WAL data. */
+function backupDatabase(dbPath: string, version: number): void {
+	const backup = `${dbPath}.bak-v${version}`;
+	const temporary = `${backup}.${crypto.randomUUID()}.tmp`;
+	const reader = new Database(dbPath, { readonly: true });
+	try {
+		reader.run("VACUUM INTO ?", [temporary]);
+		renameSync(temporary, backup);
+	} finally {
+		reader.close();
+		rmSync(temporary, { force: true });
+	}
+	const prefix = `${basename(dbPath)}.bak-v`;
+	const backups = readdirSync(dirname(dbPath))
+		.filter(
+			(name) =>
+				name !== basename(backup) &&
+				name.startsWith(prefix) &&
+				/^\d+$/.test(name.slice(prefix.length)),
+		)
+		.sort(
+			(a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)),
+		);
+	for (const name of backups.slice(2)) rmSync(join(dirname(dbPath), name));
+}
+
 /** Opens the db with WAL and busy_timeout 5000 and migrates to SCHEMA_VERSION. */
 export function openDatabase(dbPath: string): Database {
 	if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
 	const db = new Database(dbPath, { create: true, strict: true });
-	db.run("PRAGMA busy_timeout = 5000");
-	db.run("PRAGMA journal_mode = WAL");
-	const version = () =>
-		db.query<{ user_version: number }, []>("PRAGMA user_version").get()
-			?.user_version ?? 0;
-	for (let v = version(); v < SCHEMA_VERSION; v = version()) {
-		// IMMEDIATE + re-check: two processes opening the same file must not both migrate.
+	const version = () => {
+		const v =
+			db.query<{ user_version: number }, []>("PRAGMA user_version").get()
+				?.user_version ?? 0;
+		if (v > SCHEMA_VERSION)
+			throw new Error(
+				`Database schema v${v} is newer than supported v${SCHEMA_VERSION}. Upgrade the spatz CLI.`,
+			);
+		return v;
+	};
+	try {
+		db.run("PRAGMA busy_timeout = 5000");
+		version();
+		db.run("PRAGMA journal_mode = WAL");
+		if (version() === SCHEMA_VERSION) return db;
+		// IMMEDIATE + re-check: no other writer can run between backup and migration.
 		db.transaction(() => {
-			if (version() !== v) return;
-			for (const sql of [MIGRATIONS[v] ?? []].flat()) db.run(sql);
-			db.run(`PRAGMA user_version = ${v + 1}`);
+			const from = version();
+			if (from === SCHEMA_VERSION) return;
+			if (
+				dbPath !== ":memory:" &&
+				db.query("SELECT 1 FROM sqlite_master LIMIT 1").get()
+			)
+				backupDatabase(dbPath, from);
+			for (let v = from; v < SCHEMA_VERSION; v++) {
+				for (const sql of [MIGRATIONS[v] ?? []].flat()) db.run(sql);
+				db.run(`PRAGMA user_version = ${v + 1}`);
+			}
 		}).immediate();
+		return db;
+	} catch (error) {
+		db.close();
+		throw error;
 	}
-	return db;
 }
 
 type SuggestionRow = Omit<

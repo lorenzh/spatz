@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
+keywords: [migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -30,6 +30,7 @@ The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it
 | Path | Format | Written by | Purpose |
 | --- | --- | --- | --- |
 | `~/.spatz/spatz.db` | SQLite, WAL mode | spatz | Suggestions, signals, usage and parse or hook failures. |
+| `~/.spatz/spatz.db.bak-v*` | SQLite backups | spatz | Database copies made before schema upgrades, including incomplete backup files left after an interrupted process. |
 | `~/.spatz/launcher-failures` | One `1` marker per line | Plugin launchers | Failed hook launches for `spatz stats`. |
 | `~/.spatz/harness-models.json` | JSON | spatz | Cache of the harness model catalog. |
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
@@ -48,6 +49,39 @@ bun:sqlite writes the database in WAL mode with a busy timeout of 5000 ms. So se
 The tables are `suggestions`, `signals`, `usages`, `usage_scopes` and `failures`. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
 
 To delete all learned data, delete `~/.spatz/spatz.db` and the files `spatz.db-wal` and `spatz.db-shm` next to it.
+Also delete its `spatz.db.bak-v*` backups.
+
+### Database backup and restore
+
+Before an upgrade of an existing non-empty database, spatz creates `spatz.db.bak-v<from>` beside the database.
+The backup includes committed WAL data and keeps the old schema version.
+spatz holds the migration write lock during backup and migration.
+It waits up to 5000 ms for another writer to finish.
+If backup creation fails, the migration stops.
+Fresh databases and databases at the current version need no backup.
+
+spatz keeps the current backup and up to two other schema-version backups.
+A retry replaces the backup for the same source version only after the new copy is complete.
+In-memory databases have no file backup.
+
+This CLI includes a newer-schema refusal guard: commands fail with an instruction to upgrade the CLI if the database schema is newer than supported.
+Hooks ignore the error and exit 0 silently. They record no data until a compatible CLI is installed.
+
+CLIs up to v0.1.6 do not contain this guard. They can write to a newer schema after a downgrade.
+Before installing one of those versions, restore a backup whose schema it supports using the steps below.
+
+To restore before a downgrade:
+
+1. Stop all spatz commands and agent sessions that use the database.
+2. Keep a separate copy of the current database and any `spatz.db-wal` and `spatz.db-shm` files.
+3. If present, remove `spatz.db-wal` and `spatz.db-shm` from the stopped database directory.
+4. Copy `spatz.db.bak-v<from>` over `spatz.db` in the same directory.
+5. Install the CLI and plugins compatible with the restored schema.
+6. Run `spatz stats` to check the restored data.
+
+Restoration loses records created after the backup.
+Never restore over a database while a process has it open.
+Release owners must complete the [migration checklist](../RELEASING.md#migration-checklist-for-breaking-releases).
 
 ### Launcher failures
 
