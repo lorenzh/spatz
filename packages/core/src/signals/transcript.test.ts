@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parseMainTranscript, parseSubagentTranscript } from "./transcript.ts";
+import {
+	parseCodexRollout,
+	parseMainTranscript,
+	parseSubagentTranscript,
+} from "./transcript.ts";
 
 const dir = `${import.meta.dir}/fixtures`;
 const main = await Bun.file(`${dir}/main-transcript.jsonl`).text();
@@ -136,3 +140,161 @@ describe("robustness and privacy", () => {
 		}
 	});
 });
+
+test.each([250, 50])(
+	"Codex turn usage survives lagging token_count after compaction (%s)",
+	(laggingInput) => {
+		const rows = [
+			{
+				type: "turn_context",
+				payload: { turn_id: "current", model: "gpt-6.1-sol" },
+			},
+			{ type: "compacted", payload: {} },
+			{
+				type: "token_usage_record",
+				payload: {
+					turn_id: "current",
+					turn_token_usage: { input_tokens: 200, output_tokens: 15 },
+					thread_token_usage: { input_tokens: 300, output_tokens: 20 },
+				},
+			},
+			{
+				type: "event_msg",
+				payload: {
+					type: "token_count",
+					info: {
+						total_token_usage: {
+							input_tokens: laggingInput,
+							output_tokens: 10,
+						},
+					},
+				},
+			},
+		];
+		expect(
+			parseCodexRollout(
+				rows.map((r) => JSON.stringify(r)).join("\n"),
+				"current",
+			)?.usage,
+		).toEqual({
+			input_tokens: 200,
+			cache_read_input_tokens: 0,
+			cache_creation_input_tokens: 0,
+			output_tokens: 15,
+		});
+	},
+);
+
+test.each([
+	"input_tokens",
+	"cached_input_tokens",
+	"cache_write_input_tokens",
+	"output_tokens",
+])("Codex token_count rejects a negative %s delta", (field) => {
+	const prior = {
+		input_tokens: 100,
+		cached_input_tokens: 30,
+		cache_write_input_tokens: 10,
+		output_tokens: 5,
+	};
+	const rows = [
+		{
+			type: "event_msg",
+			payload: { type: "token_count", info: { total_token_usage: prior } },
+		},
+		{
+			type: "turn_context",
+			payload: { turn_id: "current", model: "gpt-6.1-sol" },
+		},
+		{
+			type: "event_msg",
+			payload: {
+				type: "token_count",
+				info: { total_token_usage: { ...prior, [field]: 0 } },
+			},
+		},
+	];
+	expect(
+		parseCodexRollout(rows.map((r) => JSON.stringify(r)).join("\n"), "current")
+			?.usage,
+	).toBeNull();
+});
+
+// Synthetic nonzero cache writes supplement the real fixture, whose cache writes are zero.
+test.each([false, true])(
+	"Codex cache counters stay per-turn (thread-only: %s)",
+	(threadOnly) => {
+		const prior = {
+			input_tokens: 100,
+			cached_input_tokens: 30,
+			cache_write_input_tokens: 10,
+			output_tokens: 5,
+			reasoning_output_tokens: 2,
+		};
+		const turn = {
+			input_tokens: 200,
+			cached_input_tokens: 50,
+			cache_write_input_tokens: 30,
+			output_tokens: 15,
+			reasoning_output_tokens: 6,
+		};
+		const total = {
+			input_tokens: 300,
+			cached_input_tokens: 80,
+			cache_write_input_tokens: 40,
+			output_tokens: 20,
+			reasoning_output_tokens: 8,
+		};
+		const rows = [
+			{
+				type: "token_usage_record",
+				payload: { turn_id: "previous", thread_token_usage: prior },
+			},
+			{
+				type: "turn_context",
+				payload: { turn_id: "current", model: "gpt-6.1-sol" },
+			},
+			{
+				type: "token_usage_record",
+				payload: {
+					turn_id: "current",
+					thread_token_usage: total,
+					...(!threadOnly && { turn_token_usage: turn }),
+				},
+			},
+			{
+				type: "event_msg",
+				payload: { type: "token_count", info: { total_token_usage: total } },
+			},
+			{ type: "event_msg", payload: { type: "token_count", info: null } },
+		];
+		expect(
+			parseCodexRollout(
+				rows.map((r) => JSON.stringify(r)).join("\n"),
+				"current",
+			)?.usage,
+		).toEqual({
+			input_tokens: 200,
+			cache_read_input_tokens: 50,
+			cache_creation_input_tokens: 30,
+			output_tokens: 15,
+		});
+		if (!threadOnly) {
+			// A resumed excerpt may lack the prior thread total: keep the explicit turn total over its mirror.
+			expect(
+				parseCodexRollout(
+					rows
+						.slice(1)
+						.map((r) => JSON.stringify(r))
+						.join("\n"),
+					"current",
+				)?.usage,
+			).toEqual({
+				input_tokens: 200,
+				cache_read_input_tokens: 50,
+				cache_creation_input_tokens: 30,
+				output_tokens: 15,
+			});
+		}
+	},
+);
