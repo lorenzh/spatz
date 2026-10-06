@@ -88,7 +88,8 @@ The opt-out does not stop the OpenRouter request or the local database. The keyw
 
 ## Retention and deletion
 
-spatz keeps all local data until you delete it. It has no automatic cleanup. Old outcomes also stay in the learned estimates.
+spatz keeps learned data until you delete it. Old outcomes also stay in the learned estimates.
+Schema upgrades keep the current backup and up to two other schema-version backups. See [database backup and restore](configuration.md#database-backup-and-restore).
 
 The files are in `~/.spatz`. spatz finds the home folder through the `HOME` variable.
 
@@ -96,6 +97,7 @@ The files are in `~/.spatz`. spatz finds the home folder through the `HOME` vari
 |---|---|
 | `~/.spatz/spatz.db` | Suggestions, usage, signals |
 | `~/.spatz/spatz.db-wal`, `~/.spatz/spatz.db-shm` | SQLite WAL files of the same database |
+| `~/.spatz/spatz.db.bak-v*` | Database backups and any incomplete backup files left after an interrupted process |
 | `~/.spatz/openrouter-models.json` | OpenRouter model list cache |
 | `~/.spatz/duckdb-extensions/` | DuckDB `sqlite` extension |
 | `~/.spatz/aliases.json`, `~/.spatz/descriptions.json` | Your optional configuration files |
@@ -103,10 +105,11 @@ The files are in `~/.spatz`. spatz finds the home folder through the `HOME` vari
 To delete the learned data:
 
 1. Check that no `spatz` process runs. Close the Claude Code sessions that use the spatz hooks, or remove the hooks first.
-2. Delete the database and its WAL files:
+2. Delete the database, its WAL files and its backups:
 
    ```bash
    rm -f ~/.spatz/spatz.db ~/.spatz/spatz.db-wal ~/.spatz/spatz.db-shm
+   rm -f ~/.spatz/spatz.db.bak-v*
    ```
 
 3. spatz creates an empty database on the next call.

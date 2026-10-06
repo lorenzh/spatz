@@ -30,6 +30,7 @@ The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it
 | Path | Format | Written by | Purpose |
 | --- | --- | --- | --- |
 | `~/.spatz/spatz.db` | SQLite, WAL mode | spatz | Suggestions, signals, usage and parse or hook failures. |
+| `~/.spatz/spatz.db.bak-v*` | SQLite backups | spatz | Database copies made before schema upgrades, including incomplete backup files left after an interrupted process. |
 | `~/.spatz/launcher-failures` | One `1` marker per line | Plugin launchers | Failed hook launches for `spatz stats`. |
 | `~/.spatz/harness-models.json` | JSON | spatz | Cache of the harness model catalog. |
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
@@ -63,8 +64,11 @@ spatz keeps the current backup and up to two other schema-version backups.
 A retry replaces the backup for the same source version only after the new copy is complete.
 In-memory databases have no file backup.
 
-If the database schema is newer than the CLI supports, commands fail with an instruction to upgrade the CLI.
+This CLI includes a newer-schema refusal guard: commands fail with an instruction to upgrade the CLI if the database schema is newer than supported.
 Hooks ignore the error and exit 0 silently. They record no data until a compatible CLI is installed.
+
+CLIs up to v0.1.6 do not contain this guard. They can write to a newer schema after a downgrade.
+Before installing one of those versions, restore a backup whose schema it supports using the steps below.
 
 To restore before a downgrade:
 
