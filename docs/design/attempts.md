@@ -7,38 +7,61 @@ keywords: [attempt, identity, retry, escalation, outcome, migration, prompt, tur
 
 # Attempt identity for outcomes
 
-Status: design only. This proposal addresses [#34](https://github.com/lorenzh/spatz/issues/34) and [#35](https://github.com/lorenzh/spatz/issues/35). Implementation follows separately. [#41](https://github.com/lorenzh/spatz/issues/41) consumes the cost data described here.
+Design only for [#34](https://github.com/lorenzh/spatz/issues/34) and [#35](https://github.com/lorenzh/spatz/issues/35). [#41](https://github.com/lorenzh/spatz/issues/41) consumes the cost data.
 
-The baseline is schema v4. Its [outcomes view](../../packages/core/src/store/index.ts) combines all signals for a suggestion. The [API](../../packages/core/src/api/index.ts) selects open suggestions for hooks. The [parsers](../../packages/core/src/signals/transcript.ts) discard identities before summing usage. Change all three boundaries together.
+Schema v4 combines all signals for a suggestion in its [outcomes view](../../packages/core/src/store/index.ts). This design gives each execution its own outcome. Current behavior remains documented in [How spatz works](../how-it-works.md) and [Hooks](../hooks.md).
 
-[PR #59](https://github.com/lorenzh/spatz/pull/59) tried to reconstruct attempts from signal order. Current behavior remains documented in [How spatz works](../how-it-works.md) and [Hooks](../hooks.md).
+## Attempts and reports
 
-## Identity and lifecycle
+An attempt is work by one actual model/effort pair toward a result. Each attempt has a UUID, a start key for replay, and an increasing ordinal within its suggestion. `A → B → A` creates three attempts.
 
-An attempt is one execution of an actual model/effort pair toward a result. It includes generation and validation until completion or a retry boundary. A recommendation alone is not execution.
+`spatz suggest` opens attempt 1 implicitly. Its actual pair stays null until execution evidence or a report supplies it. The first execution fills this implicit attempt. The recommended pair does not prove execution. A new attempt starts only on explicit start, pair switch, new dispatch, or new work after a report. A failed test followed by a fix stays inside the attempt. The latest test/build wins.
 
-Each attempt has an immutable UUID and a durable caller execution key. The key identifies a replayed start. Its context contains the suggestion, harness, session, agent, and prompt/turn IDs. A suggestion can contain several attempts per turn. Neither the pair nor the turn is unique.
+Claude hooks and Codex record at turn granularity or coarser. Only the mod splits a turn into step segments. Stop/SubagentStop closes observed execution and finalizes turn evidence without implying success. Same-pair follow-up work keeps the attempt unless a listed boundary applies. A report closes the attempt. Late evidence can still bind to closed attempts.
 
-Within a suggestion, starts receive increasing ordinals in one `IMMEDIATE` transaction. Allocate before dispatch. A replay returns the existing UUID and ordinal. `A → B → A` produces ordinals `1/2/3` with three UUIDs. A same-pair retry also gets a new UUID. Delayed evidence never changes ordinals.
+```text
+spatz suggest <task> [--retry-of <suggestion_id>]
+spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail
+             [--attempt <id>] [--correct]
+# Mod only; context also supplies harness, session and agent:
+spatz attempt start <suggestion_id> --key <turnId:index> --model <m> --effort <e>
+```
 
-The actual pair comes from the execution adapter. Unknown fields stay null until evidence for that execution fills them. A later report cannot replace a known pair. A conflicting pair requires a new attempt or an explicit metadata repair. The recommended pair is never evidence that it ran.
+The skill propagates suggestion IDs. It needs no start call or attempt ID. The mod registers each segment before execution. Hooks replay dispatch/turn boundaries in source order using stable IDs. Start replay returns the existing attempt. Allocate ordinals and insert bindings in one `IMMEDIATE` transaction.
 
-| Recorder | Open | Close |
+Report selection also runs in that transaction:
+
+```text
+if --attempt: select that attempt; check suggestion ownership and pair
+else: select highest ordinal with same model and effort null or equal
+      (the unused implicit attempt with null model is also compatible)
+if none: create next attempt with reported pair
+if --correct: require a prior report; replace its verdict
+else if selected report equals this report: return it unchanged
+else if selected already has a report: create next attempt; store report
+else: fill unknown pair fields; store report
+close selected/new attempt; return its outcome
+```
+
+`--correct` does not change a known pair or add cost. Reports cannot overwrite known execution metadata. Pair conflicts need a new attempt. Without `--correct`, a changed verdict on a reported attempt means retry. No public `--event-id`, `--revision`, or ambiguity error is needed. Identical same-pair retries need an observed new start to differ from report replay.
+
+## What each recorder knows
+
+| Recorder | Identity and actual pair | Usage |
 | --- | --- | --- |
-| Claude Code hooks and routing skill | Register before dispatch or local work. Persist prompt and subagent links. For uninstrumented runs, reconstruct starts in transcript order using stable message IDs. | Report, Stop/SubagentStop, pair switch, or generation after failed validation. |
-| Claude Code mod | Register before `turn.step` executes the selected pair. Reuse the attempt during uninterrupted work. Register again for a retry or pair switch. | `turn.complete`, report, or replacement by the next attempt. |
-| Codex hooks | The skill registers before work. At Stop, replay rollout execution boundaries in source order when registration is missing. | Report, turn completion, or a retry/switch boundary in the rollout. |
-| Direct `spatz report` | Use an existing attempt ID. Without one, a first report can create a completed attempt. | Commit the report and closure together. |
+| Claude hooks | `prompt_id`, `agent_id`, `tool_use_id`. Model from transcript `message.model` or Agent `resolvedModel`. Session `effort.level` is unsafe after mod rewriting and unknown for subagents. | Preserve message identity before summing. Unknown effort stays null until matching mod metadata or a report fills it. |
+| Claude mod | `turn.step`: `turnId`, `index`, `agentId`, model and effort. Map `tool.call` IDs through the step's `toolUses`. Calls lack `turnId`. | Record `TurnStepResult.usage` per step with its answering model and step effort. Add the missing effort to `recordUsage`. |
+| Codex | `turn_context` gives turn ID, model and effort. Use rollout `call_id`. Hook `tool_use_id = exec-placeholder` is not identity. | Keep the last cumulative snapshot per turn. Never sum snapshots. |
 
-A failed validation seals that attempt before the next generation starts. Further checks of the same output still bind to that sealed attempt. Generation after failure opens a fix round. Repeating a check without generation does not create another attempt. Adapters must retain call/message IDs and source order to distinguish these cases.
+With hooks plus mod, the mod always registers starts and pairs. The selected recorder alone writes signals/usage. This prevents duplicate usage while keeping the mod's step effort available to hooks.
 
-Proposed CLI operations are `attempt start` and `report --attempt <id>`. Starts accept a caller `--execution-key`. Retries also name `--retry-of <id>`. Reports carry `--event-id` and increasing `--revision`. `--correct` changes the verdict without work or extra cost. A retry opens another attempt before work. If correction versus retry is ambiguous, changed reports without identity must fail. An identical replay of a sole implicit report remains idempotent.
+Do not assign the mod's mixed turn total to its last pair. Use disjoint step measurements. For Codex, an in-turn pair change without separate counters leaves pair cost incomplete. Keep its measured total once in suggestion totals with a null attempt. Never invent a split or a `root_hint`.
 
-Stop closes execution without implying success. Closure permits late evidence and corrections. Idle expiry or the next unrelated suggestion closes abandoned execution with unknown verdict. These operations never erase IDs or reopen execution. Later work needs a new start. Scope labels do not identify attempts. Parallel subagents have separate agent keys and require explicit parent links.
+Before implementation, run a fixture spike to check whether `SubagentStop.effort.level` belongs to the subagent. Until proved, leave subagent effort null. Check both supported Codex rollout formats and Claude transcript variants.
 
 ## Storage sketch
 
-Proposed DDL sketch: Empty `agent_key` means main. A direct caller without a harness session gets a suggestion-scoped synthetic session key.
+Empty `agent_key` means main. Direct callers use a suggestion-scoped synthetic session. Bindings name external IDs. Events hold derived observations only.
 
 ```sql
 CREATE TABLE attempts (
@@ -47,10 +70,9 @@ CREATE TABLE attempts (
   ordinal INTEGER NOT NULL CHECK (ordinal > 0),
   execution_key TEXT NOT NULL,
   model TEXT, effort TEXT,
-  predecessor_id TEXT REFERENCES attempts(id),
   root_id TEXT NOT NULL REFERENCES attempts(id),
-  state TEXT NOT NULL CHECK (state IN ('open','closed')),
-  opened_at INTEGER, closed_at INTEGER, close_reason TEXT,
+  opened_at INTEGER, closed_at INTEGER,
+  chain_closed_at INTEGER, -- root only
   UNIQUE (suggestion_id, ordinal),
   UNIQUE (suggestion_id, execution_key)
 );
@@ -62,17 +84,19 @@ CREATE TABLE attempt_bindings (
   PRIMARY KEY (harness, session_key, agent_key,
                id_kind, external_id, attempt_id)
 );
+CREATE UNIQUE INDEX attempt_exact_binding ON attempt_bindings
+  (harness, session_key, agent_key, id_kind, external_id)
+  WHERE id_kind IN ('call', 'message', 'start');
 CREATE TABLE attempt_events (
   harness TEXT NOT NULL, session_key TEXT NOT NULL,
   agent_key TEXT NOT NULL, event_id TEXT NOT NULL,
   revision INTEGER NOT NULL,
+  suggestion_id TEXT REFERENCES suggestions(id),
   attempt_id TEXT REFERENCES attempts(id),
-  binding TEXT NOT NULL CHECK
-    (binding IN ('pending','explicit','source','window','conflict')),
+  binding TEXT NOT NULL CHECK (binding IN ('bound','window','pending')),
   prompt_id TEXT, turn_id TEXT, call_id TEXT,
   source_seq INTEGER, occurred_at INTEGER, received_at INTEGER NOT NULL,
   model TEXT, effort TEXT, kind TEXT NOT NULL,
-  root_hint TEXT REFERENCES attempts(id),
   value REAL, weight REAL,
   input_tokens INTEGER, output_tokens INTEGER,
   cache_read_tokens INTEGER, cache_creation_tokens INTEGER,
@@ -80,106 +104,128 @@ CREATE TABLE attempt_events (
 );
 ```
 
-Bindings permit several attempts per prompt or turn. A call/message binding names exactly one attempt through an additional partial unique index. Main and subagent identities never share that index. Prompt and turn aliases become equivalent only through an explicit adapter link.
+Prompt/turn bindings can name several mod segments. Exact call/message/start bindings name one attempt. Internal event IDs identify reports or measurements. Revisions replace snapshots and corrections. Equal identity/revision with different payloads is an error. Older revisions cannot replace newer ones.
 
-The store enables foreign keys and validates token ranges, revisions, pairs, and ownership. Start transactions validate predecessors and prevent cycles. They inherit `root_id`, allocate the ordinal, and insert bindings atomically. A root references itself. Event transactions reject conflicting payloads with the same identity/revision. Higher revisions correct observations. Older revisions remain historical. Reports use the stable event ID `report:<attempt_id>`. Store only derived fields, never prompts or command output.
+Enable foreign keys. Check token ranges, pair values, source ownership and matching suggestion/attempt IDs. A new chain root references itself. Other members copy an existing root without changing it. No `predecessor_id` or cycle checks are needed.
 
-## Binding signals, usage, and reports
+DuckDB reads latest event revisions only. It needs `attempt_id`, `suggestion_id`, `binding`, `kind`, `value`, `weight`, pair fields and all four token columns. Binding context/IDs support attribution audits. Source order and times support reconciliation. Store no raw prompts or command output.
 
-All three use the same resolver. Known identity restricts candidates before any time lookup:
+## One binding rule for signals and usage
+
+`bound` means source identity selected the attempt. `window` means time selected it. `pending` means no safe target exists. The store logs conflicts and keeps them pending without credit.
 
 ```text
 bind(event):
-  validate context and identity fields
-  candidates = intersection of every supplied known binding
-  if explicit attempt/call identity conflicts with prompt/turn:
-    return conflict
-  if any supplied identity is unresolved:
-    persist pending; return
-  if identities supplied:
-    target = exact attempt/call binding, else source-order segment
-    if target absent: target = unique compatible window within candidates
-    return target or pending              # never another prompt
-  if trustworthy source time is absent: return pending
-  target = unique compatible window in this session and agent
-  return provisional(target) or pending
+  check context, ownership and supplied identity fields
+  candidates = intersection of bindings that ALREADY EXIST for supplied IDs
+  if existing bindings disagree: log conflict; persist pending; return
+  if any existing binding:
+    target = exact attempt/call, else source segment within candidates
+    if absent: target = unique compatible window within candidates
+    # Never search outside candidates, even when their window has expired.
+  else:
+    if no trustworthy source time: persist pending; return
+    target = unique compatible suggestion/attempt window in session + agent
+  if main-session test/build and no existing binding and suggestion delegated:
+    target = latest closed delegate within the selected suggestion window
+  if no unique target: persist pending; return
+  persist event and bind previously unbound prompt/turn IDs to target
+  # Window-derived aliases stay provisional through their supporting events.
 ```
 
-An exact binding remains valid after closure or expiry. For example, p1 at a timestamp inside p2 still belongs to p1. Multiple attempts inside p1 require a call ID, execution key, or source segment. Missing transcripts cannot justify selecting the currently open suggestion. A main-session verifier names the attempt being checked. Its own model does not replace the worker's model. Without this link, its result remains pending.
+An unbound follow-up prompt/turn can use the window. A known p1 cannot fall through to p2, even with p2's timestamp. Exact IDs still work without timestamps. Missing transcripts never justify selecting the open suggestion by receipt time.
 
-Store source time and receipt time separately. Use source sequence for verdict order. Clock skew never changes an exact binding. Time fallback uses half-open windows only when both boundaries and events share a verified clock domain. Otherwise leave the event pending. Never clamp a timestamp to receipt time. Late traffic cannot extend the current suggestion's idle window.
+Time windows are half-open and use a shared source clock. Receipt time cannot replace source time. Clock skew cannot change exact identity. Late events cannot extend today's idle window. Explicit adapter links connect prompt and turn aliases.
 
-When a link or transcript arrives, reconcile pending and provisional events in one transaction. Resolve signals and usage together. Explicit bindings never move through window repair. A newly discovered conflict removes provisional credit until resolved. A known turn without timestamps can still bind exactly.
+On new links or transcripts, reconcile pending/window events and their provisional aliases together. Move signals and usage in one transaction. Exact bindings stay fixed. Conflicting window credit returns to pending. Preserve message IDs and source order before aggregation. Partial or older transcripts cannot erase evidence.
 
-Parsers must preserve message IDs, call IDs, turns, effort, and source sequence before aggregation. Reconstruct only from an ordered source prefix with stable boundary IDs. If missing history prevents ordering, keep events pending instead of allocating arrival-order attempts. Compaction is not deletion evidence. Merge messages by identity and revisions. An older snapshot cannot replace newer evidence or delete missing messages.
+Main-session test signals in a delegated suggestion's window bind to its most recent closed delegated attempt. Persist that choice. Later reports cannot retarget it. The verifier's model does not replace the worker's pair. Limit: main-session self-fixes also land on that delegated attempt. Explicit attempt identity can override this fallback.
 
-Usage events represent disjoint message/step increments. Cumulative snapshots replace earlier snapshots for the same measurement scope. Never add snapshots to their component increments. Keep one recorder per execution, as the mod's recorder selection already intends. Shared measurement IDs prevent hook/mod duplicates. Without shared IDs, the chosen recorder is authoritative.
+## Outcomes, consumers and cost
 
-The mod must stop assigning mixed turn totals to its last pair. Record step usage before summing. A cumulative Codex total spanning several attempts cannot be split without boundary counters. Keep that total as unresolved chain usage and mark attempt costs incomplete. Exact bindings preserve low-effort 100/high-effort 200 usage regardless of arrival order.
+`attempt_outcomes` has one row per attempt with quality evidence. The report wins. Otherwise combine the latest test and build with weights 1.0 and 0.8. Conflicting observations without source order stay unresolved. Usage alone creates no quality. Expose UUID, ordinal, root, actual pair, quality and four token totals.
 
-## Outcomes and cost
+`cellStats` counts scored attempts once. Same-pair reported fail/pass gives `n=2, sum_quality=1`. An internal TDD fail/pass gives one passing outcome. Keep dry-run exclusion, difficulty normalization and catalog-confirmed `none` normalization. Unknown pairs cannot train learning.
 
-`attempt_outcomes` derives one row per attempt with quality evidence. The latest report revision wins within that attempt. Otherwise use the latest test and build by source order, with current weights 1.0 and 0.8. Unknown order between conflicting observations leaves quality unresolved. Usage alone creates no quality. Expose each attempt's token totals and derived verdict alongside its identity.
+`usage_totals` exposes `suggestion_id`, nullable `attempt_id`, pair fields and all four token columns:
 
-`outcomes` combines these rows with legacy outcomes below. `cellStats` counts each scored attempt once for its actual pair. Keep dry-run exclusion, difficulty normalization, and catalog-confirmed `none` normalization. Unknown pairs stay out of learning. Same-pair fail/pass gives `n=2, sum_quality=1`. Later success cannot remove the earlier failure.
+```sql
+CREATE VIEW usage_totals AS
+SELECT suggestion_id, NULL AS attempt_id, model, effort,
+       input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+FROM usages
+UNION ALL
+SELECT suggestion_id, attempt_id, model, effort,
+       input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+FROM attempt_usage;
+```
 
-A recovery chain contains the initial attempt and its retries, fix rounds, and escalations. `root_id` identifies the first actual pair. A retry using a fresh recommendation must explicitly name its predecessor to retain that root. Unrelated tasks start separate chains. A late older execution cannot be inserted ahead of a registered root without explicit repair.
+`attempt_usage` sums latest authoritative measurements once, including suggestion-bound totals with unknown attempt. Pending measurements without a suggestion contribute nothing. Never sum a snapshot and its component increments.
 
-Execution totals remain on the pair that consumed tokens. Decision cost sums the entire chain once under its root pair. Never join chain totals onto every outcome. `cheap → middle → strong` charges both later attempts to cheap. Costs of 10, 20, 70 produce a decision cost of 100 for cheap. Middle and strong keep their execution costs for inspection.
+Update [report/index.ts](../../packages/core/src/report/index.ts) together with the new views:
 
-A `chain_complete` event names the terminal attempt and its root. That attempt determines task success at the existing threshold. Individual check success does not complete a chain. Cost per success divides all completed-chain costs by successful chains for that root pair. Failed chains contribute costs too. Zero successes gives null. Unknown verdicts and incomplete costs get separate counts. Unresolved chain usage needs a validated `root_hint` to enter the numerator. Dollar conversion and confidence intervals belong to #41.
+- Replace both direct `db.usages` reads with `usage_totals`. Aggregate tokens before outcome joins.
+- Coverage counts distinct scored suggestions over distinct non-test suggestions.
+- Adoption and learned/control compare first-attempt quality once per root. Pair learning still counts individual attempts.
+- Scope statistics count completed chains once under the root suggestion's scope. Legacy statistics keep v4 meaning.
 
-Coverage counts distinct suggestions. Adoption and learned/control first-attempt quality use the root once. Final task success and chain cost remain separate measures. Scope statistics count completed chains once. Legacy statistics keep their previous meaning.
+Define `store.outcome(id)` as the latest ordinal of that suggestion, even when its quality is null. Legacy IDs return their single v4 row. `report --json` returns the attempt selected by that report, not an arbitrary `.get()` result. Preserve `suggestion_id`, `quality`, `model`, `effort`. Add `attempt_id`, `ordinal`, `root_id` and four token totals. Legacy attempt fields are null. Update the contract, CLI fixtures and callers together.
+
+A recovery chain groups retries under the first attempt's `root_id`. `suggest --retry-of` copies the named suggestion's root. Unlinked suggestions start new chains. Unlinked review suggestions stay separate. #41 reports their costs separately.
+
+The store evaluates chain completion after a report or finalized Stop/SubagentStop evidence. The first member verdict at least `successQuality` closes the chain successfully. Raw intermediate tests do not close it. Idle expiry or the next unlinked suggestion in the same session/agent closes it as failed. The store writes `chain_closed_at` on the root in the same transaction. Late evidence and `--correct` recompute the result and closure.
+
+Chain statistics use the root suggestion's `task_type × difficulty`, learned/control flags and first actual pair. Each execution keeps its own tokens. Decision cost sums the chain once under the root pair. Costs `10 → 20 → 70` produce root cost `100`, not repeated charges on each outcome. Failed completed chains also contribute cost. Divide by successful chains. Zero successes gives null. Count incomplete costs separately. #41 owns dollar conversion and confidence intervals.
 
 ## Migration from v4
 
-Do not infer historical attempts. Add one migration entry containing single SQL statements in the existing `IMMEDIATE` transaction. Recheck `user_version` inside the lock.
+Close and mark all existing suggestions as legacy in one migration. Keep signals, usages, rowids and usage watermarks unchanged. Recheck `user_version` inside the existing `IMMEDIATE` transaction. Each migration array entry is one SQL statement.
 
-Before changing views, snapshot the exact v4 view:
+SQLite cannot rename a view. Recreate the same v4 SELECT under `legacy_outcomes`, then replace `outcomes`:
 
 ```sql
-CREATE TABLE legacy_outcomes AS SELECT * FROM outcomes;
-CREATE UNIQUE INDEX legacy_outcome_id ON legacy_outcomes(suggestion_id);
+ALTER TABLE suggestions ADD COLUMN is_legacy INTEGER NOT NULL DEFAULT 0;
+UPDATE suggestions SET is_legacy = 1, closed_at = COALESCE(closed_at, :migration_time);
+-- CREATE VIEW legacy_outcomes AS <unchanged v4 SELECT>;
+DROP VIEW outcomes;
+CREATE VIEW outcomes AS
+SELECT suggestion_id, quality, model, effort FROM legacy_outcomes
+UNION ALL
+SELECT suggestion_id, quality, model, effort FROM attempt_outcomes;
 ```
 
-Mark every existing suggestion as legacy, including those without signals. Keep its signals, usages, rowids, and usage watermarks unchanged. New storage handles new suggestions only. Late events use the identity resolver above, including legacy targets. The isolated legacy writer keeps v4 aggregation. Refresh affected legacy snapshot rows atomically. Never admit those rows to `attempt_outcomes`. Existing evidence keeps its v4 meaning.
+The legacy marker routes late events to a drop with a local log. Never fall through to a new suggestion. New writes use only attempt storage. No snapshot table, legacy writer or refresh step is needed. Old indexes remain untouched.
 
-For new suggestions, the old `signals_turn` index and usage uniqueness rule are irrelevant: writes use `attempt_events`. Keep those indexes for the legacy writer. The replacement `outcomes` uses `UNION ALL` over disjoint legacy and new identities. Legacy rows and their known prompt/turn bindings expose synthetic `legacy:<suggestion_id>` identities. Retry counts and first-pair costs remain unknown for legacy data.
-
-Proof example: v4 suggestion S has three reports: `(t1,A,low,fail,10)`, `(t2,B,high,partial,20)`, `(t3,A,low,pass,30)`. Numbers are increasing observation/report times. V4 chooses the last report quality and latest reported pair. It returns exactly `(S,1.0,A,low)`. The snapshot returns the same row after migration. Learning remains `n=1, sum_quality=1` for A/low and zero rows for B/high. Its Beta estimate remains `2/3`. All original usage sums also remain unchanged. Splitting this history into three attempts would violate compatibility.
-
-The snapshot copies the old relation directly. New events are empty. Their disjoint union equals the old relation with unchanged nulls and floating-point quality. Signals without usage keep null pairs. Suggestions without signals keep no outcome.
+Proof fixture: S has reports `(t1,A,low,fail,10)`, `(t2,B,high,partial,20)`, `(t3,A,low,pass,30)`. Report times increase. V4 returns `(S,1.0,A,low)`. The unchanged view returns the same row. A/low keeps `n=1, sum_quality=1` and Beta estimate `2/3`. B/high has no learning row. Token sums stay unchanged. Null pairs stay null. Suggestions without signals still have no outcome. Historical retry counts and first-pair costs remain unknown.
 
 ## Review failure cases
 
-R1 and R2 denote the first and second supplied independent reviews. R2 contains five unresolved must-fixes.
+R1 denotes the first review of [#59](https://github.com/lorenzh/spatz/pull/59). R2 denotes its five remaining must-fixes.
 
-| Finding | Design response |
+| Finding | Revised design response |
 | --- | --- |
-| R1.1: same-pair failure disappears and tokens are absent | Persist execution UUIDs and expose attempt token totals. Fail/pass stays two outcomes. |
-| R1.2: same-turn reports collide | Event identity includes execution context. Legacy turn uniqueness cannot delete new reports. |
-| R1.3: delayed Codex signal and usage diverge | One resolver and atomic reconciliation bind both to the originating execution. |
-| R1.4: missing transcript/time credits current suggestion | Known IDs restrict candidates. Unresolved events remain pending. |
-| R1.5: timestamp-less Codex and malformed Claude input go uncounted | Record parse diagnostics, even when exact binding succeeds. Count affected turns by harness/session/agent/turn and reason. Unidentified malformed input counts separately, without invented turn identity. |
-| R1.6: intermediate pairs pay escalation costs | Sum all recovery costs once under `root_id`. |
-| R1.7: README describes suggestion-wide overrides | Implementation must update the quickstart and CLI/hooks references to attempt-local overrides. |
-| R2.1: model-less hooks inherit the latest reported pair | Bind at production or source replay. Never infer from a later report. |
-| R2.2: A→B→A overwrites first A | Three UUIDs and ordinals retain all executions and the first pair. |
-| R2.3: migration splits reports across turns | Exact legacy snapshot and separate writer preserve v4 aggregation. |
-| R2.4: known p1 falls through to p2's window | Candidate restriction is final. Timestamps cannot cross it. |
-| R2.5: delayed usage ignores effort and turn | Preserve measurement identity and pair before summing. Never match by database write time. |
-| R2 note: stale PR schema and test claims | Implementation PR must describe its final schema and actual gate results. |
+| R1.1: same-pair failure disappears; tokens absent | Separate reported retries keep UUIDs and token totals. Internal TDD checks stay within one attempt. |
+| R1.2: same-turn reports collide | Reports belong to attempt slots. Old turn uniqueness does not apply. |
+| R1.3: delayed Codex signals and usage diverge | Shared resolver and atomic reconciliation use the originating turn. |
+| R1.4: missing transcript/time credits current suggestion | Only trustworthy source windows allow fallback. Other events stay pending. |
+| R1.5: malformed or timestamp-less input goes uncounted | Parse diagnostics move to [#39](https://github.com/lorenzh/spatz/issues/39). Known IDs can still bind without time. |
+| R1.6: intermediate pairs pay escalation costs | Charge chain cost once to the root pair. |
+| R1.7: README describes suggestion-wide overrides | Implementation updates README and CLI/hooks references to attempt-local reports. |
+| R2.1: model-less hooks inherit the latest report pair | Bind hooks to execution identity. Fill only that attempt's unknown pair. Mod always registers pair metadata. |
+| R2.2: A→B→A overwrites first A | Three UUIDs/ordinals preserve all outcomes and the first pair. |
+| R2.3: migration splits reports across turns | Unchanged legacy view and frozen legacy writes preserve exact v4 aggregation. |
+| R2.4: known p1 falls through to p2's window | Existing bindings restrict candidates. Only unbound IDs can use a new window. |
+| R2.5: delayed usage ignores effort and turn | Preserve turn/message/step identity and actual effort before sums. Codex snapshots replace rather than add. |
 
-Diagnostics stay local and contain no raw input. Hooks still exit successfully after recording errors. [#39](https://github.com/lorenzh/spatz/issues/39) owns full failure reporting.
+Conflicts log locally without raw input. Hooks still exit successfully. Full parse and failure reporting belongs to #39.
 
-## Test plan and open questions
+## Implementation checks
 
-Write failing fixtures first. Extend both Claude transcripts and both Codex rollout formats. Cover same-pair retries, A→B→A, ordinary skill verification, mod-only recording, and hooks plus mod. Assert attempt IDs, verdicts, learning rows, and all four token totals.
+Write failing fixtures first for both Claude transcript variants and both Codex rollout formats. Cover skill reports, main-session verification, mod-only recording and hooks plus mod. Check:
 
-Permute delayed links, signals, Stop events, reports, and usage revisions. Include missing transcripts/timestamps, p1 timestamps inside p2, backward clocks, partial lines, compaction, and duplicate call mirrors. Check unresolved-to-bound transitions and conflict removal. Exercise 100/200 effort changes and 10/20/70 chain costs.
+- Same-pair retries, `--correct`, A→B→A and a TDD red-to-green loop.
+- Unbound follow-up prompts; known p1 inside p2; delayed links; missing time/transcripts; duplicate snapshots; window repair.
+- Low-effort 100/high-effort 200 usage; mod step attribution; Codex unsplittable totals; root cost 10/20/70; failed and review chains.
+- Stats coverage without duplicated rows, all four token totals, latest `outcome(id)` and the selected report's JSON.
 
-Use real temporary SQLite files with separate processes. Race identical starts, distinct starts, corrections, reconciliation, and migration. Assert unique ordinals, replay stability, atomic signal/usage binding, and rollback after injected failure.
-
-Freeze a populated v4 fixture independently of new migrations. Include the three-report example, equal timestamps, null effort, multiple models, dry runs, usage-only suggestions, and open legacy sessions. Compare complete outcome multisets, `cellStats`, token totals, coverage, adoption, learned/control, and scope statistics before and after migration.
-
-Before implementation, confirm which harness versions expose stable step boundaries and usage revisions. Where they do not, explicit start registration is required. Confirm CLI spelling and whether callers can propagate attempt IDs through verification. These are integration questions. Ambiguous evidence must remain uncredited.
+Use one temporary SQLite race test for ordinal allocation and start replay. Keep transaction rollback checks for combined signal/usage repair. Compare a frozen v4 fixture before and after migration: outcome multisets, learning, tokens, coverage, adoption, learned/control and scope statistics. Include the three-report example, null effort, equal times, dry runs, usage-only suggestions and open legacy sessions.
