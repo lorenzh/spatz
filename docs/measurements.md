@@ -56,7 +56,7 @@ Pass rates use 95% Wilson confidence intervals. Cost per pass divides recorded U
 
 Easy-set pass rates are high for both Claude models. Bench2 shows model and effort effects. On easy tasks, sonnet-5-5/low achieves the best cost per pass ($0.052). On bench2, sonnet-5-5/medium costs $0.131 per pass while achieving 84.4% pass rate.
 
-Codex aggregate pass rates on easy: 85.7% with all tasks, 89.6% excluding m4-shapes. Per-model rates: gpt-6-luna reaches 79.4–86.3% (effort-dependent), gpt-6.1-sol reaches 87.5–88.3%. On bench2, gpt-6.1-sol outperforms gpt-6-luna (93.0–94.6% vs 37.5–75.0%).
+Codex aggregate pass rates on easy: 85.7% with all tasks, 89.6% excluding one task with a known hidden-test defect. Per-model rates: gpt-6-luna reaches 79.4–86.3% (effort-dependent), gpt-6.1-sol reaches 87.5–88.3%. On bench2, gpt-6.1-sol outperforms gpt-6-luna (93.0–94.6% vs 37.5–75.0%).
 
 ### Cost efficiency within easy difficulty
 
@@ -182,7 +182,7 @@ These are analytic plug-in estimates pooling both model families, not measured c
 
 3. **Mod swaps pinned models.** If a mod pin is active, the actual model differs from the recorded model.
 
-4. **Task descriptions can reject correct solutions.** The m4-shapes task's hidden test uses case-sensitive `/unknown/` matching, rejecting valid solutions. This confirmed defect explains its 0% Codex pass rate and 43.3% Claude rate on easy. H6-tokenbucket shows 40% Claude pass rate on easy; its cause is not confirmed by the audit.
+4. **Two easy-set tasks have prompt-test mismatches.** The hidden tests checked stated-behavior requirements that the prompt did not disclose: one task required exact error-message wording; another required input-format edge-case handling. These defects caused 0% Codex pass and 43% Claude pass on one task; the other shows similar low pass rates across models. These are confirmed defects; one bench2 task also has a prompt-test mismatch on whitespace and type handling, causing unusual pass-rate variance.
 
 ## Limits
 
