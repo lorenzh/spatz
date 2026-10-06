@@ -47,7 +47,8 @@
 
 ## Working on an Issue
 - Branch as `<prefix>/<issue>-<slug>` (e.g. `feat/42-store-cache`) and put `Closes #<issue>` in the PR body.
-- The "spatz dev board" Status then updates itself (`.github/workflows/board-status.yml`); do not set it by hand.
+- The "spatz dev board" Status then updates itself (`.github/workflows/board-status.yml`); do not set it by hand while that works.
+- If the workflow cannot run (no `BOARD_TOKEN` secret, fork PR, actor without write access), run the managing-spatz-projects board-sync instead.
 
 ## External References
 | Need | File |
