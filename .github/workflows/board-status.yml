@@ -14,6 +14,13 @@
 # Needs the BOARD_TOKEN secret: a fine-grained PAT for this repository only, with
 # Projects read/write on the user account and Issues + Pull requests read on this repo.
 # Without it, the job exits 0.
+#
+# Known limits (the managing-spatz-projects board-sync corrects all of them):
+# - Fork PRs are not updated automatically.
+# - Concurrent events on different branches can race; the last write wins.
+# - The 10-target cap applies the first 10 linked issues and lists the rest.
+# - Cross-repo refs need a token that can read the other repo; otherwise they are skipped with a warning.
+# - Issue reopened sets Ready even with open blockers.
 name: Board status
 
 on:
@@ -61,10 +68,14 @@ jobs:
               return;
             }
             const actor = pr ? pr.user.login : p.sender.login;
-            const perm = await github.rest.repos
-              .getCollaboratorPermissionLevel({ owner, repo, username: actor })
-              .then((r) => r.data, () => null);
-            if (![perm?.role_name, perm?.permission].some((r) => WRITERS.includes(r))) {
+            let perm;
+            try {
+              perm = (await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: actor })).data;
+            } catch (e) {
+              core.setFailed(`Permission check for ${actor} failed: ${e.message}`);
+              return;
+            }
+            if (![perm.role_name, perm.permission].some((r) => WRITERS.includes(r))) {
               core.notice(`${actor} has no write access here; board status not updated.`);
               return;
             }
@@ -94,10 +105,18 @@ jobs:
 
             async function getIssue(full, n) {
               const [o, r] = full.split('/');
-              const res = await board(
-                `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...I}}} ${ISSUE}`,
-                { o, r, n },
-              );
+              let res;
+              try {
+                res = await board(
+                  `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...I}}} ${ISSUE}`,
+                  { o, r, n },
+                );
+              } catch (e) {
+                // Missing or unreadable (e.g. another repo the token cannot see): skip, not fail.
+                if (!e.errors?.length || !e.errors.every((x) => x.type === 'NOT_FOUND')) throw e;
+                core.warning(`${full}#${n} not found or not readable; skipped.`);
+                return null;
+              }
               const node = res.repository?.issueOrPullRequest;
               return node?.__typename === 'Issue' ? node : null;
             }
@@ -194,7 +213,7 @@ jobs:
               if (n) targets = [{ full: here, n }];
             } else {
               const res = await board(
-                `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){id state isDraft}}}`,
+                `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){id state isDraft body}}}`,
                 { o: owner, r: repo, n: pr.number },
               );
               cur = res.repository.pullRequest;
@@ -205,8 +224,9 @@ jobs:
                 (x) => x.repository.pullRequest.closingIssuesReferences,
               );
               targets = closing.map((issue) => ({ issue }));
-              // Body refs cover stacked PRs, whose closing references stay empty. Code is skipped.
-              const body = (pr.body ?? '').replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+              // Body refs cover stacked PRs, whose closing references stay empty. Read the current
+              // body, not the event's; fenced and inline code is skipped.
+              const body = (cur.body ?? '').replace(/(```|~~~)[\s\S]*?\1/g, '').replace(/`[^`\n]*`/g, '');
               const keyword = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+([\w.-]+\/[\w.-]+)?#(\d+)\b/gi;
               for (const [, full, n] of body.matchAll(keyword)) {
                 if (num(n)) targets.push({ full: full ?? here, n: num(n) });
@@ -222,7 +242,6 @@ jobs:
             }
 
             const errors = [];
-            let ok = 0;
             for (const t of targets) {
               try {
                 const issue = t.issue ?? (await getIssue(t.full, t.n));
@@ -235,10 +254,9 @@ jobs:
                   if (status) await setStatus(issue, status);
                   else core.info(`${key(t)} changed since the event; skipped.`);
                 }
-                ok++;
               } catch (e) {
                 errors.push(`${key(t)}: ${e.message}`);
                 core.warning(`${key(t)}: ${e.message}`);
               }
             }
-            if (errors.length && !ok) core.setFailed(`No issue updated: ${errors.join('; ')}`);
+            if (errors.length) core.setFailed(`Board status failed for ${errors.join('; ')}`);
