@@ -938,6 +938,17 @@ test("Codex environment link and fallback import persist the same run", async ()
 });
 
 test("concurrent hook processes allocate attempts, replay starts, and retain late signals and usage", async () => {
+	const grown = new Database(dbPath);
+	try {
+		grown.run(
+			`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<22000)
+   INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at)
+   SELECT 'claude-code','grown-' || i,'','pending',0,'pending','test','hook',? FROM n`,
+			[Date.now()],
+		);
+	} finally {
+		grown.close();
+	}
 	const suggested = await spatz([
 		TASK,
 		"--models",

@@ -158,7 +158,7 @@ export function attemptStore(
 	const chain = (root: string) => {
 		const success = db
 			.query<{ at: number }, [string]>(
-				"SELECT MIN(a.finalized_at) AS at FROM attempts a JOIN attempt_quality q ON q.attempt_id=a.id JOIN attempts r ON r.id=a.root_id WHERE a.root_id=? AND a.finalized_at IS NOT NULL AND q.quality>=r.success_quality",
+				"SELECT MIN(a.finalized_at) AS at FROM attempts a JOIN attempts r ON r.id=a.root_id WHERE a.root_id=? AND a.finalized_at IS NOT NULL AND (SELECT quality FROM attempt_quality WHERE attempt_id=a.id)>=r.success_quality",
 			)
 			.get(root);
 		const failed = db
@@ -193,7 +193,7 @@ export function attemptStore(
 			...tokens,
 		};
 	};
-	const resolve = (e: Row, idle: number) => {
+	const resolve = (e: Row, idle: number, roots: Set<string>) => {
 		if (
 			e.requested_suggestion_id &&
 			store().getSuggestion(e.requested_suggestion_id)?.is_legacy
@@ -575,16 +575,37 @@ export function attemptStore(
 						exact ? 0 : 1,
 					);
 		}
-		if (target) chain(target.root_id);
+		if (suggestion && e.occurred_at != null)
+			db.query(
+				"UPDATE suggestions SET last_event_at=MAX(last_event_at,?) WHERE id=?",
+			).run(e.occurred_at, suggestion);
+		if (e.attempt_id) {
+			const old = get(e.attempt_id);
+			if (old) roots.add(old.root_id);
+		}
+		if (target) roots.add(target.root_id);
 	};
-	const reconcile = (idle: number) => {
-		db.query("DELETE FROM attempt_bindings WHERE provisional=1").run();
+	const reconcile = (
+		c: AttemptContext,
+		idle: number,
+		roots: Set<string>,
+		pendingOnly = false,
+	) => {
+		if (!pendingOnly)
+			db.query(
+				"DELETE FROM attempt_bindings WHERE harness=? AND session_key=? AND agent_key=? AND provisional=1",
+			).run(c.harness, c.session_key, c.agent_key);
 		const events = db
-			.query<Row, []>(
-				"SELECT * FROM latest_attempt_events WHERE binding<>'bound' ORDER BY CASE WHEN kind='delegate' THEN 0 ELSE 1 END,occurred_at,source_seq,event_id",
+			.query<Row, [string, string, string]>(
+				`SELECT * FROM latest_attempt_events WHERE harness=? AND session_key=? AND agent_key=? AND ${pendingOnly ? "binding='pending'" : "binding<>'bound'"} ORDER BY CASE WHEN kind='delegate' THEN 0 ELSE 1 END,occurred_at,source_seq,event_id`,
 			)
-			.all();
-		for (const e of events) resolve(e, idle);
+			.all(c.harness, c.session_key, c.agent_key);
+		for (const e of events) resolve(e, idle, roots);
+	};
+	const repair = (c: AttemptContext, idle: number) => {
+		const roots = new Set<string>();
+		reconcile(c, idle, roots);
+		for (const root of roots) chain(root);
 	};
 	const api: ReturnType<typeof attemptStore> = {
 		initialize(id, retryOf) {
@@ -647,10 +668,12 @@ export function attemptStore(
 					id_kind: "turn",
 					external_id: s.turn_id,
 				});
-			reconcile(DEFAULT_TUNING.openWindowMs);
+			repair(c, DEFAULT_TUNING.openWindowMs);
 			for (const { root_id } of db
-				.query<{ root_id: string }, []>("SELECT DISTINCT root_id FROM attempts")
-				.all())
+				.query<{ root_id: string }, [string | null, string | null, string]>(
+					"SELECT DISTINCT a.root_id FROM attempts a JOIN suggestions s ON s.id=a.suggestion_id WHERE s.session_id=? AND s.agent_id IS ? AND a.harness=?",
+				)
+				.all(s.session_id, s.agent_id, c.harness))
 				chain(root_id);
 		},
 		startAttempt(input) {
@@ -737,7 +760,7 @@ export function attemptStore(
 						db.query(
 							"UPDATE dispatches SET attempt_id=COALESCE(attempt_id,?) WHERE session_id=? AND agent_id=?",
 						).run(a!.id, input.session_key, input.agent_key);
-					reconcile(DEFAULT_TUNING.openWindowMs);
+					repair(input, DEFAULT_TUNING.openWindowMs);
 					return get(a!.id)!;
 				})
 				.immediate();
@@ -745,11 +768,20 @@ export function attemptStore(
 		bindAttempt(input) {
 			db.transaction(() => {
 				alias(input);
-				reconcile(DEFAULT_TUNING.openWindowMs);
+				repair(input, DEFAULT_TUNING.openWindowMs);
 			}).immediate();
 		},
 		recordAttemptEvents(events, idle = DEFAULT_TUNING.openWindowMs) {
 			db.transaction(() => {
+				const roots = new Set<string>();
+				const contexts = new Map<string, AttemptContext>();
+				const delegates = new Map<string, AttemptEvent>();
+				// ponytail: prune 256 event identities per batch, including their revisions; use maintenance for a historic backlog.
+				const received = Math.max(...events.map((e) => e.received_at));
+				if (Number.isFinite(received))
+					db.query(
+						"DELETE FROM attempt_events WHERE (harness,session_key,agent_key,event_id) IN (SELECT harness,session_key,agent_key,event_id FROM latest_attempt_events WHERE binding='pending' AND received_at<? ORDER BY received_at LIMIT 256)",
+					).run(received - idle);
 				for (let input of [...events].sort(
 					(a, b) =>
 						Number(b.kind === "delegate") - Number(a.kind === "delegate"),
@@ -850,6 +882,8 @@ export function attemptStore(
 						source_seq: input.source_seq ?? null,
 						occurred_at: input.occurred_at ?? null,
 						received_at: input.received_at,
+						rounds: input.rounds ?? null,
+						note: input.note ?? null,
 						model: input.model ?? null,
 						effort: input.effort ?? null,
 						kind: input.kind,
@@ -872,6 +906,16 @@ export function attemptStore(
 						requested_attempt_id: input.attempt_id ?? null,
 						requested_suggestion_id: input.suggestion_id ?? null,
 					};
+					if (input.kind === "delegate")
+						delegates.set(
+							JSON.stringify([
+								input.harness,
+								input.session_key,
+								input.agent_key,
+								input.call_id,
+							]),
+							input,
+						);
 					const previous = db
 						.query<
 							Record<string, string | number | null>,
@@ -921,16 +965,45 @@ export function attemptStore(
 							input.agent_key,
 							input.event_id,
 						);
-					if (newest?.revision === input.revision)
-						resolve(e as unknown as Row, idle);
+					if (newest?.revision === input.revision) {
+						resolve(e as unknown as Row, idle, roots);
+						contexts.set(
+							JSON.stringify([
+								input.harness,
+								input.session_key,
+								input.agent_key,
+							]),
+							input,
+						);
+					}
 				}
-				reconcile(idle);
+				for (const input of delegates.values()) {
+					reconcile(input, idle, roots);
+					const child = db
+						.query<{ agent_id: string }, [string, string]>(
+							"SELECT agent_id FROM dispatches WHERE session_id=? AND tool_use_id=?",
+						)
+						.get(input.session_key, input.call_id ?? "");
+					if (child)
+						reconcile({ ...input, agent_key: child.agent_id }, idle, roots);
+				}
+				for (const c of contexts.values()) reconcile(c, idle, roots, true);
+				for (const root of roots) chain(root);
 			}).immediate();
 		},
-		reconcileAttempts(idle = DEFAULT_TUNING.openWindowMs) {
-			db.transaction(() => reconcile(idle)).immediate();
+		reconcileAttempts(c, idle = DEFAULT_TUNING.openWindowMs) {
+			db.transaction(() => repair(c, idle)).immediate();
 		},
 		reportAttempt(input) {
+			if (input.confirm && !input.attempt_id)
+				throw new Error("--confirm requires --attempt");
+			if (input.confirm && input.correct)
+				throw new Error("--confirm cannot be combined with --correct");
+			if (
+				input.rounds != null &&
+				(!Number.isSafeInteger(input.rounds) || input.rounds < 0)
+			)
+				throw new Error("rounds must be a non-negative safe integer");
 			if (
 				!Object.hasOwn(REPORT_VALUES, input.result) ||
 				!Number.isSafeInteger(input.at) ||
@@ -964,7 +1037,19 @@ export function attemptStore(
 						: null;
 					if (input.correct && !report)
 						throw new Error("--correct requires a prior report");
-					if (report && report.value === REPORT_VALUES[input.result])
+					if (
+						input.confirm &&
+						report &&
+						report.value !== REPORT_VALUES[input.result]
+					)
+						throw new Error(
+							"--confirm cannot change a prior verdict; use --correct",
+						);
+					if (
+						!input.correct &&
+						report &&
+						report.value === REPORT_VALUES[input.result]
+					)
 						return outcome(a!);
 					if (!a || (report && !input.correct))
 						a = add(
@@ -981,6 +1066,13 @@ export function attemptStore(
 							"SELECT harness,session_key,agent_key FROM attempts WHERE id=?",
 						)
 						.get(a!.id)!;
+					if (input.turn_id)
+						alias({
+							...c,
+							attempt_id: a!.id,
+							id_kind: "turn",
+							external_id: input.turn_id,
+						});
 					api.recordAttemptEvents([
 						{
 							...c,
@@ -990,6 +1082,9 @@ export function attemptStore(
 							suggestion_id: input.suggestion_id,
 							kind: "report",
 							source: "report",
+							rounds: input.rounds,
+							note: input.note,
+							turn_id: input.turn_id,
 							model: input.model,
 							effort: input.effort,
 							value: REPORT_VALUES[input.result],

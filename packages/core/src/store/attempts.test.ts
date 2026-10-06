@@ -62,8 +62,8 @@ test("same-pair retries preserve failure, correction and replay preserve the slo
 	const second = store.reportAttempt({ ...report, result: "pass" });
 	expect(second.ordinal).toBe(2);
 	expect(store.cellStats("code.bugfix")[0]).toMatchObject({
-		n: 2,
-		sum_quality: 1,
+		n: 1,
+		sum_quality: 0,
 	});
 	expect(
 		store.reportAttempt({ ...report, result: "partial", correct: true })
@@ -665,6 +665,330 @@ test("known turn source order splits A B A without timestamps", () => {
 		model: "m/a",
 		quality: 1,
 	});
-	expect(store.cellStats("code.bugfix").reduce((n, r) => n + r.n, 0)).toBe(3);
+	expect(store.cellStats("code.bugfix").reduce((n, r) => n + r.n, 0)).toBe(1);
 	store.dispose();
+});
+
+test("source activity extends the idle window without using receipt time", () => {
+	const store = openStore(":memory:");
+	store.insertSuggestion(
+		suggestion({ session_id: "session", prompt_id: "p1" }),
+	);
+	const minute = 60_000;
+	const base = {
+		...context,
+		revision: 0,
+		model: "m/a",
+		effort: "low" as const,
+		received_at: 1000 + 500 * minute,
+	};
+	store.recordAttemptEvents([
+		{
+			...base,
+			event_id: "p1-check",
+			prompt_id: "p1",
+			kind: "test",
+			value: 1,
+			occurred_at: 1000 + 90 * minute,
+		},
+	]);
+	store.finalizeAttempts(context, 1000 + 90 * minute);
+	store.recordAttemptEvents([
+		{
+			...base,
+			event_id: "p2-check",
+			prompt_id: "p2",
+			kind: "test",
+			value: 0,
+			occurred_at: 1000 + 150 * minute,
+		},
+		{
+			...base,
+			event_id: "p2-usage",
+			prompt_id: "p2",
+			kind: "usage",
+			output_tokens: 20,
+			occurred_at: 1000 + 151 * minute,
+		},
+	]);
+	expect(store.outcome("s1")).toMatchObject({
+		quality: 0,
+		output_tokens: 20,
+		ordinal: 1,
+	});
+	expect(store.getSuggestion("s1")?.last_event_at).toBe(1000 + 151 * minute);
+	store.recordAttemptEvents([
+		{
+			...base,
+			event_id: "old",
+			prompt_id: "p1",
+			kind: "usage",
+			occurred_at: 1000 + 80 * minute,
+		},
+	]);
+	expect(store.getSuggestion("s1")?.last_event_at).toBe(1000 + 151 * minute);
+	store.dispose();
+});
+
+test("hook writes and lifecycle repairs are bounded by context, not ledger size", () => {
+	const dir = mkdtempSync(join(tmpdir(), "spatz-work-"));
+	const path = join(dir, "db");
+	const store = openStore(path);
+	const db = new Database(path);
+	try {
+		store.insertSuggestion(suggestion({ session_id: "session" }));
+		for (let i = 0; i < 20; i++)
+			store.insertSuggestion(
+				suggestion({ id: `other-${i}`, session_id: `other-${i}` }),
+			);
+		db.run(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<22000)
+   INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at)
+   SELECT 'claude-code','unrelated-' || i,'','pending',0,'pending','test','hook',1000 FROM n`);
+		db.run(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000)
+   INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at,occurred_at,suggestion_id,attempt_id)
+   SELECT 'claude-code','session','','window-' || i,0,'window','usage','hook',1000,1001,'s1',(SELECT id FROM attempts WHERE suggestion_id='s1') FROM n`);
+		db.run("CREATE TABLE touched(session_key TEXT)");
+		db.run(
+			"CREATE TRIGGER watch_events AFTER UPDATE ON attempt_events BEGIN INSERT INTO touched VALUES(new.session_key); END",
+		);
+		db.run("CREATE TABLE touched_roots(id TEXT)");
+		db.run(
+			"CREATE TRIGGER watch_roots AFTER UPDATE OF chain_closed_at ON attempts WHEN new.suggestion_id<>'s1' BEGIN INSERT INTO touched_roots VALUES(new.id); END",
+		);
+		const started = performance.now();
+		store.recordAttemptEvents([
+			{
+				...context,
+				event_id: "new",
+				revision: 0,
+				kind: "test",
+				value: 1,
+				occurred_at: 1100,
+				received_at: 1200,
+			},
+		]);
+		expect(db.query("SELECT COUNT(*) AS n FROM touched").get()).toEqual({
+			n: 1,
+		});
+		expect(performance.now() - started).toBeLessThan(500);
+		store.linkSession("s1", "session", "p1", 1000);
+		const a = store.startAttempt({
+			...context,
+			suggestion_id: "s1",
+			key: "run",
+			model: "m/a",
+			effort: "low",
+			at: 1100,
+		});
+		store.bindAttempt({
+			...context,
+			attempt_id: a.id,
+			id_kind: "call",
+			external_id: "call",
+		});
+		expect(
+			db
+				.query("SELECT COUNT(*) AS n FROM touched WHERE session_key<>'session'")
+				.get(),
+		).toEqual({ n: 0 });
+		expect(db.query("SELECT COUNT(*) AS n FROM touched_roots").get()).toEqual({
+			n: 0,
+		});
+		store.recordAttemptEvents([
+			{
+				...context,
+				event_id: "cleanup",
+				revision: 0,
+				kind: "test",
+				received_at: 7202000,
+			},
+		]);
+		expect(
+			db
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_events WHERE binding='pending' AND session_key LIKE 'unrelated-%'",
+				)
+				.get(),
+		).toEqual({ n: 22000 - 256 });
+	} finally {
+		db.close();
+		store.dispose();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("report events retain rounds, note and source turn across corrections", () => {
+	const dir = mkdtempSync(join(tmpdir(), "spatz-report-"));
+	const path = join(dir, "db");
+	const store = openStore(path);
+	const db = new Database(path);
+	try {
+		store.insertSuggestion(suggestion());
+		const input = {
+			suggestion_id: "s1",
+			model: "m/a",
+			effort: "low" as const,
+			result: "fail" as const,
+			at: 2000,
+			rounds: 2,
+			note: "second try",
+			turn_id: "turn",
+		};
+		store.reportAttempt(input);
+		expect(
+			db
+				.query(
+					"SELECT rounds,note,turn_id FROM latest_attempt_events WHERE kind='report'",
+				)
+				.get(),
+		).toEqual({ rounds: 2, note: "second try", turn_id: "turn" });
+		store.reportAttempt({
+			...input,
+			correct: true,
+			result: "pass",
+			rounds: 3,
+			note: "fixed",
+			at: 3000,
+		});
+		expect(
+			db
+				.query(
+					"SELECT rounds,note,turn_id FROM latest_attempt_events WHERE kind='report'",
+				)
+				.get(),
+		).toEqual({ rounds: 3, note: "fixed", turn_id: "turn" });
+		const retry = store.reportAttempt({ ...input, result: "fail", at: 4000 });
+		expect(retry).toMatchObject({ ordinal: 2, quality: 0 });
+		expect(
+			db
+				.query(
+					"SELECT rounds,note,turn_id FROM latest_attempt_events WHERE attempt_id=? AND kind='report'",
+				)
+				.get(retry.attempt_id!),
+		).toEqual({ rounds: 2, note: "second try", turn_id: "turn" });
+
+		expect(() => store.reportAttempt({ ...input, rounds: -1 })).toThrow();
+	} finally {
+		db.close();
+		store.dispose();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("confirm requires an existing attempt and cannot create a retry or change a prior verdict", () => {
+	const store = openStore(":memory:");
+	store.insertSuggestion(suggestion());
+	const input = {
+		suggestion_id: "s1",
+		model: "m/a",
+		effort: "low" as const,
+		result: "pass" as const,
+		at: 2000,
+		confirm: true,
+	};
+	expect(() => store.reportAttempt(input)).toThrow(/--attempt/);
+	const attempt_id = store.outcome("s1")!.attempt_id!;
+	expect(store.reportAttempt({ ...input, attempt_id })).toMatchObject({
+		attempt_id,
+		quality: 1,
+		ordinal: 1,
+	});
+	expect(store.reportAttempt({ ...input, attempt_id })).toMatchObject({
+		attempt_id,
+		ordinal: 1,
+	});
+	expect(() =>
+		store.reportAttempt({ ...input, attempt_id, result: "fail" }),
+	).toThrow(/--correct/);
+	expect(() =>
+		store.reportAttempt({ ...input, attempt_id, correct: true }),
+	).toThrow(/--correct/);
+	expect(store.outcome("s1")).toMatchObject({ ordinal: 1, quality: 1 });
+	store.dispose();
+});
+
+test("a late dispatch repairs its child's pending usage when the delegate event replays", () => {
+	const store = openStore(":memory:");
+	store.insertSuggestion(suggestion({ session_id: "session", prompt_id: "p" }));
+	const event = {
+		...context,
+		event_id: "delegate",
+		revision: 0,
+		prompt_id: "p",
+		call_id: "call",
+		kind: "delegate" as const,
+		occurred_at: 1100,
+		received_at: 1200,
+	};
+	store.recordAttemptEvents([event]);
+	store.recordAttemptEvents([
+		{
+			...context,
+			agent_key: "worker",
+			event_id: "usage",
+			revision: 0,
+			kind: "usage",
+			model: "m/worker",
+			occurred_at: 1200,
+			received_at: 1300,
+			output_tokens: 20,
+		},
+	]);
+	store.upsertDispatch({
+		session_id: "session",
+		agent_id: "worker",
+		tool_use_id: "call",
+		requested_model: "m/worker",
+		answered_model: "m/worker",
+		requested_agent_type: "worker",
+		suggestion_id: null,
+	});
+	store.recordAttemptEvents([event]);
+	expect(store.outcome("s1")).toMatchObject({
+		model: "m/worker",
+		output_tokens: 20,
+	});
+	store.dispose();
+});
+
+test("expired pending revisions are pruned with their history without restoring old credit", () => {
+	const dir = mkdtempSync(join(tmpdir(), "spatz-expiry-"));
+	const path = join(dir, "db");
+	const store = openStore(path);
+	const db = new Database(path);
+	try {
+		store.insertSuggestion(suggestion({ session_id: "session" }));
+		const input = {
+			...context,
+			event_id: "revision",
+			kind: "test" as const,
+			value: 1,
+			received_at: 1200,
+		};
+		store.recordAttemptEvents([{ ...input, revision: 0, occurred_at: 1100 }]);
+		expect(store.outcome("s1")?.quality).toBe(1);
+		store.recordAttemptEvents([{ ...input, revision: 1 }]);
+		expect(store.outcome("s1")?.quality).toBeNull();
+		store.recordAttemptEvents([
+			{
+				...context,
+				event_id: "cleanup",
+				revision: 0,
+				kind: "usage",
+				received_at: 7202000,
+			},
+		]);
+		expect(store.outcome("s1")?.quality).toBeNull();
+		expect(
+			db
+				.query(
+					"SELECT COUNT(*) AS n FROM attempt_events WHERE event_id='revision'",
+				)
+				.get(),
+		).toEqual({ n: 0 });
+	} finally {
+		db.close();
+		store.dispose();
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

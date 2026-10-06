@@ -209,6 +209,21 @@ const SCHEMA_V8 = [
 	`CREATE VIEW outcomes AS SELECT suggestion_id,quality,model,effort FROM legacy_outcomes UNION ALL SELECT suggestion_id,quality,model,effort FROM attempt_outcomes`,
 ];
 
+const SCHEMA_V9 = [
+	"ALTER TABLE attempt_events ADD COLUMN rounds INTEGER CHECK(rounds >= 0)",
+	"ALTER TABLE attempt_events ADD COLUMN note TEXT",
+	"CREATE INDEX attempts_context ON attempts(harness,session_key,agent_key)",
+	"CREATE INDEX attempts_root ON attempts(root_id)",
+	"CREATE INDEX events_attempt ON attempt_events(attempt_id,kind)",
+	"CREATE INDEX events_suggestion ON attempt_events(suggestion_id,kind)",
+	"CREATE INDEX events_context_binding ON attempt_events(harness,session_key,agent_key,binding)",
+	"CREATE INDEX events_pending_expiry ON attempt_events(received_at) WHERE binding='pending'",
+	// A window function here prevents attempt/suggestion filters from reaching the event indexes.
+	"DROP VIEW latest_attempt_events",
+	`CREATE VIEW latest_attempt_events AS SELECT e.*,1 AS event_rank FROM attempt_events e
+ WHERE revision=(SELECT MAX(n.revision) FROM attempt_events n WHERE n.harness=e.harness AND n.session_key=e.session_key AND n.agent_key=e.agent_key AND n.event_id=e.event_id)`,
+];
+
 const MIGRATIONS = [
 	SCHEMA_V1,
 	SCHEMA_V2,
@@ -218,6 +233,7 @@ const MIGRATIONS = [
 	SCHEMA_V6,
 	SCHEMA_V7,
 	SCHEMA_V8,
+	SCHEMA_V9,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -314,6 +330,22 @@ export function openStore(
 ): Store {
 	const db = openDatabase(dbPath);
 	const noneOnly = new Set(noneOnlyModels);
+	const historyStats = (taskType: CellStat["task_type"], retries: boolean) =>
+		db
+			.query<CellStat, string[]>(
+				`WITH history AS (
+					SELECT suggestion_id,quality,model,effort FROM attempt_outcomes
+					WHERE ${retries ? "ordinal>1 OR attempt_id<>root_id" : "ordinal=1 AND attempt_id=root_id"}
+					${retries ? "" : "UNION ALL SELECT suggestion_id,quality,model,effort FROM legacy_outcomes"}
+				), normalized AS (
+					SELECT *, CASE WHEN model IN (${noneOnlyModels.map(() => "?").join()}) THEN 'none' ELSE effort END AS known_effort FROM history
+				)
+				SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
+				FROM suggestions s JOIN normalized o ON o.suggestion_id = s.id
+				WHERE s.task_type = ? AND s.is_test = 0 AND o.quality IS NOT NULL AND o.model IS NOT NULL AND o.known_effort IS NOT NULL
+				GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.known_effort`,
+			)
+			.all(...noneOnlyModels, taskType);
 	// Legacy agents share the main sequence until they have an explicit link.
 	const windowAgent = (session: string, agent: string | null) =>
 		agent !== null &&
@@ -407,18 +439,10 @@ export function openStore(
 			};
 		},
 		cellStats(taskType) {
-			// Old rows keep their stored effort; for catalog-confirmed none-only models any effort counts as none.
-			return db
-				.query<CellStat, string[]>(
-					`WITH normalized AS (
-						SELECT *, CASE WHEN model IN (${noneOnlyModels.map(() => "?").join()}) THEN 'none' ELSE effort END AS known_effort FROM outcomes
-					)
-					SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
-					FROM suggestions s JOIN normalized o ON o.suggestion_id = s.id
-					WHERE s.task_type = ? AND s.is_test = 0 AND o.quality IS NOT NULL AND o.model IS NOT NULL AND o.known_effort IS NOT NULL
-					GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.known_effort`,
-				)
-				.all(...noneOnlyModels, taskType);
+			return historyStats(taskType, false);
+		},
+		retryStats(taskType) {
+			return historyStats(taskType, true);
 		},
 		linkSession(id, sessionId, promptId, at, agentId, harness) {
 			if (store.getSuggestion(id)?.is_legacy) {

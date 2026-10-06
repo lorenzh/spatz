@@ -109,8 +109,10 @@ export interface Store extends AttemptStore {
 		},
 	): void;
 	getSuggestion(id: string): SuggestionRecord | null;
-	/** Non-test outcomes with a used pair, grouped by (task_type, difficulty, model, effort), for one task_type (all difficulties). */
+	/** First attempts of root suggestions plus legacy/eval outcomes, grouped by cell and actual pair. Non-test only. */
 	cellStats(taskType: TaskType): CellStat[];
+	/** Later attempts and --retry-of chain members, grouped by cell and actual pair. Non-test only. */
+	retryStats(taskType: TaskType): CellStat[];
 	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */
 	linkSession(
 		suggestionId: string,
@@ -227,6 +229,7 @@ export interface SuggestInput {
 export interface ReportInput {
 	attempt?: string;
 	correct?: boolean;
+	confirm?: boolean;
 	suggestionId: string;
 	model: string;
 	effort: string;

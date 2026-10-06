@@ -393,6 +393,10 @@ describe("report", () => {
 					at: T0 + 1000,
 					attempt_id: undefined,
 					correct: undefined,
+					confirm: undefined,
+					rounds: 2,
+					note: "needed a second try",
+					turn_id: undefined,
 				},
 			],
 		]);
@@ -1069,6 +1073,8 @@ describe("direct mod attribution", () => {
 			result: "pass" as const,
 			source: "claude-code-mod" as const,
 			turn: "t1",
+			rounds: 2,
+			note: "direct note",
 		};
 		await s.api.report(input);
 		await s.api.report(input);
@@ -1076,6 +1082,16 @@ describe("direct mod attribution", () => {
 		await s.api.report({ ...input, turn: "t2", result: "fail" });
 		const db = new Database(dbPath);
 		try {
+			expect(
+				db
+					.query(
+						"SELECT rounds,note,turn_id FROM latest_attempt_events WHERE kind='report' ORDER BY turn_id",
+					)
+					.all(),
+			).toEqual([
+				{ rounds: 2, note: "direct note", turn_id: "t1" },
+				{ rounds: 2, note: "direct note", turn_id: "t2" },
+			]);
 			expect(
 				db
 					.query(

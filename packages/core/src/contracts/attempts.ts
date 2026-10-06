@@ -45,6 +45,8 @@ export interface AttemptEvent extends AttemptContext {
 	source_seq?: number | null;
 	occurred_at?: number | null;
 	received_at: number;
+	rounds?: number | null;
+	note?: string | null;
 	model?: string | null;
 	effort?: Effort | null;
 	kind: "report" | "test" | "build" | "usage" | "delegate";
@@ -70,12 +72,16 @@ export interface AttemptReport {
 	at: number;
 	attempt_id?: string;
 	correct?: boolean;
+	confirm?: boolean;
+	rounds?: number;
+	note?: string;
+	turn_id?: string;
 }
 export interface AttemptStore {
 	startAttempt(input: AttemptStart): AttemptRecord;
 	bindAttempt(input: AttemptBinding): void;
 	recordAttemptEvents(events: AttemptEvent[], openWindowMs?: number): void;
-	reconcileAttempts(openWindowMs?: number): void;
+	reconcileAttempts(context: AttemptContext, openWindowMs?: number): void;
 	reportAttempt(input: AttemptReport): Outcome;
 	finalizeAttempts(
 		context: AttemptContext,

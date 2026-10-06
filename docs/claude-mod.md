@@ -159,6 +159,8 @@ The mod's start bindings mark which sessions and agents it owns for usage.
 Hooks still record test/build signals. They skip usage owned by the mod.
 This rule also applies to manual hooks.
 The mod links `tool.call` IDs to hook `tool_use_id` values.
+The tool starts without waiting for this link to finish.
+If a link arrives after the tool result, the ledger reconciles hook events.
 Agent identity joins through `agentId` and `agent_id`.
 Mod `turnId` and hook `prompt_id` are different UUIDs.
 

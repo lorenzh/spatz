@@ -17,11 +17,11 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 		try {
 			previous.run(
 				await Bun.file(
-					join(import.meta.dir, `../store/fixtures/v${SCHEMA_VERSION - 1}.sql`),
+					join(import.meta.dir, "../store/fixtures/v7.sql"),
 				).text(),
 			);
 			expect(previous.query("PRAGMA user_version").get()).toEqual({
-				user_version: SCHEMA_VERSION - 1,
+				user_version: 7,
 			});
 			expect(
 				previous.query("SELECT * FROM outcomes ORDER BY suggestion_id").all(),

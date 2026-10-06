@@ -310,7 +310,7 @@ export function createApi(
 								store.getSuggestion(id)?.created_at ?? now,
 								input.agent_id,
 							);
-							store.reconcileAttempts(cfg.tuning.openWindowMs);
+							store.reconcileAttempts(context, cfg.tuning.openWindowMs);
 						}
 					} else {
 						const signal = signalFromBashEvent(input, "", now);
@@ -503,7 +503,14 @@ export function createApi(
 								id_kind: "turn",
 								external_id: input.turn_id,
 							});
-						store.reconcileAttempts(cfg.tuning.openWindowMs);
+						store.reconcileAttempts(
+							{
+								harness: "codex",
+								session_key: input.session_id,
+								agent_key: "",
+							},
+							cfg.tuning.openWindowMs,
+						);
 					}
 				}
 			}
@@ -890,6 +897,9 @@ export function createApi(
 			turn,
 			attempt,
 			correct,
+			confirm,
+			rounds,
+			note,
 		}) {
 			if (source !== undefined && source !== "claude-code-mod")
 				throw new Error("invalid report source");
@@ -918,6 +928,10 @@ export function createApi(
 					at: deps.clock.now(),
 					attempt_id: attempt,
 					correct,
+					confirm,
+					rounds,
+					note,
+					turn_id: turn,
 				});
 			});
 		},

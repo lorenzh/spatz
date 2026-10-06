@@ -25,6 +25,7 @@ function session(
 		suggestion?: (n: number) => Out | Promise<Out>;
 		plugins?: Out;
 		link?: Out;
+		bind?: () => Out | Promise<Out>;
 		sessionIdThrows?: boolean;
 	} = {},
 ) {
@@ -57,6 +58,8 @@ function session(
 				if (argv[0] === "claude")
 					return over.plugins ?? { exitCode: 0, stdout: "[]", stderr: "" };
 				const args = argv[0] === "sh" ? argv.slice(2) : argv.slice(1);
+				if (args[0] === "attempt" && args[1] === "bind" && over.bind)
+					return over.bind();
 				if (args[0] === "attempt")
 					return {
 						exitCode: 0,
@@ -202,6 +205,7 @@ function session(
 		agentId: string | undefined,
 		isError: boolean,
 		result: unknown = "failed",
+		onCall: () => void = () => {},
 	) =>
 		hook<
 			(
@@ -212,10 +216,12 @@ function session(
 		>("tool.call")(
 			$,
 			{ tool: "Bash", command, tool_use_id: "t", agentId } as ToolCallInput,
-			async () =>
-				(isError
-					? { isError: true, result }
-					: { result: { stdout: "" } }) as ToolCallResult,
+			async () => {
+				onCall();
+				return (
+					isError ? { isError: true, result } : { result: { stdout: "" } }
+				) as ToolCallResult;
+			},
 		);
 
 	const complete = (e: Partial<TurnCompleteInput> & { turnId: string }) =>
@@ -1189,4 +1195,26 @@ test("same-pair TDD and follow-up turns keep their attempt; A to B to A starts t
 		"attempt-t2:1",
 		"attempt-t2:2",
 	]);
+});
+
+test("tool calls execute while their attempt binding is pending", async () => {
+	let release!: (result: Out) => void;
+	const binding = new Promise<Out>((resolve) => {
+		release = resolve;
+	});
+	const s = session(
+		{ mode: "show", scope: "turn", record: "auto" },
+		{ bind: () => binding },
+	);
+	await s.start("t1", LONG);
+	await s.step({ turnId: "t1", index: 0 });
+	let calls = 0;
+	const tool = s.bash("bun test", undefined, false, undefined, () => calls++);
+	try {
+		expect(calls).toBe(1);
+		expect(s.argvs.some((a) => a.includes("bind"))).toBe(true);
+	} finally {
+		release({ exitCode: 0, stdout: "{}", stderr: "" });
+		await tool;
+	}
 });

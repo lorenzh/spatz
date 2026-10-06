@@ -1237,3 +1237,31 @@ test("suggestion CLI forwards requested models and the explicit absent marker", 
 		});
 	}
 });
+
+test("report forwards confirmation of an explicit attempt", async () => {
+	const { io } = fakeIO();
+	const { api, calls } = fakeApi();
+	expect(
+		await main(
+			[
+				"report",
+				"abc-123",
+				"--model",
+				"m",
+				"--effort",
+				"low",
+				"--result",
+				"pass",
+				"--attempt",
+				"attempt-id",
+				"--confirm",
+			],
+			io,
+			api,
+		),
+	).toBe(0);
+	expect(calls[0]?.args[0]).toMatchObject({
+		attempt: "attempt-id",
+		confirm: true,
+	});
+});

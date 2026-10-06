@@ -93,6 +93,7 @@ Replace `<suggestion_id>` with the ID from the recommendation.
 Results can be `pass`, `partial`, or `fail`.
 An explicit report overrides hook signals for its selected attempt.
 A changed verdict creates a retry. Use `--correct` to fix a mistaken report.
+Use `--attempt <id> --confirm` to report on an existing attempt without creating a retry.
 Use `spatz suggest "Retry the task" --retry-of <suggestion_id>` to link a new suggestion to the same recovery chain.
 See [report flags](docs/cli.md#spatz-report) for explicit attempt selection.
 

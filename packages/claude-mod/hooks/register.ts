@@ -391,7 +391,7 @@ export function register(on: On, options: PluginOptions = {}) {
 		const io = bind($, s.spatz);
 		const identity = active.get(e.agentId ?? "");
 		if (identity && s.mode !== "off" && s.record !== "off")
-			await attemptCommand(
+			void attemptCommand(
 				io.run,
 				[
 					"bind",

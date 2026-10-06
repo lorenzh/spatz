@@ -21,7 +21,7 @@ For each candidate in a cell, spatz computes an estimate of the success rate:
 estimate = (1 + sum of quality) / (2 + n)
 ```
 
-`n` counts scored attempts of the candidate in the cell, plus frozen legacy outcomes. `quality` is the value of one outcome, from 0 to 1. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each outcome moves the estimate towards the observed quality.
+`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `quality` ranges from 0 to 1. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each first-attempt outcome moves the estimate towards the observed quality.
 
 Only some outcomes count:
 
@@ -31,8 +31,12 @@ Only some outcomes count:
 - Outcomes of models that are not in the current `--models` list do not count.
 - Old outcomes do not decay.
 
-Each reported retry keeps its own outcome.
-A same-pair reported failure followed by a pass contributes `n=2` and `sum_quality=1`.
+Each reported retry keeps its own outcome in separate retry history.
+A same-pair reported failure followed by a pass contributes `n=1` and `sum_quality=0` to the first-attempt estimate.
+The retry contributes `n=1` and `sum_quality=1` to retry history.
+`store.cellStats(taskType)` uses only ordinal 1 of root suggestions and legacy/eval outcomes.
+`store.retryStats(taskType)` groups later ordinals and `--retry-of` chain members by cell and actual model/effort pair.
+Retry outcomes cannot change the first-attempt estimate.
 An internal test-fix-test loop stays in one attempt. Its latest ordered result supplies the quality.
 A sequence `A → B → A` keeps three attempts even when the first and last pairs match.
 
@@ -148,6 +152,7 @@ Execution evidence supplies the actual pair. A report fills only unknown pair fi
 The recommended pair alone supplies no execution evidence.
 `--correct` changes a prior verdict without adding a retry or cost.
 An identical report is a replay. A changed reported verdict without `--correct` creates a retry.
+With `--confirm`, a changed prior verdict is an error instead.
 If the catalog lists only `none` for a model, spatz normalizes missing effort to `none`.
 Learning also treats older null-effort outcomes as `none` for those models.
 Other unknown pairs cannot train learning.

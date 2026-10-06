@@ -188,10 +188,19 @@ An old prompt cannot select a new suggestion because its event arrived late.
 Only trustworthy source time can select an otherwise unbound window.
 Receipt time does not count. Missing transcripts or source time leave events `pending`.
 Pending events receive no quality credit or unassigned token totals.
+They expire after `openWindowMs` without a binding, measured from receipt.
+Each event batch removes up to 256 expired event identities across the database.
+It removes their revisions together, so expiry cannot restore stale credit.
+This limit keeps cleanup from holding the write lock for a large backlog.
+New batches continue cleanup; an idle database does not run background cleanup.
 
-Windows are half-open. Late events cannot extend the current idle window.
+Windows are half-open. Bound source activity advances `last_event_at` with `MAX(last_event_at, occurred_at)`.
+A late event uses its source time. Receipt time never extends the window.
 A delayed link can shorten a window or supply missing identity.
 The store then moves signals and usage together in one transaction.
+Repairs only visit the affected harness, session and agent, and their recovery roots.
+Ordinary hook writes resolve new events and pending events in that context.
+They do not replay the history of window-bound events.
 Provisional window bindings move with their events. Exact bindings stay fixed.
 Conflicting provisional credit returns to pending.
 Replayed or older transcripts cannot erase newer evidence.

@@ -30,7 +30,7 @@ const USAGE = `usage:
   spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--owns-usage] [--json]
   spatz attempt bind <attempt_id> --call <id> --session <id> [--agent-id <id>]
   spatz attempt finalize --session <id> [--agent-id <id>]
-  spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
+  spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
   spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--attempt <id>] [--key <turn:index>] [--session <id>] [--agent-id <id>] [--cost-usd <n>] [--json]
   spatz import-rollout <file> --suggestion <id> [--json]
   spatz hook <event> [--agent codex]
@@ -105,6 +105,7 @@ function parse(argv: string[]) {
 				"retry-of": { type: "string" },
 				attempt: { type: "string" },
 				correct: { type: "boolean" },
+				confirm: { type: "boolean" },
 				key: { type: "string" },
 				call: { type: "string" },
 				"owns-usage": { type: "boolean" },
@@ -305,6 +306,7 @@ export async function main(
 					attempt: required(v.attempt, "--attempt"),
 				}),
 				...(v.correct !== undefined && { correct: v.correct }),
+				...(v.confirm !== undefined && { confirm: v.confirm }),
 				suggestionId,
 				model,
 				effort,

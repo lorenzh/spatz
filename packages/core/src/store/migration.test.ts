@@ -25,7 +25,7 @@ function directory() {
 	return dir;
 }
 
-async function fixture(dir: string, version = SCHEMA_VERSION - 1) {
+async function fixture(dir: string, version = 7) {
 	const path = join(dir, "spatz.db");
 	const db = new Database(path);
 	handles.push(db);
@@ -202,8 +202,8 @@ console.log("ready"); openDatabase(process.argv[1]).close();`;
 	}
 });
 
-test("previous-version fixture preserves all data and adds an empty attempt ledger", async () => {
-	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
+test("v7 fixture preserves all data and adds an empty attempt ledger", async () => {
+	const { path, db } = await fixture(directory(), 7);
 	const before = rows(db);
 	const migrated = openDatabase(path);
 	handles.push(migrated);
@@ -241,18 +241,59 @@ test("previous-version fixture preserves all data and adds an empty attempt ledg
 });
 
 test("attempt migration failure rolls back every statement and the version", async () => {
-	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
+	const { path, db } = await fixture(directory(), 7);
 	db.run("CREATE TABLE attempts (conflict TEXT)");
 	const before = rows(db);
 	expect(() => openDatabase(path)).toThrow();
 	expect(rows(db)).toEqual(before);
 	expect(db.query("PRAGMA user_version").get()).toEqual({
-		user_version: SCHEMA_VERSION - 1,
+		user_version: 7,
 	});
 	expect(
 		db
 			.query("PRAGMA table_info(suggestions)")
 			.all()
 			.some((r) => (r as { name: string }).name === "is_legacy"),
+	).toBe(false);
+});
+
+test("v8 event migration preserves evidence and adds nullable report metadata", async () => {
+	const dir = directory();
+	const { path, db } = await fixture(dir, 7);
+	const previous = await previousStore(dir);
+	previous.openDatabase(path).close();
+	db.run(`INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,binding,kind,source,received_at,output_tokens)
+ VALUES('claude-code','session','','event',0,'pending','usage','transcript',1000,20)`);
+	const migrated = openDatabase(path);
+	handles.push(migrated);
+	expect(
+		migrated
+			.query(
+				"SELECT event_id,output_tokens,rounds,note FROM latest_attempt_events",
+			)
+			.all(),
+	).toEqual([
+		{ event_id: "event", output_tokens: 20, rounds: null, note: null },
+	]);
+	expect(migrated.query("PRAGMA user_version").get()).toEqual({
+		user_version: SCHEMA_VERSION,
+	});
+});
+
+test("v9 failure rolls back report columns and keeps v8 evidence", async () => {
+	const dir = directory();
+	const { path, db } = await fixture(dir, 7);
+	const previous = await previousStore(dir);
+	previous.openDatabase(path).close();
+	db.run("CREATE INDEX events_attempt ON attempt_events(event_id)");
+	const before = rows(db);
+	expect(() => openDatabase(path)).toThrow();
+	expect(rows(db)).toEqual(before);
+	expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+	expect(
+		db
+			.query("PRAGMA table_info(attempt_events)")
+			.all()
+			.some((r) => (r as { name: string }).name === "rounds"),
 	).toBe(false);
 });

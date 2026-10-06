@@ -184,6 +184,7 @@ It closes the attempt and suggestion window. Late evidence can still bind by sou
 | `--result <r>` | `pass`, `partial` or `fail` | required | The result. spatz stores it as quality 1, 0.5 or 0. |
 | `--attempt <id>` | string | automatic selection | Select an attempt belonging to this suggestion. Its known pair must match. |
 | `--correct` | boolean | `false` | Replace a prior report on the selected attempt. Keep its pair and usage unchanged. |
+| `--confirm` | boolean | `false` | Report on an existing `--attempt` without creating a retry. Reject a changed prior report. Cannot combine with `--correct`. |
 | `--rounds <n>` | non-negative integer | none | Count of rounds the agent needed. |
 | `--note <t>` | string | none | A short note. spatz stores it in the database. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
@@ -195,7 +196,11 @@ An unused implicit attempt also qualifies. If no attempt matches, spatz creates 
 An identical report returns the same attempt without adding an outcome or usage.
 A changed verdict on an already reported attempt creates a retry.
 Use `--correct` to fix a mistaken verdict instead. It requires a prior report.
+Use `--attempt <id> --confirm` to report on an existing attempt without creating a retry.
+A changed prior report still needs `--correct`.
 Reports can fill unknown pair fields but cannot overwrite known execution metadata.
+The report event stores `--rounds`, `--note` and the direct report’s `--turn`.
+Corrections store the supplied metadata in a new event revision.
 An identical same-pair retry needs an observed new start to distinguish it from replay.
 
 ### Text output
