@@ -2,12 +2,12 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
 
-spatz has six command forms. Each command calls the `@spatz/core` API and formats the result. The CLI has no other logic.
+Each spatz command calls the `@spatz/core` API and formats the result. The CLI has no other logic.
 
 ```text
 spatz --version
@@ -15,6 +15,7 @@ spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [-
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
+spatz import-rollout <file> --suggestion <id> [--json]
 spatz hook <event> [--agent codex]
 spatz stats [--type <t>] [--by scope] [--json]
 ```
@@ -273,6 +274,39 @@ spatz link <suggestion_id> --agent-id agent-1 --session session-1
 ```
 
 Text output is `linked: <suggestion_id>  agent: <agent_id>`.
+
+## spatz import-rollout
+
+If spatz hooks were absent or untrusted, import the Codex run here.
+
+```sh
+spatz import-rollout <file> --suggestion <id> [--json]
+```
+
+`<file>` is the run's rollout JSONL file. `--suggestion` names an existing suggestion.
+The command imports every recognized turn. It supports legacy tool calls and newer `CommandExecution` events.
+It records the actual model, effort, normalized tokens, and test/build results.
+It uses the suggestion's stored prices for cost, as the hooks do.
+It stores no raw prompts, commands, or tool output.
+
+The import works after the suggestion closes. It leaves the parent session link unchanged.
+Repeated imports replace the same records without adding tokens twice. This also applies after hooks ran.
+A turn without usage leaves stored usage unchanged. Use the latest complete rollout.
+The file must contain only turns that belong to the named suggestion.
+For a resumed session with unrelated work, import a JSONL file containing only this run's turns.
+
+Text output:
+
+```text
+rollout imported: <id>  turns: 1
+```
+
+With `--json`, the output is `{"suggestion_id":"<id>","turns":1}`.
+`turns` counts all recognized turns. A turn can have no usage or test/build results.
+Missing arguments exit with code 2. An unknown suggestion, unreadable file, or file without recognized turns exits with code 1.
+spatz skips malformed lines and unsupported records.
+Use [the environment link](hooks.md#link-a-dispatched-codex-run) for automatic recording.
+Run `spatz report` separately to record your verified verdict.
 
 ## spatz hook
 

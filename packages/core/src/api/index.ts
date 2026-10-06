@@ -49,9 +49,11 @@ import {
 } from "../signals/index.ts";
 import {
 	type AssistantMessage,
+	type CodexRollout,
 	type ModelUsage,
 	mainTurnMessages,
 	parseCodexRollout,
+	parseCodexRollouts,
 	subagentMessages,
 	sumByModel,
 } from "../signals/transcript.ts";
@@ -354,10 +356,79 @@ export function createApi(
 		});
 	}
 
+	/** Explicit dispatch links do not replace the suggestion's parent session or time window. */
+	function recordCodexTurn(
+		store: Store,
+		cfg: Config,
+		suggestionId: string,
+		turnId: string,
+		rollout: CodexRollout,
+	) {
+		const now = deps.clock.now();
+		for (const call of rollout.calls) {
+			const kind = detectCommandKind(call.command);
+			if (kind !== "test" && kind !== "build") continue;
+			store.insertSignal({
+				suggestion_id: suggestionId,
+				kind,
+				value: call.exit_code === 0 ? 1 : 0,
+				weight: SIGNAL_WEIGHTS[kind],
+				source: "Stop",
+				turn_id: turnId,
+				observed_at: now,
+			});
+		}
+		const { usage } = rollout;
+		if (!usage) return;
+		store.upsertUsage({
+			suggestion_id: suggestionId,
+			model: toCanonicalId(rollout.model, cfg.aliases),
+			effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
+			source: "transcript",
+			scope_key: turnId,
+			turn_id: turnId,
+			is_sidechain: false,
+			input_tokens: usage.input_tokens ?? null,
+			output_tokens: usage.output_tokens ?? null,
+			cache_read_tokens: usage.cache_read_input_tokens ?? null,
+			cache_creation_tokens: usage.cache_creation_input_tokens ?? null,
+			rounds: null,
+			note: null,
+			reported_at: now,
+		});
+	}
+
 	async function onCodexHook(
 		input: CodexHookInput,
 		cfg: Config,
 	): Promise<void> {
+		const suggestionId = deps.env.SPATZ_SUGGESTION_ID;
+		if (suggestionId !== undefined) {
+			if (input.hook_event_name !== "Stop") return;
+			return withStore(async (store) => {
+				if (!store.getSuggestion(suggestionId))
+					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				const turnId = input.turn_id;
+				if (!turnId) throw new Error("missing turn id");
+				const rollout = await readTranscript(input.transcript_path, (text) =>
+					parseCodexRollout(text, turnId),
+				);
+				if (!rollout) {
+					store.recordFailure(
+						"parse",
+						"codex:Stop",
+						deps.clock.now(),
+						input.session_id,
+						turnId,
+					);
+					debugHook(
+						"Codex rollout has no matching turn context; check the rollout format.",
+					);
+					return;
+				}
+				recordCodexTurn(store, cfg, suggestionId, turnId, rollout);
+			});
+		}
 		const now = deps.clock.now();
 		return withStore(async (store) => {
 			const open = store.findOpenSuggestion(
@@ -500,6 +571,20 @@ export function createApi(
 	}
 
 	return {
+		async importRollout({ file, suggestionId }) {
+			const cfg = await getConfig();
+			return withStore(async (store) => {
+				if (!store.getSuggestion(suggestionId))
+					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				const turns = parseCodexRollouts(await Bun.file(file).text());
+				if (!turns.size)
+					throw new Error("Codex rollout has no matching turn context");
+				for (const [turnId, rollout] of turns)
+					recordCodexTurn(store, cfg, suggestionId, turnId, rollout);
+				return { suggestion_id: suggestionId, turns: turns.size };
+			});
+		},
+
 		async suggest({
 			task,
 			models,

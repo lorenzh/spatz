@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
+keywords: [import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
 ---
 
 # Claude Code hooks for spatz
@@ -260,6 +260,33 @@ The plugin's `packages/codex-hooks/hooks/hooks.json` contains:
 ```
 
 Review and trust the hook with `/hooks` in Codex. `codex exec` also enforces hook trust.
+
+### Link a dispatched Codex run
+
+When you start Codex, pass the suggestion ID in the environment:
+
+```sh
+SPATZ_SUGGESTION_ID=<suggestion_id> codex exec -m gpt-6-sol -c model_reasoning_effort=high "<task>"
+```
+
+The routing skill adds this prefix. Codex passes the environment to the plugin hooks.
+At Stop, the plugin records that turn's usage and test/build signals against the named suggestion.
+The explicit ID works after `spatz report` closes the suggestion or its time window expires.
+It leaves the parent session link unchanged. For an unknown ID, the hook records a failure. It cannot select another suggestion.
+Without the variable, hooks use the existing session attribution.
+
+If hooks are absent or untrusted, [import the rollout](cli.md#spatz-import-rollout) after the run:
+
+```sh
+spatz import-rollout <rollout.jsonl> --suggestion <suggestion_id>
+```
+
+The file must belong to that run. The import records every recognized turn in the file.
+Both paths use the same turn keys. Replaying hooks or imports replaces those records without adding tokens twice.
+A file without usage leaves stored usage unchanged. For imports, use the latest complete rollout.
+Run `spatz report` separately to record your verified verdict.
+
+### Rollout signals and usage
 
 Codex hook input has no exit code. At turn end, spatz reads completed `CommandExecution` events from the rollout.
 It reads the command from supported POSIX shell wrappers such as `/bin/bash -lc`.

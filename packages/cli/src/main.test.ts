@@ -91,6 +91,9 @@ function fakeIO(stdin: () => Promise<string> = async () => "{}") {
 function fakeApi(overrides: Partial<SpatzApi> = {}) {
 	const calls: { method: string; args: unknown[] }[] = [];
 	const api: SpatzApi = {
+		importRollout: async () => {
+			throw new Error("unexpected import");
+		},
 		usage: async () => {
 			throw new Error("unexpected usage");
 		},
@@ -1027,3 +1030,29 @@ test.each(["type", "scope", "json"])(
 		}
 	},
 );
+
+test("import-rollout validates arguments and calls core", async () => {
+	const seen: unknown[] = [];
+	const { api } = fakeApi({
+		importRollout: async (input) => {
+			seen.push(input);
+			return { suggestion_id: input.suggestionId, turns: 2 };
+		},
+	});
+	const { io, stdout } = fakeIO();
+	expect(
+		await main(
+			["import-rollout", "run.jsonl", "--suggestion", "id", "--json"],
+			io,
+			api,
+		),
+	).toBe(0);
+	expect(seen).toEqual([{ file: "run.jsonl", suggestionId: "id" }]);
+	expect(JSON.parse(stdout())).toEqual({ suggestion_id: "id", turns: 2 });
+	for (const args of [
+		["import-rollout"],
+		["import-rollout", "run.jsonl"],
+		["import-rollout", "--suggestion", "id"],
+	])
+		expect(await main(args, fakeIO().io, api)).toBe(2);
+});

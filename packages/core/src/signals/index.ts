@@ -37,7 +37,7 @@ export function isIgnoredHookInput(input: HookInput): boolean {
 // A command segment starts at the beginning or after ;, &, |.
 const START = String.raw`(?:^|[;&|]\s*)`;
 const SPATZ_SUGGEST = new RegExp(
-	String.raw`${START}(?:rtk(?:\s+proxy)?\s+)?(?:(?:[^\s;&|]*/)?spatz|(?:npx(?:\s+(?:-y|--yes))?|bunx(?:\s+--bun)?|npm\s+exec)\s+@spatz/cli(?:@[0-9A-Za-z.+_-]+)?(?:\s+--)?)\s+(?!(?:report|hook|stats|usage|link)(?:\s|$)|-)\S`,
+	String.raw`${START}(?:rtk(?:\s+proxy)?\s+)?(?:(?:[^\s;&|]*/)?spatz|(?:npx(?:\s+(?:-y|--yes))?|bunx(?:\s+--bun)?|npm\s+exec)\s+@spatz/cli(?:@[0-9A-Za-z.+_-]+)?(?:\s+--)?)\s+(?!(?:report|hook|stats|usage|link|import-rollout)(?:\s|$)|-)\S`,
 );
 // ponytail: keyword regexes, not a shell parser; extend the lists when a tool is missed.
 // Each matches only at the command position of a segment: after env assignments and runner prefixes.
@@ -76,7 +76,8 @@ export function detectCommandKind(command: string): CommandKind {
 		.trim()
 		.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (quoted) => {
 			const value = quoted.slice(1, -1);
-			if (/^(?:report|hook|stats|usage|link)$/.test(value)) return value;
+			if (/^(?:report|hook|stats|usage|link|import-rollout)$/.test(value))
+				return value;
 			return /^[^"'`;|&\n()]+\/spatz$/.test(value) ? "spatz" : "''";
 		});
 	if (SPATZ_SUGGEST.test(suggestion)) return "spatz-suggest";

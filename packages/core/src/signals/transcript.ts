@@ -60,10 +60,7 @@ type RolloutRecord = {
 };
 
 /** Codex rollout records are append-only; tolerate partial lines and future record types. */
-export function parseCodexRollout(
-	jsonl: string,
-	turnId: string,
-): CodexRollout | null {
+function codexRecords(jsonl: string): RolloutRecord[] {
 	const rows: RolloutRecord[] = [];
 	for (const raw of jsonl.split("\n")) {
 		try {
@@ -71,6 +68,40 @@ export function parseCodexRollout(
 			if (row && typeof row === "object") rows.push(row);
 		} catch {}
 	}
+	return rows;
+}
+
+/** Parse all turns for an explicit run import. Turn IDs, not file paths, identify replays. */
+export function parseCodexRollouts(jsonl: string): Map<string, CodexRollout> {
+	const rows = codexRecords(jsonl);
+	const turns = new Map<string, CodexRollout>();
+	for (const row of rows) {
+		const id = row.payload?.turn_id;
+		if (
+			row.type !== "turn_context" ||
+			typeof id !== "string" ||
+			!id ||
+			turns.has(id)
+		)
+			continue;
+		// ponytail: one scan per turn; index records if long resumed sessions make imports slow.
+		const rollout = parseCodexTurn(rows, id);
+		if (rollout) turns.set(id, rollout);
+	}
+	return turns;
+}
+
+export function parseCodexRollout(
+	jsonl: string,
+	turnId: string,
+): CodexRollout | null {
+	return parseCodexTurn(codexRecords(jsonl), turnId);
+}
+
+function parseCodexTurn(
+	rows: RolloutRecord[],
+	turnId: string,
+): CodexRollout | null {
 	const turn = rows.find(
 		(r) => r.type === "turn_context" && r.payload?.turn_id === turnId,
 	)?.payload;
@@ -166,6 +197,16 @@ export function parseCodexRollout(
 				.join("\n");
 			const code = /exit_code=(\d+)/.exec(text)?.[1];
 			if (code !== undefined) exits.set(p.call_id, Number(code));
+			else {
+				// exec can print its structured result as a separate JSON text block.
+				for (const block of Array.isArray(p.output) ? p.output : []) {
+					try {
+						const result = JSON.parse(block.text ?? "");
+						if (Number.isInteger(result?.exit_code))
+							exits.set(p.call_id, result.exit_code);
+					} catch {}
+				}
+			}
 		}
 		if (
 			p.type === "function_call_output" &&

@@ -16,6 +16,7 @@ import {
 	type ReportResult,
 	type StatsReport,
 } from "../contracts/types.ts";
+import codexExec from "../signals/fixtures/codex-exec-identity.json";
 import { openStore } from "../store/index.ts";
 import { createApi } from "./index.ts";
 
@@ -2267,5 +2268,145 @@ test("suggestion captures candidate prices once and direct usage returns cost me
 	expect(incomplete).toMatchObject({
 		cache_read_tokens: null,
 		tokens_complete: 0,
+	});
+});
+
+describe("explicit Codex run attribution", () => {
+	test.each(["legacy", "completed"])(
+		"hooks and import share normalized %s records after report",
+		async (format) => {
+			const dbPath = join(dir, "exec.db");
+			const s = setup({
+				openStore: () => openStore(dbPath),
+				env: { SPATZ_SUGGESTION_ID: ID1 },
+			});
+			await s.api.suggest({
+				...suggestInput(),
+				session: "parent",
+				turn: "parent-turn",
+				source: "claude-code",
+			});
+			await s.api.report({
+				suggestionId: ID1,
+				model: "gpt-6-astra",
+				effort: "high",
+				result: "pass",
+			});
+			const fixture = structuredClone(codexExec);
+			fixture.call.payload.input =
+				'text(await tools.exec_command({cmd:"bun test"}));';
+			fixture.completed.payload.item.command[2] = "bun test";
+			const rows = [
+				fixture.turn,
+				fixture.call,
+				fixture.callOutput,
+				fixture.tokenUsage,
+				...(format === "completed"
+					? [fixture.completed, fixture.completed]
+					: []),
+			];
+			const file = join(dir, "exec.jsonl");
+			await Bun.write(file, rows.map((row) => JSON.stringify(row)).join("\n"));
+			const hook = JSON.stringify({
+				hook_event_name: "Stop",
+				session_id: "child",
+				turn_id: fixture.turn.payload.turn_id,
+				transcript_path: file,
+			});
+			s.setNow(T0 + 2 * HOUR);
+			await s.api.handleHook("codex:Stop", hook);
+			const db = new Database(dbPath);
+			try {
+				const query =
+					"SELECT suggestion_id, model, effort, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tokens_schema, tokens_complete FROM usages WHERE source = 'transcript'";
+				const expected = [
+					{
+						suggestion_id: ID1,
+						model: "openai/gpt-6-astra",
+						effort: "high",
+						input_tokens: 10102,
+						output_tokens: 96,
+						cache_read_tokens: 12288,
+						cache_creation_tokens: 0,
+						tokens_schema: 2,
+						tokens_complete: 1,
+					},
+				];
+				expect(db.query(query).all()).toEqual(expected);
+				expect(await s.api.importRollout({ file, suggestionId: ID1 })).toEqual({
+					suggestion_id: ID1,
+					turns: 1,
+				});
+				await s.api.handleHook("codex:Stop", hook);
+				expect(db.query(query).all()).toEqual(expected);
+				expect(
+					db
+						.query(
+							"SELECT suggestion_id, kind, value, turn_id FROM signals WHERE source = 'Stop'",
+						)
+						.all(),
+				).toEqual([
+					{
+						suggestion_id: ID1,
+						kind: "test",
+						value: 1,
+						turn_id: fixture.turn.payload.turn_id,
+					},
+				]);
+				expect(
+					db
+						.query("SELECT session_id, turn_id FROM suggestions WHERE id = ?")
+						.get(ID1),
+				).toEqual({ session_id: "parent", turn_id: "parent-turn" });
+				await Bun.write(file, JSON.stringify(fixture.turn));
+				await s.api.importRollout({ file, suggestionId: ID1 });
+				expect(db.query(query).all()).toEqual(expected);
+				expect(db.query("PRAGMA user_version").get()).toEqual({
+					user_version: 6,
+				});
+			} finally {
+				db.close();
+			}
+		},
+	);
+
+	test("import records every turn once and rejects invalid targets or files", async () => {
+		const s = setup();
+		await s.api.suggest(suggestInput());
+		const file = `${import.meta.dir}/../signals/fixtures/codex-token-usage.jsonl`;
+		await s.api.importRollout({ file, suggestionId: ID1 });
+		expect(
+			s
+				.argsOf("upsertUsage")
+				.map(([row]) => (row as { scope_key: string }).scope_key),
+		).toEqual(["turn-1", "turn-2", "turn-3"]);
+		await expect(
+			s.api.importRollout({ file, suggestionId: "unknown" }),
+		).rejects.toThrow("unknown suggestion_id");
+		await expect(
+			s.api.importRollout({ file: join(dir, "missing"), suggestionId: ID1 }),
+		).rejects.toThrow();
+		const invalid = join(dir, "invalid.jsonl");
+		await Bun.write(invalid, '{}\nnull\n{"type":');
+		await expect(
+			s.api.importRollout({ file: invalid, suggestionId: ID1 }),
+		).rejects.toThrow("no matching turn context");
+	});
+
+	test("invalid env link never falls back to the current session suggestion", async () => {
+		const s = setup({ env: { SPATZ_SUGGESTION_ID: "unknown" } });
+		await linked(s);
+		s.calls.length = 0;
+		await s.api.handleHook(
+			"codex:Stop",
+			JSON.stringify({
+				hook_event_name: "Stop",
+				session_id: SESSION,
+				turn_id: "turn-2",
+				transcript_path: `${import.meta.dir}/../signals/fixtures/codex-token-usage.jsonl`,
+			}),
+		);
+		expect(s.writes()).toEqual([]);
+		expect(s.argsOf("recordFailure")).toHaveLength(1);
 	});
 });
