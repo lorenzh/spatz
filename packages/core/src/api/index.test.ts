@@ -2004,7 +2004,13 @@ describe("dispatch observations", () => {
 				note: null,
 				reported_at: T0,
 			};
-			if (!modFirst) s.store.upsertUsage(hookUsage);
+			if (!modFirst) {
+				s.store.upsertUsage(hookUsage);
+				expect(
+					s.store.getUsage(id, "subagent", "child", hookUsage.model)
+						?.tokens_complete,
+				).toBe(0);
+			}
 			await s.api.usage({
 				suggestionId: id,
 				source: "claude-code-mod",
@@ -2020,9 +2026,8 @@ describe("dispatch observations", () => {
 				s.store.getUsage(id, "subagent", "child", hookUsage.model),
 			).toBeNull();
 			expect(
-				s.store.getUsage(id, "claude-code-mod", "mod-turn", hookUsage.model)
-					?.output_tokens,
-			).toBe(156);
+				s.store.getUsage(id, "claude-code-mod", "mod-turn", hookUsage.model),
+			).toMatchObject({ output_tokens: 156, tokens_complete: 1 });
 		}
 	});
 });
@@ -2399,60 +2404,110 @@ describe("preserved recording regressions", () => {
 });
 
 for (const variant of ["main", "subagent"] as const) {
-	test(`captured ${variant} transcript keeps message usage, unknown effort and stable call identity`, async () => {
-		const identity = await Bun.file(
-			`${import.meta.dir}/../signals/fixtures/${variant === "main" ? "main-turn" : "subagent"}-identity.json`,
-		).json();
-		const text = await Bun.file(
-			`${import.meta.dir}/../signals/fixtures/${variant}-identity-transcript.jsonl`,
-		).text();
-		const rows = text
-			.trim()
-			.split("\n")
-			.map((row) => JSON.parse(row));
-		const first = rows.find((row) => row.type === "assistant");
-		const dbPath = join(dir, "captured.db");
-		const s = setup({ dbPath, openStore });
-		s.setNow(Date.parse(rows[0].timestamp) - 1);
-		await s.api.suggest({
-			...suggestInput(),
-			session: first.sessionId,
-			agentId: variant === "subagent" ? identity.hook.agent_id : undefined,
-		});
-		const path = join(dir, "captured.jsonl");
-		await Bun.write(path, text);
-		const stop = {
-			...identity.hook,
-			session_id: first.sessionId,
-			hook_event_name: variant === "subagent" ? "SubagentStop" : "Stop",
-			transcript_path: path,
-			agent_transcript_path: path,
-		};
-		await s.api.handleHook(stop.hook_event_name, JSON.stringify(stop));
-		await s.api.handleHook(stop.hook_event_name, JSON.stringify(stop));
-		const db = new Database(dbPath);
-		try {
-			expect(
-				db
-					.query(
-						"SELECT COUNT(*) AS n,SUM(output_tokens) AS output FROM usage_totals",
-					)
-					.get(),
-			).toEqual({ n: 1, output: first.message.usage.output_tokens });
-			expect(
-				db
-					.query(
-						"SELECT message_id,call_id FROM attempt_events WHERE kind='usage'",
-					)
-					.get(),
-			).toEqual({
-				message_id: first.message.id,
-				call_id: identity.hook.tool_use_id,
+	test.each(variant === "main" ? ["Stop"] : ["Stop", "SubagentStop"])(
+		`captured ${variant} %s transcript keeps message usage, unknown effort and stable call identity`,
+		async (hookEvent) => {
+			const identity = await Bun.file(
+				`${import.meta.dir}/../signals/fixtures/${variant === "main" ? "main-turn" : "subagent"}-identity.json`,
+			).json();
+			const text = await Bun.file(
+				`${import.meta.dir}/../signals/fixtures/${variant}-identity-transcript.jsonl`,
+			).text();
+			const rows = text
+				.trim()
+				.split("\n")
+				.map((row) => JSON.parse(row));
+			const first = rows.find((row) => row.type === "assistant");
+			const dbPath = join(dir, "captured.db");
+			const s = setup({ dbPath, openStore });
+			s.setNow(Date.parse(rows[0].timestamp) - 1);
+			await s.api.suggest({
+				...suggestInput(),
+				session: first.sessionId,
+				agentId: variant === "subagent" ? identity.hook.agent_id : undefined,
 			});
-		} finally {
-			db.close();
-		}
-	});
+			const path = join(dir, "captured.jsonl");
+			await Bun.write(path, text);
+			const stop = {
+				...identity.hook,
+				session_id: first.sessionId,
+				hook_event_name: hookEvent,
+				transcript_path: path,
+				agent_transcript_path: path,
+			};
+			await s.api.handleHook(stop.hook_event_name, JSON.stringify(stop));
+			await s.api.handleHook(stop.hook_event_name, JSON.stringify(stop));
+			const db = new Database(dbPath);
+			try {
+				expect(
+					db
+						.query(
+							"SELECT COUNT(*) AS n,SUM(output_tokens) AS output,MIN(tokens_complete) AS tokens_complete FROM usage_totals",
+						)
+						.get(),
+				).toEqual({
+					n: 1,
+					output: first.message.usage.output_tokens,
+					tokens_complete: variant === "subagent" ? 0 : 1,
+				});
+				expect(
+					db
+						.query(
+							"SELECT message_id,call_id FROM attempt_events WHERE kind='usage'",
+						)
+						.get(),
+				).toEqual({
+					message_id: first.message.id,
+					call_id: identity.hook.tool_use_id,
+				});
+				if (variant === "subagent") {
+					expect(
+						db.query("SELECT cost_usd,incomplete FROM chain_outcomes").get(),
+					).toEqual({ cost_usd: null, incomplete: 1 });
+					const attempt = await s.api.startAttempt({
+						suggestionId: ID1,
+						key: "mod-turn:0",
+						model: first.message.model,
+						effort: "low",
+						session: first.sessionId,
+						agentId: identity.hook.agent_id,
+						ownsUsage: true,
+					});
+					await s.api.usage({
+						suggestionId: ID1,
+						source: "claude-code-mod",
+						turn: "mod-turn",
+						attempt: attempt.id,
+						key: "mod-turn:0",
+						session: first.sessionId,
+						agentId: identity.hook.agent_id,
+						effort: "low",
+						model: first.message.model,
+						input: 1,
+						output: 156,
+						cacheRead: 0,
+						cacheCreation: 0,
+						costUsd: 0.5,
+					});
+					await s.api.handleHook(stop.hook_event_name, JSON.stringify(stop));
+					expect(
+						db
+							.query(
+								"SELECT output_tokens,tokens_complete,cost_usd FROM usage_totals",
+							)
+							.all(),
+					).toEqual([
+						{ output_tokens: 156, tokens_complete: 1, cost_usd: 0.5 },
+					]);
+					expect(
+						db.query("SELECT cost_usd,incomplete FROM chain_outcomes").get(),
+					).toEqual({ cost_usd: 0.5, incomplete: 0 });
+				}
+			} finally {
+				db.close();
+			}
+		},
+	);
 	test(`${variant} partial or older transcripts cannot erase observed usage`, async () => {
 		const dbPath = join(dir, "snapshots.db");
 		const s = setup({ dbPath, openStore });

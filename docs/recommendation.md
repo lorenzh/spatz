@@ -184,7 +184,7 @@ Each execution keeps its tokens. Chain decision cost counts all linked attempts 
 For costs `10 → 20 → 70`, the root cost is `100`.
 Failed chains contribute cost too. Orchestration overhead stays in chain totals with a null attempt ID.
 Separate review suggestions keep separate chains.
-USD totals use stored prices or reported costs and exclude legacy `tokens_schema = 1` rows.
+USD totals use stored prices or reported costs and exclude rows with `tokens_schema = 1` or `tokens_complete = 0`.
 The view does not measure routing latency.
 See [cli.md](cli.md#spatz-stats) for the output fields.
 

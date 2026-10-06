@@ -72,6 +72,7 @@ const statsReport: StatsReport = {
 				},
 			],
 			cost_usd: null,
+			incomplete: 2,
 			adoption_rate: 0.75,
 			input_tokens: 1200,
 			output_tokens: 340,
@@ -735,13 +736,26 @@ describe("stats", () => {
 		expect(text).toContain("coverage: 80%");
 	});
 
+	test("stats text omits lower-bound note when incomplete is zero", async () => {
+		const { io, stdout } = fakeIO();
+		const { api } = fakeApi({
+			stats: async () => ({
+				...statsReport,
+				by_type: statsReport.by_type.map((row) => ({ ...row, incomplete: 0 })),
+			}),
+		});
+		await main(["stats"], io, api);
+		expect(stdout()).toContain("incomplete=0");
+		expect(stdout()).not.toContain("lower bounds");
+	});
+
 	test("text output: complete ordered lines incl. null success as -", async () => {
 		const { io, stdout } = fakeIO();
 		const { api } = fakeApi();
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
 			[
-				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-",
+				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-  incomplete=2 (excluded from cost; token totals may be lower bounds)",
 				"  openai/gpt-6-sol:medium  n=3  success=67%",
 				"  anthropic/claude-opus-5.5:-  n=1  success=100%",
 				"coverage: 80%  learned_success: 70%  control_success: -",
@@ -1105,6 +1119,7 @@ describe("mod CLI", () => {
 							cache_read_tokens: 60,
 							cache_creation_tokens: 30,
 							cost_usd: null,
+							incomplete: 2,
 							cache_read_share: 0.6,
 						},
 					],
@@ -1114,7 +1129,7 @@ describe("mod CLI", () => {
 		expect(await main(["stats", "--by", "scope"], io, api)).toBe(0);
 		expect(seen).toEqual([{ by: "scope" }]);
 		expect(stdout()).toContain(
-			"unscoped  n=2  success=50%  input_tokens=10  output_tokens=20  cache_read_tokens=60  cache_creation_tokens=30  cache_read_share=60%  cost_usd=-",
+			"unscoped  n=2  success=50%  input_tokens=10  output_tokens=20  cache_read_tokens=60  cache_creation_tokens=30  cache_read_share=60%  cost_usd=-  incomplete=2 (excluded from cost; token totals may be lower bounds)",
 		);
 	});
 	test.each(["-1", "1.5", "NaN", "9007199254740992", ""])(

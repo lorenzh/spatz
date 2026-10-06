@@ -275,6 +275,12 @@ Subagent transcripts undercount output tokens ([#86](https://github.com/lorenzh/
 The mod's measurements replace hook estimates for the same session and agent.
 Later hook replays cannot add those estimates again.
 Hooks-only subagent totals remain lower-bound estimates.
+Claude `Stop` and `SubagentStop` store subagent transcript usage with `tokens_complete = 0`.
+Main-session transcript usage keeps its counter-based completeness check.
+Stats exclude incomplete usage from cost and count it in `incomplete`.
+Token totals retain these estimates with a note in text output.
+Complete mod measurements remove the replaced hook estimates from this count.
+See [stats fields](cli.md#spatz-stats).
 Explicit bindings connect hook tool-use IDs to mod tool-call IDs.
 They never assume that mod `turnId` equals hook `prompt_id`.
 When installing the plugin, remove equivalent hand-written hook entries.
@@ -389,7 +395,7 @@ Missing counters stay null. If either cache counter is missing, uncached input i
 Such rows have `tokens_complete = 0`. Pricing treats null counters as zero.
 New rows use `tokens_schema = 2` and the suggestion's stored prices.
 The migration preserves pre-change Codex counts with `tokens_schema = 1`.
-USD totals exclude those rows. See [cost storage](how-it-works.md#normalized-tokens-and-cost).
+USD totals exclude those rows and rows with `tokens_complete = 0`. See [cost storage](how-it-works.md#normalized-tokens-and-cost).
 `output_tokens` already includes `reasoning_output_tokens`, so spatz counts reasoning once.
 A rollout without usage does not replace an existing usage row.
 The zero-token Codex rows in [#60](https://github.com/lorenzh/spatz/issues/60) came from `spatz report`, which records no tokens by design.

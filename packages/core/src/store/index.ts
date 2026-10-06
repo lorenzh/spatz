@@ -16,7 +16,7 @@ import type {
 	SuggestionRecord,
 	UsageRecord,
 } from "../contracts/types.ts";
-import { ATTEMPT_SCHEMA } from "./attempt-schema.ts";
+import { ATTEMPT_SCHEMA, USAGE_COMPLETENESS_SCHEMA } from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
 
 // No column holds task text (spec "Storage", "Privacy").
@@ -217,6 +217,7 @@ const MIGRATIONS = [
 	SCHEMA_V6,
 	SCHEMA_V7,
 	SCHEMA_V8,
+	USAGE_COMPLETENESS_SCHEMA,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -625,6 +626,8 @@ export function openStore(
 							cache_creation_tokens: r.cache_creation_tokens,
 							cost_usd: r.cost_usd,
 							cost_source: r.cost_source,
+							tokens_complete: r.tokens_complete,
+							tokens_schema: r.tokens_schema,
 						},
 					]);
 				})

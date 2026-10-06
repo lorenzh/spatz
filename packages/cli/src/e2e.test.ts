@@ -546,6 +546,8 @@ describe("stats", () => {
 			},
 		]);
 		expect(other?.output_tokens).toBeGreaterThan(0);
+		expect(other).toHaveProperty("incomplete", expect.any(Number));
+		expect(other?.incomplete).toBeGreaterThan(0);
 		expect(s.coverage).toBeCloseTo(2 / 3, 6);
 	});
 
@@ -674,6 +676,7 @@ test("mod CLI stores explicit attribution, usage replays, direct reports and sco
 		cache_read_tokens: 60,
 		cache_creation_tokens: 30,
 		cost_usd: 0.000307,
+		incomplete: 0,
 		cache_read_share: 0.6,
 	});
 	expect(scopes?.some((r) => r.scope === null)).toBe(true);

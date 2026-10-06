@@ -79,13 +79,14 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					COALESCE(SUM(u.output_tokens), 0)::DOUBLE AS output_tokens,
 					COALESCE(SUM(u.cache_read_tokens), 0)::DOUBLE AS cache_read_tokens,
 					COALESCE(SUM(u.cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens,
-					SUM(u.cost_usd) FILTER (WHERE u.tokens_schema = 2)::DOUBLE AS cost_usd
+					SUM(u.cost_usd)::DOUBLE AS cost_usd,
+					COUNT(*) FILTER (WHERE u.lower_bound = 1)::INTEGER AS incomplete
 				FROM s LEFT JOIN db.usage_totals u ON u.suggestion_id = s.id GROUP BY ALL
 			), agg AS (
 				SELECT task_type, COUNT(*)::INTEGER AS n, AVG(adopted) FILTER (WHERE first_attempt) AS adoption_rate FROM o GROUP BY ALL
 			)
 			SELECT tok.task_type, COALESCE(agg.n, 0) AS n, COALESCE(agg.adoption_rate, 0) AS adoption_rate,
-				tok.input_tokens, tok.output_tokens, tok.cache_read_tokens, tok.cache_creation_tokens, tok.cost_usd
+				tok.input_tokens, tok.output_tokens, tok.cache_read_tokens, tok.cache_creation_tokens, tok.cost_usd, tok.incomplete
 			FROM tok LEFT JOIN agg USING (task_type) ORDER BY tok.task_type`,
 		);
 		const pairs = await rows<PairStats & { task_type: TaskType }>(
@@ -138,18 +139,19 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				? await rows<ScopeStats>(`
    , scope_rows AS (
     SELECT s.id, s.scope, s.task_type, oq.success::INTEGER AS success,
-     tok.input_tokens, tok.output_tokens, tok.cache_read_tokens, tok.cache_creation_tokens, tok.cost_usd
+     tok.input_tokens, tok.output_tokens, tok.cache_read_tokens, tok.cache_creation_tokens, tok.cost_usd, tok.incomplete
     FROM s LEFT JOIN oq ON oq.suggestion_id = s.id
     LEFT JOIN (
      SELECT suggestion_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
       SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens,
-      SUM(cost_usd) FILTER (WHERE tokens_schema = 2)::DOUBLE AS cost_usd
+      SUM(cost_usd)::DOUBLE AS cost_usd,
+      COUNT(*) FILTER (WHERE lower_bound = 1)::INTEGER AS incomplete
      FROM db.usage_totals GROUP BY suggestion_id
     ) tok ON tok.suggestion_id = s.id WHERE s.is_legacy = 1
     UNION ALL
     SELECT s.id, s.scope, s.task_type,
      CASE WHEN c.completed::INTEGER = 1 THEN COALESCE(c.threshold_success::INTEGER, 0) END AS success,
-     c.input_tokens::DOUBLE, c.output_tokens::DOUBLE, c.cache_read_tokens::DOUBLE, c.cache_creation_tokens::DOUBLE, c.cost_usd::DOUBLE
+     c.input_tokens::DOUBLE, c.output_tokens::DOUBLE, c.cache_read_tokens::DOUBLE, c.cache_creation_tokens::DOUBLE, c.cost_usd::DOUBLE, c.incomplete::INTEGER
     FROM s JOIN sqlite_query('db', 'SELECT *, quality >= ${q} AS threshold_success FROM chain_outcomes') c ON c.suggestion_id = s.id
    ), agg AS (
     SELECT scope, COUNT(success)::INTEGER AS n, AVG(success) AS success_rate,
@@ -157,7 +159,8 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
      COALESCE(SUM(output_tokens), 0)::DOUBLE AS output_tokens,
      COALESCE(SUM(cache_read_tokens), 0)::DOUBLE AS cache_read_tokens,
      COALESCE(SUM(cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens,
-     SUM(cost_usd)::DOUBLE AS cost_usd
+     SUM(cost_usd)::DOUBLE AS cost_usd,
+     COALESCE(SUM(incomplete), 0)::INTEGER AS incomplete
     FROM scope_rows
     ${type ? `WHERE task_type = '${type.replaceAll("'", "''")}'` : ""}
     GROUP BY scope
@@ -192,6 +195,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					cache_read_tokens: t.cache_read_tokens,
 					cache_creation_tokens: t.cache_creation_tokens,
 					cost_usd: t.cost_usd,
+					incomplete: t.incomplete,
 				})),
 			coverage: cov?.coverage ?? 0,
 			learned_success: cmp?.learned_success ?? null,

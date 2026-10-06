@@ -14,6 +14,8 @@ import {
 	REPORT_VALUES,
 } from "../contracts/types.ts";
 
+import { lowerBoundSql } from "./attempt-schema.ts";
+
 const tokenKeys = [
 	"input_tokens",
 	"output_tokens",
@@ -36,6 +38,12 @@ export function attemptStore(
 	initialize(id: string, retryOf?: string): void;
 	link(id: string): void;
 } {
+	const lowerBound = db.query<
+		{ lower_bound: number },
+		[string, string, string]
+	>(
+		`SELECT ${lowerBoundSql("?1", "?2='claude-code'", "?3<>''")} AS lower_bound`,
+	);
 	const get = (id: string) =>
 		db
 			.query<AttemptRecord, [string]>("SELECT * FROM attempts WHERE id=?")
@@ -923,7 +931,15 @@ export function attemptStore(
 								: null,
 						cost_source:
 							input.cost_source === "reported" ? "reported" : "unavailable",
-						tokens_complete: Number(tokenKeys.every((k) => input[k] != null)),
+						tokens_complete: Number(
+							input.tokens_complete !== 0 &&
+								tokenKeys.every((k) => input[k] != null) &&
+								!lowerBound.get(
+									input.source ?? input.harness,
+									input.harness,
+									input.agent_key,
+								)?.lower_bound,
+						),
 						tokens_schema: input.tokens_schema ?? 2,
 						suggestion_only: Number(input.suggestion_only ?? false),
 						requested_attempt_id: input.attempt_id ?? null,

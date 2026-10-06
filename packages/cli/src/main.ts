@@ -78,12 +78,12 @@ function formatStats(r: StatsReport): string {
 		return r.by_scope
 			.map(
 				(s) =>
-					`${s.scope ?? "unscoped"}  n=${s.n}  success=${s.success_rate === null ? "-" : pct(s.success_rate)}  input_tokens=${s.input_tokens}  output_tokens=${s.output_tokens}  cache_read_tokens=${s.cache_read_tokens}  cache_creation_tokens=${s.cache_creation_tokens}  cache_read_share=${pct(s.cache_read_share)}  cost_usd=${s.cost_usd ?? "-"}`,
+					`${s.scope ?? "unscoped"}  n=${s.n}  success=${s.success_rate === null ? "-" : pct(s.success_rate)}  input_tokens=${s.input_tokens}  output_tokens=${s.output_tokens}  cache_read_tokens=${s.cache_read_tokens}  cache_creation_tokens=${s.cache_creation_tokens}  cache_read_share=${pct(s.cache_read_share)}  cost_usd=${s.cost_usd ?? "-"}  incomplete=${s.incomplete}${s.incomplete ? " (excluded from cost; token totals may be lower bounds)" : ""}`,
 			)
 			.concat(diagnostics)
 			.join("\n");
 	const lines = r.by_type.flatMap((t) => [
-		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cache_read_tokens=${t.cache_read_tokens}  cache_creation_tokens=${t.cache_creation_tokens}  cost_usd=${t.cost_usd ?? "-"}`,
+		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cache_read_tokens=${t.cache_read_tokens}  cache_creation_tokens=${t.cache_creation_tokens}  cost_usd=${t.cost_usd ?? "-"}  incomplete=${t.incomplete}${t.incomplete ? " (excluded from cost; token totals may be lower bounds)" : ""}`,
 		...t.pairs.map(
 			(p) =>
 				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}`,
