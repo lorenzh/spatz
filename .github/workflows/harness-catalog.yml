@@ -62,13 +62,8 @@ jobs:
         id: validate
         run: bun scripts/accept-harness-catalog.ts "$RUNNER_TEMP/harness-catalog/harness-models.json" catalog/harness-models.json
       - run: bun install --frozen-lockfile
-      - name: Install DuckDB SQLite extension in a temporary home
-        run: |
-          mkdir "$RUNNER_TEMP/bootstrap-home"
-          HOME="$RUNNER_TEMP/bootstrap-home" bun packages/cli/src/cli.ts 'catalog setup' --models gpt-6-luna --dry-run
-          HOME="$RUNNER_TEMP/bootstrap-home" bun packages/cli/src/cli.ts stats
       - name: Run the tests in a temporary home
-        run: SPATZ_DUCKDB_EXTENSION_DIR="$RUNNER_TEMP/bootstrap-home/.spatz/duckdb-extensions" HOME="$(mktemp -d)" bun test
+        run: HOME="$(mktemp -d)" bun test
 
   publish:
     needs: test

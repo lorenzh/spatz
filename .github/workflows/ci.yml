@@ -27,10 +27,6 @@ jobs:
         with:
           bun-version: '1.4.0'
       - run: bun install --frozen-lockfile
-      - name: Install DuckDB SQLite extension for offline tests
-        run: |
-          bun packages/cli/src/cli.ts 'ci setup' --models gpt-6-luna --dry-run
-          bun packages/cli/src/cli.ts stats
       - run: bun test
       - run: bun run typecheck
       - run: bun run lint

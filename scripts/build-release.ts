@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import pkg from "../packages/cli/package.json";
 import { releaseVersion } from "./release-version.ts";
 
 const root = resolve(import.meta.dir, "..");
 
-/** Build only for the host: DuckDB's native addon must match the executable. */
+/** Build only for the host target. */
 export async function buildRelease(version = pkg.version, outDir = "dist") {
 	releaseVersion(`v${version}`);
 	const target = `${process.platform}-${process.arch}`;
@@ -28,23 +28,6 @@ export async function buildRelease(version = pkg.version, outDir = "dist") {
 	const dir = join(stage, name);
 	await mkdir(dir);
 	try {
-		const api = Bun.resolveSync(
-			"@duckdb/node-api",
-			join(root, "packages/core"),
-		);
-		const bindings = Bun.resolveSync("@duckdb/node-bindings", dirname(api));
-		const native = Bun.resolveSync(
-			`@duckdb/node-bindings-${target}/duckdb.node`,
-			dirname(bindings),
-		);
-		const library =
-			process.platform === "darwin"
-				? "libduckdb.dylib"
-				: process.platform === "win32"
-					? "duckdb.dll"
-					: "libduckdb.so";
-		for (const file of ["duckdb.node", library])
-			await copyFile(join(dirname(native), file), join(dir, file));
 		for (const file of ["LICENSE", "README.md"])
 			await copyFile(join(root, file), join(dir, file));
 		const result = await Bun.build({
@@ -60,22 +43,6 @@ export async function buildRelease(version = pkg.version, outDir = "dist") {
 				autoloadBunfig: false,
 			},
 			define: { SPATZ_VERSION: JSON.stringify(version) },
-			plugins: [
-				{
-					name: "duckdb-sidecar",
-					setup(build) {
-						build.onResolve({ filter: /^@duckdb\/node-bindings$/ }, () => ({
-							path: "binding",
-							namespace: "sidecar",
-						}));
-						build.onLoad({ filter: /.*/, namespace: "sidecar" }, () => ({
-							loader: "js",
-							contents:
-								'module.exports = require(require("node:path").join(require("node:path").dirname(require("node:fs").realpathSync(process.execPath)), "duckdb.node"));',
-						}));
-					},
-				},
-			],
 		});
 		if (!result.success)
 			throw new AggregateError(result.logs, "Release build failed");

@@ -51,7 +51,7 @@ export function normalizeReason(reason: string): string {
 		.replaceAll("mittel+schwer level", "medium+hard level");
 }
 
-/** Internal SQL column expression, shared by SQLite and DuckDB reads. */
+/** Internal SQL column expression, shared by store and report reads. */
 export function difficultySql(column: string): string {
 	return `CASE ${column} WHEN 'leicht' THEN 'easy' WHEN 'mittel' THEN 'medium' WHEN 'schwer' THEN 'hard' ELSE ${column} END`;
 }

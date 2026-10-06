@@ -7,8 +7,8 @@
 ## Commands
 | Task | Command |
 |------|---------|
-| Test one file | `SPATZ_DUCKDB_EXTENSION_DIR=~/.spatz/duckdb-extensions HOME=$(mktemp -d) bun test path/to/file.test.ts` |
-| All tests | `SPATZ_DUCKDB_EXTENSION_DIR=~/.spatz/duckdb-extensions HOME=$(mktemp -d) bun test` |
+| Test one file | `HOME=$(mktemp -d) bun test path/to/file.test.ts` |
+| All tests | `HOME=$(mktemp -d) bun test` |
 | Typecheck | `bun run typecheck` |
 | Lint / fix | `bun run lint` / `bun run format` |
 | Run the CLI | `HOME=$(mktemp -d) SPATZ_NO_JEV=1 bun packages/cli/src/cli.ts "<task>" --dry-run --json` |
@@ -19,8 +19,6 @@
 
 ## Safety
 - Never write to the real `~/.spatz` from tests or ad-hoc runs (even `--dry-run` stores a suggestion): set `HOME` to a temp dir.
-- Exception: tests may read an existing DuckDB extension from `~/.spatz/duckdb-extensions` via `SPATZ_DUCKDB_EXTENSION_DIR`.
-- Without it, bootstrap in a temp home and point at that: `B=$(mktemp -d); HOME=$B bun packages/cli/src/cli.ts setup --models claude-sonnet-5-5 --dry-run; HOME=$B bun packages/cli/src/cli.ts stats; export SPATZ_DUCKDB_EXTENSION_DIR=$B/.spatz/duckdb-extensions`.
 - Set `SPATZ_NO_JEV=1` and `SPATZ_NO_NETWORK=1` for offline runs.
 - Never touch `~/.claude` or `~/.codex`; use a temp `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
 

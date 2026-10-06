@@ -1,8 +1,8 @@
 ---
 title: Privacy and data in spatz
-description: What data spatz sends to TypeSafe (Jev), OpenRouter and DuckDB, what it stores locally in ~/.spatz, the secret filter, the Jev opt-out and how to delete the data.
+description: What data spatz sends to TypeSafe (Jev), and OpenRouter, what it stores locally in ~/.spatz, the secret filter, the Jev opt-out and how to delete the data.
 tags: [spatz, privacy, security]
-keywords: [data, network, jev, typesafe, openrouter, duckdb, secret filter, opt-out, SPATZ_NO_JEV, .spatz.json, retention, delete, gdpr, telemetry]
+keywords: [data, network, jev, typesafe, openrouter, secret filter, opt-out, SPATZ_NO_JEV, .spatz.json, retention, delete, gdpr, telemetry]
 ---
 
 # Privacy and data in spatz
@@ -17,7 +17,6 @@ Only the task text of `spatz "<task>"` leaves the machine with task content. It 
 | `TYPESAFE_AI_API_KEY` | TypeSafe API, as the request credential | With each Jev request | Unset the variable. |
 | Request for the OpenRouter model list. It holds no task data. | `GET https://openrouter.ai/api/v1/models` | Each `spatz "<task>"` call that finds no cache or a cache older than 24 h. After a failed request or a failed cache write, the next call tries again. | No switch. Only a successfully written cache stops the requests for 24 h. |
 | `OPENROUTER_API_KEY` | OpenRouter, as `Authorization: Bearer` header | With the model list request, only when the variable is set | Unset the variable. The request then goes without a key. |
-| Download of the DuckDB `sqlite` extension. It holds no spatz data. | The DuckDB extension repository | First `spatz stats` call, when `~/.spatz/duckdb-extensions` has no extension | Do not run `spatz stats`, or put the extension in that folder first. |
 | Classification, Jev probabilities, ranking, reason, flags | Local SQLite file `~/.spatz/spatz.db` | Each suggestion | Do not run `spatz`. |
 | Session id, prompt id, signals, model, effort, token counts | `~/.spatz/spatz.db` | Hook events and `spatz report` | Remove the spatz hooks from the Claude Code settings. |
 | `--rounds` and `--note` of `spatz report` | `~/.spatz/spatz.db`, as you typed them | Each `spatz report` call | Do not pass `--note`. Do not put secrets or task text in it. |
@@ -99,7 +98,6 @@ The files are in `~/.spatz`. spatz finds the home folder through the `HOME` vari
 | `~/.spatz/spatz.db-wal`, `~/.spatz/spatz.db-shm` | SQLite WAL files of the same database |
 | `~/.spatz/spatz.db.bak-v*` | Database backups and any incomplete backup files left after an interrupted process |
 | `~/.spatz/openrouter-models.json` | OpenRouter model list cache |
-| `~/.spatz/duckdb-extensions/` | DuckDB `sqlite` extension |
 | `~/.spatz/aliases.json`, `~/.spatz/descriptions.json` | Your optional configuration files |
 
 To delete the learned data:

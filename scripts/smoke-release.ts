@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, symlink } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import fixture from "../packages/core/src/catalog/fixtures/openrouter-models.json";
 import { parseOpenRouterModels } from "../packages/core/src/catalog/openrouter.ts";
@@ -22,12 +22,7 @@ export async function smokeRelease(archive: string, version: string) {
 		});
 		assert.equal(await tar.exited, 0);
 		const dir = join(home, basename(archive, ".tar.gz"));
-		for (const file of [
-			"LICENSE",
-			"README.md",
-			"duckdb.node",
-			process.platform === "darwin" ? "libduckdb.dylib" : "libduckdb.so",
-		])
+		for (const file of ["LICENSE", "README.md"])
 			assert.ok(await Bun.file(join(dir, file)).exists(), `Missing ${file}`);
 		// Exercise the documented PATH symlink and native lookup from another cwd.
 		const binary = join(home, "spatz");
@@ -38,11 +33,6 @@ export async function smokeRelease(archive: string, version: string) {
 				fetched_at: Date.now(),
 				models: parseOpenRouterModels(fixture),
 			}),
-		);
-		await symlink(
-			process.env.SPATZ_DUCKDB_EXTENSION_DIR ??
-				join(homedir(), ".spatz/duckdb-extensions"),
-			join(home, ".spatz/duckdb-extensions"),
 		);
 		async function run(args: string[]) {
 			const child = Bun.spawn([binary, ...args], {

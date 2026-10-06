@@ -390,7 +390,7 @@ For Codex, pass `--agent codex`, for example `spatz hook Stop --agent codex`.
 
 ## spatz stats
 
-This command shows how well each pair worked, per task type. It reads the database with DuckDB in read-only mode. Test suggestions (`--dry-run`) are not counted.
+This command shows how well each pair worked, per task type. It reads the database with bun:sqlite in read-only mode. Test suggestions (`--dry-run`) are not counted.
 
 ### Flags
 
@@ -445,7 +445,7 @@ spatz stats --by scope
 spatz stats --by scope --type review --json
 ```
 
-The first run needs network access once. See [configuration.md](configuration.md#duckdb-sqlite-extension). spatz creates an empty database if none exists. Launcher failures remain visible before the first successful suggestion.
+It needs no network access. spatz creates an empty database if none exists. Launcher failures remain visible before the first successful suggestion.
 
 ### Text output
 
@@ -559,7 +559,7 @@ $ spatz stats --json
 | Code | Meaning | Examples |
 | --- | --- | --- |
 | 0 | Success. `spatz hook` always returns 0. | |
-| 1 | Runtime error. spatz prints `spatz: <message>` to stderr. | Unknown effort in `--models`. No usable candidate in `--models`. Invalid `--effort` in `report`. Unknown `suggestion_id`. DuckDB extension download failed. |
+| 1 | Runtime error. spatz prints `spatz: <message>` to stderr. | Unknown effort in `--models`. No usable candidate in `--models`. Invalid `--effort` in `report`. Unknown `suggestion_id`. |
 | 2 | Usage error. spatz prints the message and the usage text to stderr. | No candidate source. Invalid `--family` or no family matches. Non-string `models` default. Missing task, `<suggestion_id>`, `--model`, `--effort` or `--result`. `--result` not `pass`, `partial` or `fail`. `--rounds` not a non-negative integer. Invalid `--type`. Unknown flag. |
 
 An invalid effort gives code 1 in `--models` and in `report --effort`, because the core checks it. An invalid `--result` gives code 2, because the CLI checks it.

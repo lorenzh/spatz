@@ -191,9 +191,6 @@ test("workflow isolates extraction and validates only the catalog before publish
 	).toBeLessThan(testRun);
 	// Bootstrap and tests never touch the runner's real home.
 	expect(testRuns[testRun]).toContain('HOME="$(mktemp -d)"');
-	expect(testRuns[testRun]).toContain(
-		'SPATZ_DUCKDB_EXTENSION_DIR="$RUNNER_TEMP/bootstrap-home/',
-	);
 	for (const run of testRuns.filter((r) => r.includes("cli.ts")))
 		for (const line of run.split("\n").filter((l) => l.includes("cli.ts")))
 			expect(line).toStartWith('HOME="$RUNNER_TEMP/bootstrap-home" ');

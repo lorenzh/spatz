@@ -141,7 +141,6 @@ function setup(over: Partial<CoreDeps> = {}) {
 		cwd: dir,
 		dbPath: join(dir, "spatz.db"),
 		openRouterCachePath: join(dir, "openrouter-models.json"),
-		duckdbExtensionDir: join(dir, "ext"),
 		fetch: async (url) => {
 			fetched.push(url);
 			return new Response(Bun.file(OPENROUTER_FIXTURE));
@@ -775,7 +774,6 @@ describe("stats", () => {
 		expect(seen).toEqual([
 			{
 				dbPath: join(dir, "spatz.db"),
-				extensionDir: join(dir, "ext"),
 				type: "review",
 				successQuality: 0.8,
 				noneOnlyModels: ["anthropic/claude-haiku-4.5"],
@@ -1791,7 +1789,6 @@ describe("dispatch observations", () => {
 			);
 			const s = setup({
 				openStore,
-				duckdbExtensionDir: process.env.SPATZ_DUCKDB_EXTENSION_DIR,
 			});
 			await s.api.handleHook(
 				"PostToolUse",
@@ -1824,7 +1821,6 @@ describe("dispatch observations", () => {
 			cwd,
 			env: { CLAUDE_CONFIG_DIR: configDir },
 			openStore,
-			duckdbExtensionDir: process.env.SPATZ_DUCKDB_EXTENSION_DIR,
 		});
 		for (const [model, swapped] of [
 			["claude-opus-5-5", 0],

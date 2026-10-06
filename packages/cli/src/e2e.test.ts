@@ -3,8 +3,8 @@
 // makes any accidental fetch fail fast.
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Outcome, StatsReport, Suggestion } from "@spatz/core";
 import openRouterFixture from "../../core/src/catalog/fixtures/openrouter-models.json";
@@ -118,12 +118,6 @@ beforeAll(async () => {
 			fetched_at: Date.now(),
 			models: parseOpenRouterModels(openRouterFixture),
 		}),
-	);
-	// Pre-installed DuckDB sqlite extension, so stats never downloads.
-	await symlink(
-		process.env.SPATZ_DUCKDB_EXTENSION_DIR ??
-			join(homedir(), ".spatz", "duckdb-extensions"),
-		join(home, ".spatz", "duckdb-extensions"),
 	);
 });
 

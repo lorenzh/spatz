@@ -21,16 +21,7 @@ Thank you for your help. This file tells you how to set up the project, how to m
 
    `bun install` also installs the Lefthook Git hooks.
 
-3. Install the DuckDB sqlite extension. The end-to-end tests need it in `~/.spatz/duckdb-extensions`. `spatz stats` downloads it on the first run, but it needs a database first. Run one `--dry-run` suggestion, then `spatz stats`, with network access:
-
-   ```bash
-   bun packages/cli/src/cli.ts "test task" --models claude-sonnet-5-5 --dry-run
-   bun packages/cli/src/cli.ts stats
-   ```
-
-   If you already have the extension in another folder, copy or link it to `~/.spatz/duckdb-extensions`. The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read this variable.
-
-4. Run the gates to make sure that the setup works.
+3. Run the gates to make sure that the setup works.
 
 ## Gates
 

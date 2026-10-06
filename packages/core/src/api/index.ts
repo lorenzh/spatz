@@ -61,7 +61,7 @@ import {
 import { loadConfig } from "./deps.ts";
 
 export interface ApiInternals {
-	/** Test seam. Default: report module, imported lazily so DuckDB loads only for stats. */
+	/** Test seam. Default: report module, imported lazily so it loads only for stats. */
 	runStats?: (options: StatsOptions) => Promise<StatsReport>;
 }
 
@@ -993,13 +993,12 @@ export function createApi(
 		async stats({ type, by, modelVersion }) {
 			const cfg = await getConfig();
 			const noneOnlyModels = noneOnly(await availableEfforts());
-			// Opening the store runs migrations; the read-only DuckDB scan cannot.
+			// Opening the store runs migrations; the read-only stats connection cannot.
 			await withStore(() => {});
 			const runStats =
 				internals.runStats ?? (await import("../report/index.ts")).runStats;
 			const report = await runStats({
 				dbPath: deps.dbPath,
-				extensionDir: deps.duckdbExtensionDir,
 				...(type && { type }),
 				...(by && { by }),
 				...(modelVersion && { modelVersion }),

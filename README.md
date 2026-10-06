@@ -216,7 +216,6 @@ Without `TYPESAFE_AI_API_KEY`, Jev is also disabled.
 
 Disabling Jev still allows OpenRouter requests for model prices. These requests contain no task data.
 spatz caches prices for 24 hours. When the network is unavailable, spatz can still use cached prices.
-The first `spatz stats` run downloads DuckDB's SQLite extension.
 
 See the [Privacy guide](docs/privacy.md) for data flows and deletion instructions.
 See [Configuration](docs/configuration.md) for environment variables and local files.
@@ -246,7 +245,6 @@ spatz --version
 
 Use your downloaded version. On macOS, use `shasum -a 256 --check "$archive.sha256"`.
 If your shell does not include `~/.local/bin`, add the `PATH` line to your shell profile.
-Keep the executable and DuckDB libraries together. `spatz stats` needs these libraries beside the executable.
 
 The [nightly release](https://github.com/lorenzh/spatz/releases/tag/nightly) is unstable.
 See [Releasing spatz](RELEASING.md) for the release process.
