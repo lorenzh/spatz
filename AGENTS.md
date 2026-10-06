@@ -45,6 +45,11 @@
 - No AI attribution, generated-by lines or `Co-Authored-By` trailers.
 - Changes reach `main` and `release/*` only through pull requests.
 
+## Working on an issue
+- Work starts from the Linear issue (key `SPZ-<n>`). Use Linear's branch name, which contains the key (e.g. `lorenzhilpert/spz-42-short-slug`; "Copy git branch name" in Linear).
+- Put `Fixes SPZ-<n>` in the PR description. If a GitHub issue exists too, add `Closes #<n>`.
+- Linear sets In Progress, In Review and Done from the branch, PR and merge. Do not set the status by hand.
+
 ## External References
 | Need | File |
 |------|------|
