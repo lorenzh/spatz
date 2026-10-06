@@ -1,18 +1,18 @@
 # Keeps the Status of the "spatz dev board" project (user lorenzh, number 4) in sync.
-# The same file lives in lorenzh/spatz and lorenzh/spatz-testbench.
+# The same file lives in each repo that uses the board.
 #
 #   branch <prefix>/<issue>-<slug> created          -> In progress
 #   PR opened/reopened/ready_for_review             -> In review (draft: In progress)
 #   PR converted to draft                           -> In progress
 #   PR merged                                       -> Done
-#   PR closed unmerged                              -> In progress if a branch for the issue exists, else Ready
+#   PR closed unmerged                              -> In progress if a branch for the issue exists, else Backlog
 #   issue closed                                    -> Done
 #   issue reopened                                  -> Ready
 #
 # PR events act on the issues the PR closes ("Closes #N" or GitHub's closing references).
 # Branch and PR events skip issues that are already closed, except a merge.
 # Needs the BOARD_TOKEN secret: a fine-grained PAT with Projects read/write on the
-# user account and Issues + Pull requests read on both repos. Without it, the job exits 0.
+# user account and Issues + Pull requests read on the repositories that use the board. Without it, the job exits 0.
 name: Board status
 
 on:
@@ -129,7 +129,7 @@ jobs:
                 } else if (i.state !== 'OPEN') {
                   core.info(`#${i.number} is closed; not changed.`);
                 } else if (p.action === 'closed') {
-                  await setStatus(i, (await branchExists(i.number)) ? 'In progress' : 'Ready');
+                  await setStatus(i, (await branchExists(i.number)) ? 'In progress' : 'Backlog');
                 } else {
                   await setStatus(i, pr.draft || p.action === 'converted_to_draft' ? 'In progress' : 'In review');
                 }
