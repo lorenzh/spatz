@@ -138,4 +138,6 @@ CREATE TABLE failures (
 );
 UPDATE suggestions SET fallback_reason = 'timeout' WHERE id = 'r';
 INSERT INTO failures VALUES ('parse', 'Stop', 7, 'session', 't1');
+UPDATE suggestions SET agent = 'codex' WHERE id = 'h';
+INSERT INTO usages VALUES ('n', 'openai/gpt-6-sol', 'high', 'transcript', 'old-turn', 100, 20, 80, 0, 0, NULL, NULL, 6, NULL, NULL);
 PRAGMA user_version = 5;

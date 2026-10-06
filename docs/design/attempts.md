@@ -156,7 +156,12 @@ Main-session orchestration usage in a delegated suggestion's window belongs to s
 
 `cellStats` counts scored attempts once. Same-pair reported fail/pass gives `n=2, sum_quality=1`. An internal TDD fail/pass gives one passing outcome. Keep dry-run exclusion, difficulty normalization and catalog-confirmed `none` normalization. Unknown pairs cannot train learning.
 
-`usage_totals` exposes `suggestion_id`, nullable `attempt_id`, pair fields and all four token columns:
+`usage_totals` exposes `suggestion_id`, nullable `attempt_id`, pair fields and all four token columns.
+The sketch below predates #67. Implementation must also carry `cost_usd`, `cost_source`, `tokens_complete` and `tokens_schema` from `usages`.
+Reuse suggestion price snapshots for legacy usage. Exclude `tokens_schema = 1` from all USD comparisons.
+The attempt migration must preserve these fields and snapshots.
+
+Token-only sketch:
 
 ```sql
 CREATE VIEW usage_totals AS
@@ -186,9 +191,9 @@ The store evaluates chain completion after a report or finalized Stop/SubagentSt
 
 Chain statistics use the root suggestion's `task_type × difficulty`, learned/control flags and first actual pair. Each execution keeps its own tokens. Decision cost sums the chain once under the root pair. Costs `10 → 20 → 70` produce root cost `100`, not repeated charges on each outcome. Failed completed chains also contribute cost. Orchestration usage (null attempt, suggestion totals) counts in the chain's decision cost and is also reported separately as orchestration overhead, like review cost. Divide by successful chains. Zero successes gives null. Incomplete Codex pair costs still belong to chain tokens through the suggestion total; mark only per-attempt execution cost and its dollar slice incomplete, so #41 cost per success is not biased low. #41 owns dollar conversion and confidence intervals.
 
-## Migration from v5
+## Migration after v6
 
-The outcomes view is unchanged since v4; v5 only added `suggestions.fallback_reason` and the `failures` table. The attempt migration is therefore v5 → v6.
+The outcomes view is unchanged since v4; v5 only added `suggestions.fallback_reason` and the `failures` table. Schema v6 adds normalized tokens and cost (#67). The attempt migration must use the next free version after v6.
 
 Close and mark all existing suggestions as legacy in one migration. Keep signals, usages, rowids and usage watermarks unchanged. Recheck `user_version` inside the existing `IMMEDIATE` transaction. Each migration array entry is one SQL statement.
 

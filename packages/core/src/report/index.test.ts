@@ -277,6 +277,7 @@ describe("one dataset", () => {
 			{ model: "m/a", effort: "low", n: 1, success_rate: 1 },
 			{ model: "m/b", effort: "high", n: 2, success_rate: 0.5 },
 		],
+		cost_usd: null,
 		adoption_rate: 2 / 3,
 		input_tokens: 605,
 		output_tokens: 61,
@@ -285,6 +286,7 @@ describe("one dataset", () => {
 		task_type: "review",
 		n: 1,
 		pairs: [{ model: "m/a", effort: "low", n: 1, success_rate: 0 }],
+		cost_usd: null,
 		adoption_rate: 1,
 		input_tokens: 7,
 		output_tokens: 3,
@@ -432,6 +434,7 @@ test("outcome without usage counts in n but not in pairs or adoption", async () 
 			task_type: "code.bugfix",
 			n: 1,
 			pairs: [],
+			cost_usd: null,
 			adoption_rate: 0,
 			input_tokens: 0,
 			output_tokens: 0,
@@ -483,6 +486,7 @@ test("scope stats count outcomes once and include cache tokens, unscoped and usa
 			output_tokens: 0,
 			cache_read_tokens: 0,
 			cache_creation_tokens: 0,
+			cost_usd: null,
 			cache_read_share: 0,
 		},
 		{
@@ -493,6 +497,7 @@ test("scope stats count outcomes once and include cache tokens, unscoped and usa
 			output_tokens: 60,
 			cache_read_tokens: 60,
 			cache_creation_tokens: 20,
+			cost_usd: null,
 			cache_read_share: 0.5,
 		},
 		{
@@ -503,6 +508,7 @@ test("scope stats count outcomes once and include cache tokens, unscoped and usa
 			output_tokens: 6,
 			cache_read_tokens: 0,
 			cache_creation_tokens: 0,
+			cost_usd: null,
 			cache_read_share: 0,
 		},
 	]);
@@ -531,4 +537,39 @@ test("stats groups non-test fallback reasons and global failure counts", async (
 	const filtered = await stats("other");
 	expect(filtered.fallbacks).toEqual(r.fallbacks);
 	expect(filtered.failures).toEqual(r.failures);
+});
+
+test("USD totals exclude schema 1 even with a reported cost and remain null without eligible costs", async () => {
+	sug("new", { scope: "turn" });
+	sug("legacy", { scope: "turn" });
+	sug("unknown", { scope: "session", task_type: "review" });
+	for (const id of ["new", "legacy", "unknown"])
+		usage(id, "m/a", "low", [10, 20], "transcript");
+	const db = new Database(dbPath);
+	db.run(
+		"UPDATE usages SET cost_usd = 0.25, cost_source = 'reported' WHERE suggestion_id = 'new'",
+	);
+	db.run(
+		"UPDATE usages SET tokens_schema = 1, cost_usd = 99, cost_source = 'reported' WHERE suggestion_id = 'legacy'",
+	);
+	db.close();
+	const result = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		onSql: noInstall,
+	});
+	expect(
+		result.by_type.find((t) => t.task_type === "code.bugfix")?.cost_usd,
+	).toBeCloseTo(0.25, 12);
+	expect(
+		result.by_type.find((t) => t.task_type === "review")?.cost_usd,
+	).toBeNull();
+	expect(
+		result.by_scope?.find((t) => t.scope === "turn")?.cost_usd,
+	).toBeCloseTo(0.25, 12);
+	expect(
+		result.by_scope?.find((t) => t.scope === "session")?.cost_usd,
+	).toBeNull();
 });

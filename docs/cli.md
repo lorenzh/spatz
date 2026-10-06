@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -223,6 +223,7 @@ It does not create a success signal or close the suggestion.
 | `--cache-creation <n>` | required | Input tokens written to cache. |
 | `--turn <id>` | required | The run's turn id. Also stored as `scope_key`. |
 | `--source claude-code-mod` | required | The direct usage source. |
+| `--cost-usd <n>` | absent | Optional harness-reported USD cost. Must be a finite non-negative decimal. The CLI accepts scientific notation. It rejects empty values, whitespace and hexadecimal values. |
 | `--json` | `false` | Print the stored usage record. |
 
 All token counts must be non-negative safe integers.
@@ -238,6 +239,11 @@ spatz usage <suggestion_id> --model claude-sonnet-5-5 --effort high \
 Text output is `usage recorded: <suggestion_id>  turn: <turn_id>`.
 JSON contains `suggestion_id`, `model`, `effort`, `source`, `scope_key`, `turn_id` and `agent_id`.
 It also contains the four token counts with snake_case names.
+`input_tokens` means uncached input. `output_tokens` includes reasoning tokens once.
+JSON also includes `cost_usd`, `cost_source`, `tokens_complete` and `tokens_schema`.
+`cost_source` is `reported`, `priced` or `unavailable`. Unavailable cost is `null`.
+If all four counters are known, `tokens_complete` is `1`. Otherwise it is `0`.
+New rows use `tokens_schema = 2`. See [cost storage](how-it-works.md#normalized-tokens-and-cost).
 The remaining fields are `is_sidechain`, `rounds`, `note` and `reported_at`.
 `rounds` and `note` are `null`. `reported_at` is epoch milliseconds.
 If the suggestion has an agent id, `is_sidechain` is true.
@@ -314,10 +320,17 @@ For none-only catalog models, stats count old rows with a missing effort as `non
 | `success_rate` | Share of outcomes with quality at least 0.8. Without outcomes, JSON gives `null` and text gives `-`. |
 | `input_tokens`, `output_tokens` | Total recorded input and output tokens. |
 | `cache_read_tokens`, `cache_creation_tokens` | Total recorded cache tokens. |
+| `cost_usd` | Sum of USD costs from schema-2 usage rows, or `null`. |
 | `cache_read_share` | `cache_read_tokens / (input_tokens + cache_read_tokens + cache_creation_tokens)`. With no input tokens, the share is zero. |
 
 Token totals include suggestions without outcomes. Output tokens do not enter the cache-read share.
-This view does not estimate cost or routing latency.
+Both task-type and scope stats include `cost_usd`.
+The sum includes reported costs and costs calculated from stored prices.
+Schema-1 rows never enter USD totals. If no row has a schema-2 cost, the total is `null` (`-` in text).
+Missing counters contribute zero to the calculation, so incomplete rows can understate cost.
+Token totals still include historical rows and treat null counters as zero.
+Historical Codex input totals can include cached tokens. These totals are not normalized retroactively.
+Stats do not measure routing latency.
 
 ```sh
 spatz stats --by scope
@@ -329,7 +342,7 @@ The first run needs network access once. See [configuration.md](configuration.md
 ### Text output
 
 ```text
-<task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>
+<task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cost_usd=<amount or ->
   <model>:<effort>  n=<count>  success=<pct>
 coverage: <pct>  learned_success: <pct or ->  control_success: <pct or ->
 fallbacks: <reason>=<count>  ...
@@ -379,6 +392,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `by_type[].adoption_rate` | number, 0 to 1 | Share of outcomes whose used pair is `ranking[0]`. |
 | `by_type[].input_tokens` | number | Sum of recorded input tokens. |
 | `by_type[].output_tokens` | number | Sum of recorded output tokens. |
+| `by_type[].cost_usd` | number or null | Sum of USD costs from schema-2 usage rows. Null if none have a cost. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | Success rate of learned picks. spatz compares only cells that have both learned and control outcomes, and weights each cell by its count. |
 | `control_success` | number or null | Success rate of the control group in the same cells. |
@@ -389,7 +403,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 
 ```console
 $ spatz stats
-other  n=1  adoption=100%  input_tokens=0  output_tokens=0
+other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cost_usd=-
   anthropic/claude-sonnet-5.5:medium  n=1  success=100%
 coverage: 14%  learned_success: -  control_success: -
 fallbacks: opt_out=7
@@ -398,7 +412,7 @@ failures: parse=0  hook=0  launcher=0
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cost_usd":null}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes

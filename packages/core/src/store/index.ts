@@ -157,7 +157,44 @@ const SCHEMA_V5 = [
 	)`,
 ];
 
-const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
+const SCHEMA_V6 = [
+	"ALTER TABLE suggestions ADD COLUMN price_snapshot TEXT",
+	"ALTER TABLE suggestions ADD COLUMN price_date INTEGER",
+	`CREATE TABLE usages_v6 (
+		suggestion_id TEXT NOT NULL, model TEXT NOT NULL, effort TEXT,
+		source TEXT NOT NULL, scope_key TEXT NOT NULL,
+		input_tokens INTEGER CHECK (input_tokens >= 0),
+		output_tokens INTEGER CHECK (output_tokens >= 0),
+		cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
+		cache_creation_tokens INTEGER CHECK (cache_creation_tokens >= 0),
+		is_sidechain INTEGER NOT NULL, rounds INTEGER, note TEXT, reported_at INTEGER NOT NULL,
+		turn_id TEXT, agent_id TEXT,
+		tokens_schema INTEGER NOT NULL DEFAULT 2 CHECK (tokens_schema IN (1, 2)),
+		tokens_complete INTEGER NOT NULL DEFAULT 0 CHECK (tokens_complete IN (0, 1)),
+		cost_usd REAL CHECK (cost_usd >= 0),
+		cost_source TEXT NOT NULL DEFAULT 'unavailable' CHECK (cost_source IN ('reported', 'priced', 'unavailable')),
+		UNIQUE (suggestion_id, source, scope_key, model)
+	)`,
+	// Keep rowids: outcomes use them to break ties. Old clients erased missing counters, so completeness is unknown.
+	`INSERT INTO usages_v6 (rowid, suggestion_id, model, effort, source, scope_key,
+		input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_sidechain,
+		rounds, note, reported_at, turn_id, agent_id, tokens_schema)
+	 SELECT rowid, *, CASE WHEN suggestion_id IN (SELECT id FROM suggestions WHERE agent = 'codex')
+		OR (source = 'transcript' AND model LIKE 'openai/%') THEN 1 ELSE 2 END FROM usages`,
+	"DROP VIEW outcomes",
+	"DROP TABLE usages",
+	"ALTER TABLE usages_v6 RENAME TO usages",
+	SCHEMA_V1.slice(SCHEMA_V1.indexOf("CREATE VIEW outcomes")),
+];
+
+const MIGRATIONS = [
+	SCHEMA_V1,
+	SCHEMA_V2,
+	SCHEMA_V3,
+	SCHEMA_V4,
+	SCHEMA_V5,
+	SCHEMA_V6,
+];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /** The caller holds IMMEDIATE, before any writes, so this reader sees all committed WAL data. */
@@ -228,6 +265,7 @@ export function openDatabase(dbPath: string): Database {
 
 type SuggestionRow = Omit<
 	SuggestionRecord,
+	| "price_snapshot"
 	| "probabilities"
 	| "ranking"
 	| "explored"
@@ -235,6 +273,7 @@ type SuggestionRow = Omit<
 	| "fallback_used"
 	| "is_test"
 > & {
+	price_snapshot: string | null;
 	probabilities: string | null;
 	ranking: string;
 	explored: number;
@@ -274,9 +313,13 @@ export function openStore(
 			db.query(
 				`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
 				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
-				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason)`,
+				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason, $price_snapshot, $price_date)`,
 			).run({
 				...r,
+				price_snapshot: r.price_snapshot
+					? JSON.stringify(r.price_snapshot)
+					: null,
+				price_date: r.price_date ?? null,
 				difficulty: normalizeDifficulty(r.difficulty),
 				reason: normalizeReason(r.reason),
 				probabilities:
@@ -298,6 +341,9 @@ export function openStore(
 			if (!row) return null;
 			return {
 				...row,
+				price_snapshot: row.price_snapshot
+					? JSON.parse(row.price_snapshot)
+					: {},
 				difficulty: normalizeDifficulty(row.difficulty),
 				reason: normalizeReason(row.reason),
 				probabilities: normalizeProbabilities(
@@ -436,12 +482,60 @@ export function openStore(
 			).run({ ...r, turn_id: r.turn_id ?? null, agent_id: r.agent_id ?? null });
 		},
 		upsertUsage(r) {
+			const counts = [
+				r.input_tokens,
+				r.output_tokens,
+				r.cache_read_tokens,
+				r.cache_creation_tokens,
+			];
+			if (counts.some((n) => n !== null && (!Number.isSafeInteger(n) || n < 0)))
+				throw new Error("tokens must be null or non-negative safe integers");
+			let cost_usd: number | null = null;
+			let cost_source: UsageRecord["cost_source"] = "unavailable";
+			if (r.cost_source === "reported" && r.cost_usd != null) {
+				if (!Number.isFinite(r.cost_usd) || r.cost_usd < 0)
+					throw new Error("cost must be finite and non-negative");
+				cost_usd = r.cost_usd;
+				cost_source = "reported";
+			} else {
+				const price = store.getSuggestion(r.suggestion_id)?.price_snapshot?.[
+					r.model
+				];
+				if (price && counts.some((n) => n !== null)) {
+					const rates = [
+						price.price_prompt,
+						price.price_completion,
+						price.price_cache_read,
+						price.price_cache_write,
+					];
+					if (
+						counts.every(
+							(n, i) =>
+								!n ||
+								(rates[i] != null &&
+									Number.isFinite(rates[i]) &&
+									(rates[i] as number) >= 0),
+						)
+					) {
+						cost_usd = counts.reduce<number>(
+							(sum, n, i) => sum + (n ?? 0) * (rates[i] ?? 0),
+							0,
+						);
+						if (Number.isFinite(cost_usd)) cost_source = "priced";
+						else cost_usd = null;
+					}
+				}
+			}
 			db.query(
 				`INSERT OR REPLACE INTO usages VALUES ($suggestion_id, $model, $effort, $source, $scope_key,
 				$input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $is_sidechain,
-				$rounds, $note, $reported_at, $turn_id, $agent_id)`,
+				$rounds, $note, $reported_at, $turn_id, $agent_id, $tokens_schema, $tokens_complete, $cost_usd, $cost_source)`,
 			).run({
 				...r,
+				tokens_schema: 2,
+				tokens_complete: Number(counts.every((n) => n !== null)),
+				cost_usd,
+				cost_source,
 				effort: noneOnly.has(r.model) ? "none" : (r.effort ?? null),
 				turn_id: r.turn_id ?? null,
 				agent_id: r.agent_id ?? null,

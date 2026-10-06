@@ -103,6 +103,8 @@ export interface OpenRouterModel {
 	name: string;
 	price_prompt: number;
 	price_completion: number;
+	price_cache_read: number | null;
+	price_cache_write: number | null;
 	context_length: number | null;
 	/** null = all efforts accepted (field null) or no effort info. Values as listed (may include "none"). */
 	supported_efforts: string[] | null;
@@ -260,7 +262,7 @@ export interface SignalRecord {
 	observed_at: number;
 }
 
-/** report = spatz report; transcript = Stop (main session); subagent = SubagentStop; agent_tool = PostToolUse on Agent (resolvedModel, 0 tokens); claude-code-mod = direct turn usage. */
+/** report = spatz report; transcript = Stop (main session); subagent = SubagentStop; agent_tool = PostToolUse on Agent (resolvedModel, unknown tokens); claude-code-mod = direct turn usage. */
 export type UsageSource =
 	| "report"
 	| "transcript"
@@ -268,7 +270,18 @@ export type UsageSource =
 	| "agent_tool"
 	| "claude-code-mod";
 
+export type PriceSnapshot = Pick<
+	OpenRouterModel,
+	"price_prompt" | "price_completion" | "price_cache_read" | "price_cache_write"
+>;
+export type CostSource = "reported" | "priced" | "unavailable";
+
 export interface UsageRecord {
+	/** Populated by the store. Only reported costs may be supplied by callers. */
+	cost_usd?: number | null;
+	cost_source?: CostSource;
+	tokens_complete?: 0 | 1;
+	tokens_schema?: 1 | 2;
 	turn_id?: string | null;
 	agent_id?: string | null;
 	suggestion_id: string;
@@ -279,10 +292,10 @@ export interface UsageRecord {
 	source: UsageSource;
 	/** Dedup key: prompt_id (transcript), agent_id (subagent/agent_tool), turn_id (claude-code-mod or direct report), "" (legacy report). Upsert on (suggestion_id, source, scope_key, model). */
 	scope_key: string;
-	input_tokens: number;
-	output_tokens: number;
-	cache_read_tokens: number;
-	cache_creation_tokens: number;
+	input_tokens: number | null;
+	output_tokens: number | null;
+	cache_read_tokens: number | null;
+	cache_creation_tokens: number | null;
 	is_sidechain: boolean;
 	/** Only for source "report". */
 	rounds: number | null;
@@ -313,6 +326,10 @@ export type Agent = (typeof AGENTS)[number];
 
 /** Row of table `suggestions`. No task text is ever stored. */
 export interface SuggestionRecord {
+	/** Candidate model IDs mapped to four USD-per-token rates captured at creation. */
+	price_snapshot?: Record<string, PriceSnapshot>;
+	/** Capture time in epoch milliseconds, null for pre-v6 suggestions. */
+	price_date?: number | null;
 	scope: RoutingScope | null;
 	agent: Agent | null;
 	turn_id: string | null;
@@ -353,6 +370,7 @@ export interface PairStats {
 }
 
 export interface TypeStats {
+	cost_usd: number | null;
 	task_type: TaskType;
 	/** Outcomes of non-test suggestions. */
 	n: number;
@@ -364,6 +382,7 @@ export interface TypeStats {
 }
 
 export interface ScopeStats {
+	cost_usd: number | null;
 	scope: RoutingScope | null;
 	/** Number of outcomes, as in TypeStats. */
 	n: number;

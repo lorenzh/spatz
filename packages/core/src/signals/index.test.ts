@@ -28,9 +28,9 @@ describe("parseCodexRollout", () => {
 			model: "gpt-6-luna",
 			effort: "low",
 			usage: {
-				input_tokens: 174968,
+				input_tokens: null,
 				cache_read_input_tokens: 149504,
-				cache_creation_input_tokens: 0,
+				cache_creation_input_tokens: null,
 				output_tokens: 674,
 			},
 			calls: [
@@ -55,7 +55,7 @@ describe("parseCodexRollout", () => {
 			model: "gpt-6-luna",
 			effort: "low",
 			usage: {
-				input_tokens: 61711,
+				input_tokens: 13583,
 				cache_read_input_tokens: 48128,
 				cache_creation_input_tokens: 0,
 				output_tokens: 124,

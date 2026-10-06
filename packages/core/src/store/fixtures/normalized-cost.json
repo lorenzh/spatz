@@ -1,0 +1,24 @@
+{
+	"provenance": "Sanitized modelUsage from spike/stream-s1.jsonl result, claude-haiku-4-5-20251001; Codex is an equivalent inclusive-input fixture.",
+	"model": "anthropic/claude-haiku-4.5",
+	"prices": {
+		"price_prompt": 0.000001,
+		"price_completion": 0.000005,
+		"price_cache_read": 0.0000001,
+		"price_cache_write": 0.00000125
+	},
+	"reported_cost_usd": 0.036588899999999994,
+	"claude": {
+		"input_tokens": 18,
+		"output_tokens": 272,
+		"cache_read_input_tokens": 21334,
+		"cache_creation_input_tokens": 26462
+	},
+	"codex": {
+		"input_tokens": 47814,
+		"output_tokens": 272,
+		"cached_input_tokens": 21334,
+		"cache_write_input_tokens": 26462,
+		"reasoning_output_tokens": 120
+	}
+}

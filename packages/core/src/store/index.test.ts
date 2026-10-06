@@ -10,6 +10,8 @@ import type {
 	SuggestionRecord,
 	UsageRecord,
 } from "../contracts/types.ts";
+import { parseCodexRollout, sumByModel } from "../signals/transcript.ts";
+import fixture from "./fixtures/normalized-cost.json";
 import { openDatabase, openStore, SCHEMA_VERSION } from "./index.ts";
 
 const dirs: string[] = [];
@@ -153,8 +155,8 @@ describe("schema", () => {
 				})),
 			);
 			for (const [i, table] of tables.entries())
-				expect(migrated.query(`SELECT * FROM ${table}`).all()).toEqual(
-					before[i] ?? [],
+				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
+					before[i] as object[],
 				);
 			const row = migrated
 				.query<{ probabilities: string; reason: string }, []>(
@@ -207,7 +209,7 @@ describe("schema", () => {
 			);
 			for (const id of ["old", "new"]) {
 				db.run(
-					"INSERT INTO usages VALUES (?, 'm/a', 'low', 'report', '', 0, 0, 0, 0, 0, NULL, NULL, 1, NULL, NULL)",
+					"INSERT INTO usages (suggestion_id, model, effort, source, scope_key, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_sidechain, rounds, note, reported_at, turn_id, agent_id) VALUES (?, 'm/a', 'low', 'report', '', 0, 0, 0, 0, 0, NULL, NULL, 1, NULL, NULL)",
 					[id],
 				);
 				db.run(
@@ -303,7 +305,7 @@ describe("schema", () => {
 				{ name: "usage_scopes", type: "table" },
 			]),
 		);
-		expect(SCHEMA_VERSION).toBe(5);
+		expect(SCHEMA_VERSION).toBe(6);
 		expect(version?.user_version).toBe(SCHEMA_VERSION);
 	});
 
@@ -413,7 +415,11 @@ describe("suggestions", () => {
 			closed_at: 100,
 		});
 		store.insertSuggestion(record);
-		expect(store.getSuggestion("abc")).toEqual(record);
+		expect(store.getSuggestion("abc")).toEqual({
+			...record,
+			price_snapshot: {},
+			price_date: null,
+		});
 		expect(store.getSuggestion("missing")).toBeNull();
 	});
 
@@ -1007,7 +1013,7 @@ describe("v5 diagnostics", () => {
 		const migrated = openDatabase(path);
 		try {
 			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: 5,
+				user_version: SCHEMA_VERSION,
 			});
 			for (const [i, table] of tables.entries()) {
 				const rows = migrated.query(`SELECT * FROM ${table}`).all();
@@ -1070,4 +1076,190 @@ describe("v5 diagnostics", () => {
 		});
 		check.close();
 	});
+});
+
+describe("normalized usage and cost", () => {
+	test("v5 migration preserves every row, rowid, outcome and watermark and flags legacy Codex", async () => {
+		const path = tempDb();
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(join(path, ".."), { recursive: true });
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v5.sql")).text());
+		const tables = [
+			"suggestions",
+			"usages",
+			"signals",
+			"usage_scopes",
+			"failures",
+		];
+		const before = tables.map((t) =>
+			db.query(`SELECT rowid, * FROM ${t}`).all(),
+		);
+		const outcomes = db.query("SELECT * FROM outcomes").all();
+		db.close();
+		const migrated = openDatabase(path);
+		try {
+			expect(migrated.query("PRAGMA user_version").get()).toEqual({
+				user_version: 6,
+			});
+			for (const [i, table] of tables.entries())
+				expect(
+					migrated.query(`SELECT rowid, * FROM ${table}`).all(),
+				).toMatchObject(before[i] as object[]);
+			expect(migrated.query("SELECT * FROM outcomes").all()).toEqual(outcomes);
+			expect(
+				migrated
+					.query(
+						"SELECT DISTINCT tokens_schema FROM usages WHERE suggestion_id IN ('h', 'n')",
+					)
+					.all(),
+			).toEqual([{ tokens_schema: 1 }]);
+			expect(
+				migrated
+					.query("SELECT DISTINCT cost_usd, cost_source FROM usages")
+					.all(),
+			).toEqual([{ cost_usd: null, cost_source: "unavailable" }]);
+		} finally {
+			migrated.close();
+		}
+	});
+	test("v6 failure rolls back the table rebuild and suggestion columns", async () => {
+		const path = tempDb();
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(join(path, ".."), { recursive: true });
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v5.sql")).text());
+		db.run("CREATE TABLE usages_v6 (collision INTEGER)");
+		db.close();
+		expect(() => openDatabase(path)).toThrow();
+		const after = new Database(path);
+		expect(after.query("PRAGMA user_version").get()).toEqual({
+			user_version: 5,
+		});
+		expect(
+			after
+				.query("PRAGMA table_info(suggestions)")
+				.all()
+				.some((c) => (c as { name: string }).name === "price_snapshot"),
+		).toBe(false);
+		expect(after.query("SELECT COUNT(*) AS n FROM usages").get()).toEqual({
+			n: 6,
+		});
+		after.close();
+	});
+	test("prices normalized rows from the immutable model snapshot, preserves nulls and prefers reported dollars", () => {
+		const store = open();
+		store.insertSuggestion(
+			suggestion({
+				price_date: 1000,
+				price_snapshot: {
+					"anthropic/claude-opus-5.5": {
+						price_prompt: 0.000003,
+						price_completion: 0.000015,
+						price_cache_read: 0.0000003,
+						price_cache_write: 0.00000375,
+					},
+				},
+			}),
+		);
+		const read = () =>
+			store.getUsage("s1", "transcript", "p1", "anthropic/claude-opus-5.5");
+		store.upsertUsage(
+			usage({
+				input_tokens: 100,
+				output_tokens: 20,
+				cache_read_tokens: 80,
+				cache_creation_tokens: 40,
+			}),
+		);
+		expect(read()).toMatchObject({
+			tokens_schema: 2,
+			tokens_complete: 1,
+			cost_source: "priced",
+		});
+		expect(read()?.cost_usd).toBeCloseTo(0.000774, 12);
+		store.upsertUsage(
+			usage({ cache_read_tokens: null, cache_creation_tokens: null }),
+		);
+		expect(read()).toMatchObject({
+			cache_read_tokens: null,
+			cache_creation_tokens: null,
+			tokens_complete: 0,
+			cost_source: "priced",
+		});
+		expect(read()?.cost_usd).toBeCloseTo(0.00153, 12);
+		store.upsertUsage(usage({ cost_usd: 0.002, cost_source: "reported" }));
+		expect(read()).toMatchObject({ cost_usd: 0.002, cost_source: "reported" });
+		store.upsertUsage(usage({ model: "unknown" }));
+		expect(store.getUsage("s1", "transcript", "p1", "unknown")).toMatchObject({
+			cost_usd: null,
+			cost_source: "unavailable",
+		});
+	});
+	test("missing rates for used cache tokens make cost unavailable; zero and missing counters need no rate", () => {
+		const store = open();
+		store.insertSuggestion(
+			suggestion({
+				price_date: 1,
+				price_snapshot: {
+					"anthropic/claude-opus-5.5": {
+						price_prompt: 0,
+						price_completion: 0,
+						price_cache_read: null,
+						price_cache_write: null,
+					},
+				},
+			}),
+		);
+		const read = () =>
+			store.getUsage("s1", "transcript", "p1", "anthropic/claude-opus-5.5");
+		store.upsertUsage(usage({ cache_read_tokens: 1 }));
+		expect(read()?.cost_source).toBe("unavailable");
+		store.upsertUsage(usage({ cache_read_tokens: null }));
+		expect(read()).toMatchObject({
+			cost_usd: 0,
+			cost_source: "priced",
+			tokens_complete: 0,
+		});
+		expect(() => store.upsertUsage(usage({ input_tokens: -1 }))).toThrow();
+		expect(() =>
+			store.upsertUsage(usage({ cost_usd: -1, cost_source: "reported" })),
+		).toThrow();
+	});
+});
+
+test("Claude measured dollars and equivalent Codex normalized tokens agree", () => {
+	const store = open();
+	store.insertSuggestion(
+		suggestion({
+			price_date: 1,
+			price_snapshot: { [fixture.model]: fixture.prices },
+		}),
+	);
+	const rollout = [
+		{ type: "turn_context", payload: { turn_id: "t", model: fixture.model } },
+		{
+			type: "token_usage_record",
+			payload: { turn_id: "t", turn_token_usage: fixture.codex },
+		},
+	]
+		.map((r) => JSON.stringify(r))
+		.join("\n");
+	const codex = parseCodexRollout(rollout, "t")?.usage;
+	expect(codex).toEqual(fixture.claude);
+	for (const [source, raw] of [
+		["claude", fixture.claude],
+		["codex", codex],
+	] as const) {
+		const [tokens] = sumByModel([
+			{ model: fixture.model, at: 1, usage: raw ?? {} },
+		]);
+		store.upsertUsage(
+			usage({ ...tokens, model: fixture.model, scope_key: source }),
+		);
+		const priced = store.getUsage("s1", "transcript", source, fixture.model);
+		expect(priced?.input_tokens).toBe(18);
+		expect(priced?.cost_usd).toBeCloseTo(fixture.reported_cost_usd, 12);
+		expect(priced?.tokens_complete).toBe(1);
+	}
 });

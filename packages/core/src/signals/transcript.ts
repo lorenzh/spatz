@@ -5,10 +5,10 @@ import type { TranscriptUsage } from "../contracts/hooks.ts";
 export interface ModelUsage {
 	/** Raw model name from the transcript, e.g. "claude-sonnet-5-5" (caller canonicalizes). */
 	model: string;
-	input_tokens: number;
-	output_tokens: number;
-	cache_read_tokens: number;
-	cache_creation_tokens: number;
+	input_tokens: number | null;
+	output_tokens: number | null;
+	cache_read_tokens: number | null;
+	cache_creation_tokens: number | null;
 }
 
 export interface CodexRollout {
@@ -19,13 +19,13 @@ export interface CodexRollout {
 }
 
 type CodexUsage = {
-	input_tokens?: number;
-	cached_input_tokens?: number;
-	cache_write_input_tokens?: number;
+	input_tokens?: number | null;
+	cached_input_tokens?: number | null;
+	cache_write_input_tokens?: number | null;
 	/** Includes reasoning_output_tokens; do not add them again. */
-	output_tokens?: number;
-	reasoning_output_tokens?: number;
-	total_tokens?: number;
+	output_tokens?: number | null;
+	reasoning_output_tokens?: number | null;
+	total_tokens?: number | null;
 };
 
 const CODEX_TOKEN_FIELDS = [
@@ -77,8 +77,8 @@ export function parseCodexRollout(
 	if (!turn || typeof turn.model !== "string") return null;
 	let usage: CodexUsage | null = null;
 	let turnUsage: CodexUsage | null = null;
-	let threadUsage: CodexUsage = {};
-	let beforeTurn: CodexUsage = {};
+	let threadUsage: CodexUsage | null = null;
+	let beforeTurn: CodexUsage | null = null;
 	const calls = new Map<string, string>();
 	const exits = new Map<string, number>();
 	const completed = new Map<string, CodexRollout["calls"][number]>();
@@ -101,18 +101,24 @@ export function parseCodexRollout(
 			} else if (total && !turnUsage) {
 				// After compaction, token_count can lag behind explicit turn totals.
 				usage = Object.fromEntries(
-					CODEX_TOKEN_FIELDS.map((key) => [
-						key,
-						(total[key] ?? 0) - (beforeTurn[key] ?? 0),
-					]),
+					CODEX_TOKEN_FIELDS.map((key) => {
+						const current = tokenCount(total[key]);
+						const before =
+							beforeTurn === null ? 0 : tokenCount(beforeTurn[key]);
+						return [
+							key,
+							current === null || before === null ? null : current - before,
+						];
+					}),
 				);
-				if (Object.values(usage).some((value) => value < 0)) usage = null;
+				if (Object.values(usage).some((value) => value !== null && value < 0))
+					usage = null;
 			} else if (type === "token_usage_record" && p?.usage) {
 				// With no totals, each usage object describes one response in the turn.
 				usage = Object.fromEntries(
 					CODEX_TOKEN_FIELDS.map((key) => [
 						key,
-						(usage?.[key] ?? 0) + (p.usage?.[key] ?? 0),
+						sumTokens(usage === null ? 0 : usage[key], p.usage?.[key]),
 					]),
 				);
 			}
@@ -168,15 +174,22 @@ export function parseCodexRollout(
 		)
 			exits.set(p.call_id, p.metadata?.exit_code ?? 0);
 	}
+	const input = tokenCount(usage?.input_tokens);
+	const cacheRead = tokenCount(usage?.cached_input_tokens);
+	const cacheWrite = tokenCount(usage?.cache_write_input_tokens);
 	return {
 		model: turn.model,
 		effort: typeof turn.effort === "string" ? turn.effort : null,
 		usage: usage
 			? {
-					input_tokens: usage.input_tokens ?? 0,
-					cache_read_input_tokens: usage.cached_input_tokens ?? 0,
-					cache_creation_input_tokens: usage.cache_write_input_tokens ?? 0,
-					output_tokens: usage.output_tokens ?? 0,
+					// Responses input includes both cache buckets; output includes reasoning.
+					input_tokens:
+						input === null || cacheRead === null || cacheWrite === null
+							? null
+							: tokenCount(input - cacheRead - cacheWrite),
+					cache_read_input_tokens: cacheRead,
+					cache_creation_input_tokens: cacheWrite,
+					output_tokens: tokenCount(usage.output_tokens),
 				}
 			: null,
 		// CommandExecution is authoritative when available; do not count its legacy mirror twice.
@@ -228,12 +241,24 @@ function assistantMessages(
 			continue;
 		seen.add(id);
 		const at = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
-		out.push({ model, at, usage });
+		out.push({ model, at, usage: usage ?? {} });
 	}
 	return out;
 }
 
-/** Sums usage per raw model name. */
+/** Missing or malformed counters are unknown; a reported zero remains zero. */
+const tokenCount = (value: unknown): number | null =>
+	typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+		? value
+		: null;
+
+const sumTokens = (a: unknown, b: unknown): number | null => {
+	const left = tokenCount(a);
+	const right = tokenCount(b);
+	return left === null || right === null ? null : tokenCount(left + right);
+};
+
+/** Sums usage per raw model name; any unknown message counter makes its total unknown. */
 export function sumByModel(messages: AssistantMessage[]): ModelUsage[] {
 	const byModel = new Map<string, ModelUsage>();
 	for (const { model, usage } of messages) {
@@ -244,10 +269,16 @@ export function sumByModel(messages: AssistantMessage[]): ModelUsage[] {
 			cache_read_tokens: 0,
 			cache_creation_tokens: 0,
 		};
-		u.input_tokens += usage.input_tokens ?? 0;
-		u.output_tokens += usage.output_tokens ?? 0;
-		u.cache_read_tokens += usage.cache_read_input_tokens ?? 0;
-		u.cache_creation_tokens += usage.cache_creation_input_tokens ?? 0;
+		u.input_tokens = sumTokens(u.input_tokens, usage.input_tokens);
+		u.output_tokens = sumTokens(u.output_tokens, usage.output_tokens);
+		u.cache_read_tokens = sumTokens(
+			u.cache_read_tokens,
+			usage.cache_read_input_tokens,
+		);
+		u.cache_creation_tokens = sumTokens(
+			u.cache_creation_tokens,
+			usage.cache_creation_input_tokens,
+		);
 		byModel.set(model, u);
 	}
 	return [...byModel.values()];

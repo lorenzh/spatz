@@ -64,6 +64,7 @@ const statsReport: StatsReport = {
 					success_rate: 1,
 				},
 			],
+			cost_usd: null,
 			adoption_rate: 0.75,
 			input_tokens: 1200,
 			output_tokens: 340,
@@ -666,7 +667,7 @@ describe("stats", () => {
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
 			[
-				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340",
+				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cost_usd=-",
 				"  openai/gpt-6-sol:medium  n=3  success=67%",
 				"  anthropic/claude-opus-5.5:-  n=1  success=100%",
 				"coverage: 80%  learned_success: 70%  control_success: -",
@@ -806,6 +807,8 @@ describe("mod CLI", () => {
 					"t",
 					"--source",
 					"claude-code-mod",
+					"--cost-usd",
+					"0.123",
 					"--json",
 				],
 				io,
@@ -816,6 +819,7 @@ describe("mod CLI", () => {
 			{
 				suggestionId: "id",
 				model: "m",
+				costUsd: 0.123,
 				input: 1,
 				output: 2,
 				cacheRead: 3,
@@ -825,6 +829,63 @@ describe("mod CLI", () => {
 			},
 		]);
 		expect(JSON.parse(stdout())).toEqual({ suggestion_id: "id" });
+	});
+	test.each([
+		["0", 0],
+		["0.123", 0.123],
+		[".5", 0.5],
+		["1.", 1],
+		["1e-7", 1e-7],
+		["", null],
+		[" ", null],
+		[" 1 ", null],
+		["1\n", null],
+		["0x10", null],
+		["0b10", null],
+		["0o10", null],
+		["-1", null],
+		["NaN", null],
+		["Infinity", null],
+		["1e309", null],
+		["1usd", null],
+	])("usage validates decimal --cost-usd %j", async (value, expected) => {
+		const { io, err, out } = fakeIO();
+		const seen: unknown[] = [];
+		const { api } = fakeApi({
+			usage: async (input) => {
+				seen.push(input.costUsd);
+				return { suggestion_id: input.suggestionId } as never;
+			},
+		});
+		const code = await main(
+			[
+				"usage",
+				"id",
+				"--model",
+				"m",
+				"--input",
+				"0",
+				"--output",
+				"0",
+				"--cache-read",
+				"0",
+				"--cache-creation",
+				"0",
+				"--turn",
+				"t",
+				"--source",
+				"claude-code-mod",
+				`--cost-usd=${value}`,
+			],
+			io,
+			api,
+		);
+		expect(code).toBe(expected === null ? 2 : 0);
+		expect(seen).toEqual(expected === null ? [] : [expected]);
+		if (expected === null) {
+			expect(err.join("\n")).toContain("--cost-usd must be");
+			expect(out).toEqual([]);
+		} else expect(err).toEqual([]);
 	});
 	test("report passes the direct turn and source", async () => {
 		const { io } = fakeIO();
@@ -877,6 +938,7 @@ describe("mod CLI", () => {
 							output_tokens: 20,
 							cache_read_tokens: 60,
 							cache_creation_tokens: 30,
+							cost_usd: null,
 							cache_read_share: 0.6,
 						},
 					],
@@ -886,7 +948,7 @@ describe("mod CLI", () => {
 		expect(await main(["stats", "--by", "scope"], io, api)).toBe(0);
 		expect(seen).toEqual([{ by: "scope" }]);
 		expect(stdout()).toContain(
-			"unscoped  n=2  success=50%  input_tokens=10  output_tokens=20  cache_read_tokens=60  cache_creation_tokens=30  cache_read_share=60%",
+			"unscoped  n=2  success=50%  input_tokens=10  output_tokens=20  cache_read_tokens=60  cache_creation_tokens=30  cache_read_share=60%  cost_usd=-",
 		);
 	});
 	test.each(["-1", "1.5", "NaN", "9007199254740992", ""])(

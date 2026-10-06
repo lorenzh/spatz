@@ -36,8 +36,8 @@ async function fixture(dir: string, version = 5) {
 	return { path, db };
 }
 
-// Exercise a future migration without changing the production schema or public API.
-async function futureStore(dir: string) {
+// Use the previous schema to exercise a real migration and restore with the old CLI.
+async function previousStore(dir: string) {
 	const source = (await Bun.file(join(import.meta.dir, "index.ts")).text())
 		.replaceAll(
 			'from "../contracts/',
@@ -45,9 +45,9 @@ async function futureStore(dir: string) {
 		)
 		.replace(
 			"export const SCHEMA_VERSION",
-			'MIGRATIONS.push(["CREATE TABLE migration_probe (value TEXT)"]);\nexport const SCHEMA_VERSION',
+			"MIGRATIONS.pop();\nexport const SCHEMA_VERSION",
 		);
-	const path = join(dir, "future-store.ts");
+	const path = join(dir, "previous-store.ts");
 	await Bun.write(path, source);
 	return import(path) as Promise<typeof import("./index.ts")>;
 }
@@ -63,36 +63,37 @@ const tables = [
 const rows = (db: Database) =>
 	tables.map((table) => db.query(`SELECT * FROM ${table}`).all());
 
-test("v5 WAL data is backed up before a future migration and restores with the old CLI", async () => {
+test("previous-schema WAL data is backed up before migration and restores with the old CLI", async () => {
 	const dir = directory();
 	const { path, db } = await fixture(dir);
+	const previous = await previousStore(dir);
+	previous.openDatabase(path).close();
+	expect(db.query("PRAGMA user_version").get()).toEqual({
+		user_version: SCHEMA_VERSION - 1,
+	});
 	const before = rows(db);
-	const future = await futureStore(dir);
-	const migrated = future.openDatabase(path);
+	const migrated = openDatabase(path);
 	handles.push(migrated);
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
-		user_version: 6,
+		user_version: SCHEMA_VERSION,
 	});
-	expect(rows(migrated)).toEqual(before);
-	const backup = `${path}.bak-v5`;
+	expect(rows(migrated)).toMatchObject(before);
+	const backup = `${path}.bak-v${SCHEMA_VERSION - 1}`;
 	expect(existsSync(backup)).toBe(true);
 	const restoredPath = join(dir, "restored.db");
 	copyFileSync(backup, restoredPath);
-	const restored = openDatabase(restoredPath);
+	const restored = previous.openDatabase(restoredPath);
 	handles.push(restored);
 	expect(restored.query("PRAGMA user_version").get()).toEqual({
-		user_version: 5,
+		user_version: SCHEMA_VERSION - 1,
 	});
 	expect(restored.query("PRAGMA integrity_check").get()).toEqual({
 		integrity_check: "ok",
 	});
 	expect(rows(restored)).toEqual(before);
-	expect(
-		restored
-			.query("SELECT name FROM sqlite_master WHERE name = 'migration_probe'")
-			.get(),
-	).toBeNull();
-	expect(() => openDatabase(path)).toThrow(/schema.*6.*upgrade.*CLI/i);
+	expect(() => previous.openDatabase(path)).toThrow(
+		new RegExp(`schema.*${SCHEMA_VERSION}.*upgrade.*CLI`, "i"),
+	);
 });
 
 test("fresh and current databases do not create backups", async () => {

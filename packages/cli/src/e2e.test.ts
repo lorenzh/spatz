@@ -136,7 +136,9 @@ test("newer database schemas fail CLI commands but both hook families exit silen
 			});
 			expect(result.code).toBe(1);
 			expect(result.stdout).toBe("");
-			expect(result.stderr).toMatch(/schema.*6.*upgrade.*CLI/i);
+			expect(result.stderr).toMatch(
+				new RegExp(`schema.*${SCHEMA_VERSION + 1}.*upgrade.*CLI`, "i"),
+			);
 		}
 		for (const args of [
 			["hook", "Stop"],
@@ -619,6 +621,7 @@ test("mod CLI stores explicit attribution, usage replays, direct reports and sco
 		output_tokens: 20,
 		cache_read_tokens: 60,
 		cache_creation_tokens: 30,
+		cost_usd: 0.000307,
 		cache_read_share: 0.6,
 	});
 	expect(scopes?.some((r) => r.scope === null)).toBe(true);

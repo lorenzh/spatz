@@ -58,15 +58,15 @@ describe("parseMainTranscript", () => {
 				model: "claude-opus-5-5",
 				input_tokens: 2,
 				output_tokens: 15,
-				cache_read_tokens: 0,
-				cache_creation_tokens: 0,
+				cache_read_tokens: null,
+				cache_creation_tokens: null,
 			},
 			{
 				model: "claude-sonnet-5-5",
 				input_tokens: 1,
 				output_tokens: 20,
-				cache_read_tokens: 0,
-				cache_creation_tokens: 0,
+				cache_read_tokens: null,
+				cache_creation_tokens: null,
 			},
 		]);
 		expect(parseMainTranscript(jsonl, "p2")).toEqual([
@@ -74,8 +74,8 @@ describe("parseMainTranscript", () => {
 				model: "claude-opus-5-5",
 				input_tokens: 1,
 				output_tokens: 300,
-				cache_read_tokens: 0,
-				cache_creation_tokens: 0,
+				cache_read_tokens: null,
+				cache_creation_tokens: null,
 			},
 		]);
 	});
@@ -114,8 +114,8 @@ describe("robustness and privacy", () => {
 				model: "claude-opus-5-5",
 				input_tokens: 1,
 				output_tokens: 7,
-				cache_read_tokens: 0,
-				cache_creation_tokens: 0,
+				cache_read_tokens: null,
+				cache_creation_tokens: null,
 			},
 		];
 		expect(parseMainTranscript(messy, "p1")).toEqual(expected);
@@ -177,9 +177,9 @@ test.each([250, 50])(
 				"current",
 			)?.usage,
 		).toEqual({
-			input_tokens: 200,
-			cache_read_input_tokens: 0,
-			cache_creation_input_tokens: 0,
+			input_tokens: null,
+			cache_read_input_tokens: null,
+			cache_creation_input_tokens: null,
 			output_tokens: 15,
 		});
 	},
@@ -274,7 +274,7 @@ test.each([false, true])(
 				"current",
 			)?.usage,
 		).toEqual({
-			input_tokens: 200,
+			input_tokens: 120,
 			cache_read_input_tokens: 50,
 			cache_creation_input_tokens: 30,
 			output_tokens: 15,
@@ -290,11 +290,302 @@ test.each([false, true])(
 					"current",
 				)?.usage,
 			).toEqual({
-				input_tokens: 200,
+				input_tokens: 120,
 				cache_read_input_tokens: 50,
 				cache_creation_input_tokens: 30,
 				output_tokens: 15,
 			});
 		}
+	},
+);
+
+const codexTurn = (usage: Record<string, number | null>) =>
+	[
+		{
+			type: "turn_context",
+			payload: { turn_id: "current", model: "gpt-6.1-sol" },
+		},
+		{
+			type: "token_usage_record",
+			payload: { turn_id: "current", turn_token_usage: usage },
+		},
+	]
+		.map((r) => JSON.stringify(r))
+		.join("\n");
+
+test.each(["token_usage_record", "event_msg"])(
+	"Claude and Codex use disjoint input buckets and include reasoning only once (%s)",
+	(format) => {
+		const claude = parseSubagentTranscript(
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					id: "m",
+					model: "claude-sonnet-5-5",
+					usage: {
+						input_tokens: 60,
+						cache_read_input_tokens: 40,
+						cache_creation_input_tokens: 20,
+						output_tokens: 10,
+					},
+				},
+			}),
+		)[0];
+		const usage = {
+			input_tokens: 120,
+			cached_input_tokens: 40,
+			cache_write_input_tokens: 20,
+			output_tokens: 10,
+			reasoning_output_tokens: 5,
+		};
+		const jsonl =
+			format === "token_usage_record"
+				? codexTurn(usage)
+				: [
+						{
+							type: "turn_context",
+							payload: { turn_id: "current", model: "gpt-6.1-sol" },
+						},
+						{
+							type: "event_msg",
+							payload: {
+								type: "token_count",
+								info: { total_token_usage: usage },
+							},
+						},
+					]
+						.map((r) => JSON.stringify(r))
+						.join("\n");
+		const codex = parseCodexRollout(jsonl, "current")?.usage;
+		expect(codex).toEqual({
+			input_tokens: claude?.input_tokens,
+			cache_read_input_tokens: claude?.cache_read_tokens,
+			cache_creation_input_tokens: claude?.cache_creation_tokens,
+			output_tokens: claude?.output_tokens,
+		});
+	},
+);
+
+test("Claude aggregates propagate missing counters without turning known zero into null", () => {
+	const jsonl = [
+		{
+			type: "assistant",
+			message: {
+				id: "m1",
+				model: "claude-sonnet-5-5",
+				usage: {
+					input_tokens: 2,
+					output_tokens: 3,
+					cache_read_input_tokens: 0,
+					cache_creation_input_tokens: 5,
+				},
+			},
+		},
+		{
+			type: "assistant",
+			message: {
+				id: "m2",
+				model: "claude-sonnet-5-5",
+				usage: {
+					input_tokens: 4,
+					cache_read_input_tokens: 0,
+					cache_creation_input_tokens: null,
+				},
+			},
+		},
+	]
+		.map((r) => JSON.stringify(r))
+		.join("\n");
+	expect(parseSubagentTranscript(jsonl)).toEqual([
+		{
+			model: "claude-sonnet-5-5",
+			input_tokens: 6,
+			output_tokens: null,
+			cache_read_tokens: 0,
+			cache_creation_tokens: null,
+		},
+	]);
+});
+
+test("Codex response-only aggregates preserve missing counters", () => {
+	const jsonl = [
+		{
+			type: "turn_context",
+			payload: { turn_id: "current", model: "gpt-6.1-sol" },
+		},
+		{
+			type: "token_usage_record",
+			payload: {
+				usage: {
+					input_tokens: 120,
+					cached_input_tokens: 40,
+					cache_write_input_tokens: 20,
+					output_tokens: 10,
+				},
+			},
+		},
+		{
+			type: "token_usage_record",
+			payload: {
+				usage: {
+					input_tokens: 50,
+					cached_input_tokens: 10,
+					cache_write_input_tokens: 0,
+				},
+			},
+		},
+	]
+		.map((r) => JSON.stringify(r))
+		.join("\n");
+	expect(parseCodexRollout(jsonl, "current")?.usage).toEqual({
+		input_tokens: 100,
+		cache_read_input_tokens: 50,
+		cache_creation_input_tokens: 20,
+		output_tokens: null,
+	});
+});
+
+test("Codex cumulative deltas preserve counters absent from either snapshot", () => {
+	const jsonl = [
+		{
+			type: "event_msg",
+			payload: {
+				type: "token_count",
+				info: {
+					total_token_usage: {
+						input_tokens: 100,
+						cached_input_tokens: 30,
+						output_tokens: 10,
+					},
+				},
+			},
+		},
+		{
+			type: "turn_context",
+			payload: { turn_id: "current", model: "gpt-6.1-sol" },
+		},
+		{
+			type: "event_msg",
+			payload: {
+				type: "token_count",
+				info: {
+					total_token_usage: {
+						input_tokens: 150,
+						cached_input_tokens: 40,
+						cache_write_input_tokens: 0,
+					},
+				},
+			},
+		},
+	]
+		.map((r) => JSON.stringify(r))
+		.join("\n");
+	expect(parseCodexRollout(jsonl, "current")?.usage).toEqual({
+		input_tokens: null,
+		cache_read_input_tokens: 10,
+		cache_creation_input_tokens: null,
+		output_tokens: null,
+	});
+});
+
+test.each(["cached_input_tokens", "cache_write_input_tokens"])(
+	"Codex keeps known counters when %s is absent",
+	(field) => {
+		const usage: Record<string, number | null> = {
+			input_tokens: 120,
+			cached_input_tokens: 40,
+			cache_write_input_tokens: 20,
+			output_tokens: 10,
+		};
+		delete usage[field];
+		expect(parseCodexRollout(codexTurn(usage), "current")?.usage).toEqual({
+			input_tokens: null,
+			cache_read_input_tokens: field === "cached_input_tokens" ? null : 40,
+			cache_creation_input_tokens:
+				field === "cache_write_input_tokens" ? null : 20,
+			output_tokens: 10,
+		});
+	},
+);
+
+test.each([-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+	"invalid counters stay unknown (%s)",
+	(invalid) => {
+		const claude = parseSubagentTranscript(
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					id: "m",
+					model: "claude-sonnet-5-5",
+					usage: {
+						input_tokens: invalid,
+						output_tokens: 0,
+						cache_read_input_tokens: 0,
+						cache_creation_input_tokens: 0,
+					},
+				},
+			}),
+		);
+		expect(claude[0]).toEqual({
+			model: "claude-sonnet-5-5",
+			input_tokens: null,
+			output_tokens: 0,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
+		});
+		expect(
+			parseCodexRollout(
+				codexTurn({
+					input_tokens: invalid,
+					cached_input_tokens: 0,
+					cache_write_input_tokens: 0,
+					output_tokens: 0,
+				}),
+				"current",
+			)?.usage,
+		).toEqual({
+			input_tokens: null,
+			cache_read_input_tokens: 0,
+			cache_creation_input_tokens: 0,
+			output_tokens: 0,
+		});
+	},
+);
+
+test("Codex rejects overlapping cache counts that exceed total input", () => {
+	expect(
+		parseCodexRollout(
+			codexTurn({
+				input_tokens: 10,
+				cached_input_tokens: 8,
+				cache_write_input_tokens: 8,
+				output_tokens: 0,
+			}),
+			"current",
+		)?.usage,
+	).toEqual({
+		input_tokens: null,
+		cache_read_input_tokens: 8,
+		cache_creation_input_tokens: 8,
+		output_tokens: 0,
+	});
+});
+
+test.each([undefined, null])(
+	"Claude messages with absent usage keep unknown counters (%s)",
+	(usage) => {
+		const jsonl = JSON.stringify({
+			type: "assistant",
+			message: { id: "m", model: "claude-sonnet-5-5", usage },
+		});
+		expect(parseSubagentTranscript(jsonl)).toEqual([
+			{
+				model: "claude-sonnet-5-5",
+				input_tokens: null,
+				output_tokens: null,
+				cache_read_tokens: null,
+				cache_creation_tokens: null,
+			},
+		]);
 	},
 );

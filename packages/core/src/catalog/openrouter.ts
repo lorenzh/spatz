@@ -18,6 +18,11 @@ const price = (v: unknown): number => {
 	return Number.isFinite(n) ? n : Number.NaN;
 };
 
+const nullablePrice = (value: unknown): number | null => {
+	const parsed = price(value);
+	return Number.isNaN(parsed) ? null : parsed;
+};
+
 const isPrice = (v: unknown): v is number =>
 	typeof v === "number" && Number.isFinite(v) && v >= 0;
 
@@ -29,6 +34,8 @@ function isModel(v: unknown): v is OpenRouterModel {
 		typeof m.name === "string" &&
 		isPrice(m.price_prompt) &&
 		isPrice(m.price_completion) &&
+		(m.price_cache_read == null || isPrice(m.price_cache_read)) &&
+		(m.price_cache_write == null || isPrice(m.price_cache_write)) &&
 		(m.context_length === null || typeof m.context_length === "number") &&
 		(m.supported_efforts === null ||
 			(Array.isArray(m.supported_efforts) &&
@@ -55,6 +62,8 @@ export function parseOpenRouterModels(json: unknown): OpenRouterModel[] {
 			name: typeof m.name === "string" ? m.name : m.id,
 			price_prompt: prompt,
 			price_completion: completion,
+			price_cache_read: nullablePrice(pricing?.input_cache_read),
+			price_cache_write: nullablePrice(pricing?.input_cache_write),
 			context_length:
 				typeof m.context_length === "number" ? m.context_length : null,
 			supported_efforts: Array.isArray(efforts)
@@ -83,11 +92,25 @@ interface CacheFile {
 async function readCache(path: string): Promise<CacheFile | null> {
 	try {
 		const c = obj(await Bun.file(path).json());
-		return typeof c?.fetched_at === "number" &&
-			Array.isArray(c.models) &&
-			c.models.every(isModel)
-			? (c as unknown as CacheFile)
-			: null;
+		if (
+			typeof c?.fetched_at !== "number" ||
+			!Array.isArray(c.models) ||
+			!c.models.every(isModel)
+		)
+			return null;
+		return {
+			fetched_at: c.models.some(
+				(m) =>
+					m.price_cache_read === undefined || m.price_cache_write === undefined,
+			)
+				? 0
+				: c.fetched_at,
+			models: c.models.map((m) => ({
+				...m,
+				price_cache_read: m.price_cache_read ?? null,
+				price_cache_write: m.price_cache_write ?? null,
+			})),
+		};
 	} catch {
 		return null;
 	}

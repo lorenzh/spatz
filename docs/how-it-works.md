@@ -2,7 +2,7 @@
 title: How spatz works
 description: The terms, core modules, suggestion flow, Jev classification and SQLite data model of spatz.
 tags: [spatz, architecture, classification, data-model]
-keywords: [fallback, failures, launcher, diagnostics, concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
+keywords: [cost, tokens, price_snapshot, tokens_schema, fallback, failures, launcher, diagnostics, concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
 ---
 
 # How spatz works
@@ -191,6 +191,40 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 | `usage_scopes` | One watermark per transcript scope. See below. |
 | `failures` | Parse and hook failures with kind, event, timestamp, session id and turn key. No transcript text or error messages. |
 
+### Normalized tokens and cost
+
+`input_tokens` means uncached input for every source.
+`cache_read_tokens` and `cache_creation_tokens` hold separate input counts.
+`output_tokens` includes reasoning tokens once.
+Missing counters stay `null`. If any counter is null, `tokens_complete` is `0`.
+Reports and Agent tool events do not measure tokens. Their counters are null.
+
+Suggestions capture four OpenRouter rates per candidate model in `price_snapshot`.
+`price_date` is the capture time in epoch milliseconds.
+Catalog price changes do not alter the snapshot.
+Each `usages` row stores `cost_usd` and `cost_source`:
+
+- `reported`: the caller supplied a harness cost through `spatz usage --cost-usd`.
+- `priced`: spatz multiplied the four counters by the model's stored rates and summed them.
+- `unavailable`: no usable price snapshot or required rate exists. `cost_usd` is null.
+
+For pricing, null counters contribute zero. They still mark the row incomplete.
+Without a reported cost, an entirely unmeasured row has unavailable cost.
+A zero counter needs no rate. A positive counter does.
+Without a reported cost, a used model outside the snapshot has unavailable cost.
+Prices are USD per token. Reported cost takes priority over calculated cost.
+
+New usage rows have `tokens_schema = 2`.
+The v6 migration flags pre-change Codex rows with `tokens_schema = 1` and keeps their counts unchanged.
+It uses the suggestion's `agent = 'codex'` or a transcript row with an `openai/` model ID.
+All USD aggregates exclude schema-1 rows. Historical rows have unavailable cost and unknown completeness.
+Token reports keep the historical counts. These can mix inclusive and uncached Codex input.
+
+The [attempt ledger](design/attempts.md) remains a design for #34.
+Its future `usage_totals` view can reuse these cost fields and schema exclusions.
+It must aggregate each usage measurement once before joining outcomes.
+See [CLI stats](cli.md#spatz-stats) for the current totals.
+
 ### Migrations
 
 `PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz link`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through DuckDB.
@@ -206,6 +240,7 @@ Before the first migration write, a separate read-only connection creates a back
 | 3 | Nullable routing and attribution fields. A unique index prevents duplicate direct signals per turn. |
 | 4 | English difficulty values, probability keys and pooling reasons. Row counts and outcomes stay unchanged. |
 | 5 | Nullable `suggestions.fallback_reason` and the `failures` table. Existing rows and outcomes stay unchanged. |
+| 6 | Suggestion price snapshots, nullable token counters, completeness and schema flags, USD cost and its source. |
 
 `SCHEMA_V3` is the third entry in `MIGRATIONS`.
 `SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.
@@ -222,6 +257,11 @@ English probability keys take precedence when both spellings exist.
 `SCHEMA_V5` is an array of single SQL statements in `MIGRATIONS`.
 The existing migration transaction covers both statements and the version update.
 If either statement fails, SQLite rolls back the entire migration.
+
+`SCHEMA_V6` also uses single-statement entries in the same transaction.
+It rebuilds `usages` to allow null counters and preserves rowids and all existing values.
+The migration recreates the unchanged `outcomes` view and keeps usage watermarks intact.
+If any statement fails, SQLite rolls back the table rebuild and the version update.
 
 ### Failure recording
 

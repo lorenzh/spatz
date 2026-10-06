@@ -75,10 +75,10 @@ async function readTranscript<T>(
 }
 
 const NO_TOKENS = {
-	input_tokens: 0,
-	output_tokens: 0,
-	cache_read_tokens: 0,
-	cache_creation_tokens: 0,
+	input_tokens: null,
+	output_tokens: null,
+	cache_read_tokens: null,
+	cache_creation_tokens: null,
 };
 
 export function createApi(
@@ -169,11 +169,32 @@ export function createApi(
 			const byModel = new Map<string, UsageRecord>();
 			for (const r of rows) {
 				const model = canonical(r.model);
-				const u = byModel.get(model) ?? usage(id, { ...fields, model });
-				u.input_tokens += r.input_tokens;
-				u.output_tokens += r.output_tokens;
-				u.cache_read_tokens += r.cache_read_tokens;
-				u.cache_creation_tokens += r.cache_creation_tokens;
+				const u =
+					byModel.get(model) ??
+					usage(id, {
+						...fields,
+						model,
+						input_tokens: 0,
+						output_tokens: 0,
+						cache_read_tokens: 0,
+						cache_creation_tokens: 0,
+					});
+				u.input_tokens =
+					u.input_tokens === null || r.input_tokens === null
+						? null
+						: u.input_tokens + r.input_tokens;
+				u.output_tokens =
+					u.output_tokens === null || r.output_tokens === null
+						? null
+						: u.output_tokens + r.output_tokens;
+				u.cache_read_tokens =
+					u.cache_read_tokens === null || r.cache_read_tokens === null
+						? null
+						: u.cache_read_tokens + r.cache_read_tokens;
+				u.cache_creation_tokens =
+					u.cache_creation_tokens === null || r.cache_creation_tokens === null
+						? null
+						: u.cache_creation_tokens + r.cache_creation_tokens;
 				byModel.set(model, u);
 			}
 			return [...byModel.values()];
@@ -397,10 +418,11 @@ export function createApi(
 									source: "transcript",
 									scope_key: scope.scope_key,
 									is_sidechain: false,
-									input_tokens: usage.input_tokens ?? 0,
-									output_tokens: usage.output_tokens ?? 0,
-									cache_read_tokens: usage.cache_read_input_tokens ?? 0,
-									cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
+									input_tokens: usage.input_tokens ?? null,
+									output_tokens: usage.output_tokens ?? null,
+									cache_read_tokens: usage.cache_read_input_tokens ?? null,
+									cache_creation_tokens:
+										usage.cache_creation_input_tokens ?? null,
 									rounds: null,
 									note: null,
 									reported_at: now,
@@ -465,10 +487,10 @@ export function createApi(
 						source: "transcript",
 						scope_key: turnId,
 						is_sidechain: false,
-						input_tokens: usage.input_tokens ?? 0,
-						output_tokens: usage.output_tokens ?? 0,
-						cache_read_tokens: usage.cache_read_input_tokens ?? 0,
-						cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
+						input_tokens: usage.input_tokens ?? null,
+						output_tokens: usage.output_tokens ?? null,
+						cache_read_tokens: usage.cache_read_input_tokens ?? null,
+						cache_creation_tokens: usage.cache_creation_input_tokens ?? null,
 						rounds: null,
 						note: null,
 						reported_at: now,
@@ -579,6 +601,20 @@ export function createApi(
 				store.insertSuggestion({
 					id,
 					created_at: now,
+					price_date: now,
+					price_snapshot: Object.fromEntries(
+						openRouter
+							.filter((m) => catalog.some((c) => c.model === m.id))
+							.map((m) => [
+								m.id,
+								{
+									price_prompt: m.price_prompt,
+									price_completion: m.price_completion,
+									price_cache_read: m.price_cache_read ?? null,
+									price_cache_write: m.price_cache_write ?? null,
+								},
+							]),
+					),
 					session_id: session ?? null,
 					prompt_id: null,
 					scope: scope ?? null,
@@ -656,9 +692,14 @@ export function createApi(
 				input.cacheRead,
 				input.cacheCreation,
 			]) {
-				if (!Number.isSafeInteger(n) || n < 0)
+				if (n !== null && (!Number.isSafeInteger(n) || n < 0))
 					throw new Error("tokens must be non-negative safe integers");
 			}
+			if (
+				input.costUsd !== undefined &&
+				(!Number.isFinite(input.costUsd) || input.costUsd < 0)
+			)
+				throw new Error("cost must be finite and non-negative");
 			const cfg = await getConfig();
 			return withStore((store) => {
 				const suggestion = store.getSuggestion(suggestionId);
@@ -672,6 +713,10 @@ export function createApi(
 					scope_key: turn,
 					turn_id: turn,
 					agent_id: suggestion.agent_id,
+					...(input.costUsd !== undefined && {
+						cost_usd: input.costUsd,
+						cost_source: "reported" as const,
+					}),
 					input_tokens: input.input,
 					output_tokens: input.output,
 					cache_read_tokens: input.cacheRead,
