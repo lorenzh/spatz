@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
+keywords: [cost, tokens, price_snapshot, price_date, migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -112,6 +112,8 @@ Deleting the database resets parse and hook counters but leaves launcher markers
       "name": "Anthropic: Claude Sonnet 5.5",
       "price_prompt": 0.000002,
       "price_completion": 0.00001,
+      "price_cache_read": 0.0000002,
+      "price_cache_write": 0.0000025,
       "context_length": 1000000,
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"]
     }
@@ -120,6 +122,19 @@ Deleting the database resets parse and hook counters but leaves launcher markers
 ```
 
 `fetched_at` is epoch milliseconds. Prices are USD per token. The values above are an example. To force a new request, delete the file.
+
+The cache also stores `price_cache_read` and `price_cache_write` from OpenRouter.
+OpenRouter names these rates `input_cache_read` and `input_cache_write`.
+Missing or invalid cache rates are `null`. Old cache files remain readable with null cache rates.
+
+Each suggestion stores a `price_snapshot` keyed by its candidate model IDs.
+Each entry holds all four rates. `price_date` records the capture time in epoch milliseconds.
+The rates can come from a stale cache during an outage or offline run.
+A later cache refresh does not change existing snapshots or usage costs.
+If a used model has no snapshot, its calculated cost is unavailable.
+A positive token count with a missing rate also makes cost unavailable.
+Zero or null counters need no rate. Reported USD costs take priority over calculated costs.
+See [normalized tokens and cost](how-it-works.md#normalized-tokens-and-cost).
 
 ### Alias file: ~/.spatz/aliases.json
 

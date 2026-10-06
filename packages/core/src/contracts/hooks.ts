@@ -125,10 +125,10 @@ export type HookEventName = HookInput["hook_event_name"];
 //   turn's promptId; only assistant entries lack it. parseSubagentTranscript takes all assistant entries.
 
 export interface TranscriptUsage {
-	input_tokens?: number;
-	output_tokens?: number;
-	cache_read_input_tokens?: number;
-	cache_creation_input_tokens?: number;
+	input_tokens?: number | null;
+	output_tokens?: number | null;
+	cache_read_input_tokens?: number | null;
+	cache_creation_input_tokens?: number | null;
 }
 
 export interface TranscriptAssistantEntry {

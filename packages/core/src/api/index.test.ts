@@ -227,7 +227,7 @@ describe("suggest", () => {
 		expect(s.argsOf("cellStats")).toEqual([["code.bugfix"]]);
 
 		const [[record]] = s.argsOf("insertSuggestion") as [[unknown]];
-		expect(record).toEqual({
+		expect(record).toMatchObject({
 			id: ID1,
 			created_at: T0,
 			scope: null,
@@ -386,10 +386,10 @@ describe("report", () => {
 					effort: "high",
 					source: "report",
 					scope_key: "",
-					input_tokens: 0,
-					output_tokens: 0,
-					cache_read_tokens: 0,
-					cache_creation_tokens: 0,
+					input_tokens: null,
+					output_tokens: null,
+					cache_read_tokens: null,
+					cache_creation_tokens: null,
 					is_sidechain: false,
 					rounds: 2,
 					note: "needed a second try",
@@ -612,7 +612,7 @@ describe("handleHook", () => {
 						scope_key: "turn-2",
 						model: "openai/gpt-6.1-sol",
 						effort: "medium",
-						input_tokens: 253654,
+						input_tokens: 11862,
 						output_tokens: 818, // Includes 47 reasoning tokens; the last response has only 72 output tokens.
 						cache_read_tokens: 241792,
 						cache_creation_tokens: 0,
@@ -787,7 +787,7 @@ describe("handleHook", () => {
 				suggestion_id: id,
 				model: "openai/gpt-6-luna",
 				effort: "low",
-				input_tokens: 61711,
+				input_tokens: 13583,
 				output_tokens: 124,
 				cache_read_tokens: 48128,
 			},
@@ -1324,7 +1324,7 @@ describe("handleHook", () => {
 		expect(s.store.outcome(id)?.model).toBe("anthropic/claude-sonnet-5.5");
 	});
 
-	test("PostToolUse on Agent -> usage source agent_tool with the resolved model and 0 tokens", async () => {
+	test("PostToolUse on Agent -> usage source agent_tool with the resolved model and unknown tokens", async () => {
 		const s = setup();
 		const id = await linked(s);
 		await s.api.handleHook(
@@ -1352,10 +1352,10 @@ describe("handleHook", () => {
 					effort: null,
 					source: "agent_tool",
 					scope_key: "a1",
-					input_tokens: 0,
-					output_tokens: 0,
-					cache_read_tokens: 0,
-					cache_creation_tokens: 0,
+					input_tokens: null,
+					output_tokens: null,
+					cache_read_tokens: null,
+					cache_creation_tokens: null,
 					is_sidechain: true,
 					rounds: null,
 					note: null,
@@ -2215,5 +2215,57 @@ describe("failure diagnostics", () => {
 		await Bun.write(join(dir, ".spatz", "launcher-failures"), "1\n1\n");
 		expect((await api.stats({})).failures.launcher).toBe(2);
 		expect((await api.stats({})).failures.launcher).toBe(2);
+	});
+});
+
+test("suggestion captures candidate prices once and direct usage returns cost metadata", async () => {
+	const s = setup();
+	const result = await s.api.suggest({
+		task: "fix",
+		models: MODELS,
+		dryRun: false,
+	});
+	const before = s.store.getSuggestion(result.suggestion_id);
+	expect(before?.price_date).toBe(T0);
+	expect(Object.keys(before?.price_snapshot ?? {}).sort()).toEqual([
+		"anthropic/claude-opus-5.5",
+		"openai/gpt-6-luna",
+	]);
+	const usage = {
+		suggestionId: result.suggestion_id,
+		model: "claude-opus-5-5",
+		source: "claude-code-mod" as const,
+		turn: "t",
+		input: 10,
+		output: 20,
+		cacheRead: 0,
+		cacheCreation: 0,
+	};
+	await Bun.write(
+		join(dir, "openrouter-models.json"),
+		JSON.stringify({ fetched_at: T0, models: [] }),
+	);
+	const row = await s.api.usage(usage);
+	expect(row).toMatchObject({
+		tokens_schema: 2,
+		tokens_complete: 1,
+		cost_source: "priced",
+	});
+	const price = before?.price_snapshot?.["anthropic/claude-opus-5.5"];
+	expect(row.cost_usd).toBeCloseTo(
+		10 * (price?.price_prompt ?? 0) + 20 * (price?.price_completion ?? 0),
+		12,
+	);
+	const reported = await s.api.usage({ ...usage, costUsd: 0.123 });
+	expect(reported).toMatchObject({ cost_usd: 0.123, cost_source: "reported" });
+	expect(s.store.getSuggestion(result.suggestion_id)?.price_snapshot).toEqual(
+		before?.price_snapshot,
+	);
+	for (const costUsd of [-1, NaN, Infinity])
+		await expect(s.api.usage({ ...usage, costUsd })).rejects.toThrow("cost");
+	const incomplete = await s.api.usage({ ...usage, cacheRead: null });
+	expect(incomplete).toMatchObject({
+		cache_read_tokens: null,
+		tokens_complete: 0,
 	});
 });

@@ -20,6 +20,8 @@ describe("parseOpenRouterModels", () => {
 			name: "Anthropic: Claude Opus 5.5",
 			price_prompt: 0.000004,
 			price_completion: 0.00002,
+			price_cache_read: 0.0000002,
+			price_cache_write: 0.000005,
 			context_length: 1000000,
 			supported_efforts: ["max", "xhigh", "high", "medium", "low"],
 		});
@@ -48,6 +50,8 @@ describe("parseOpenRouterModels", () => {
 				name: "A",
 				price_prompt: 0.000001,
 				price_completion: 0.00002,
+				price_cache_read: null,
+				price_cache_write: null,
 				context_length: 4096,
 				supported_efforts: null,
 			},
@@ -56,6 +60,8 @@ describe("parseOpenRouterModels", () => {
 				name: "B",
 				price_prompt: 0,
 				price_completion: 0,
+				price_cache_read: null,
+				price_cache_write: null,
 				context_length: null,
 				supported_efforts: null,
 			},
@@ -89,6 +95,30 @@ describe("parseOpenRouterModels", () => {
 		).toEqual([[1e-7, 0.5]]);
 	});
 
+	test("cache prices preserve zero and represent missing or invalid prices as null", () => {
+		const data = ["0", "1e-7", undefined, null, "-1", "0x10", "1e309", 0].map(
+			(p, i) => ({
+				id: `x/${i}`,
+				pricing: {
+					prompt: "1",
+					completion: "2",
+					input_cache_read: p,
+					input_cache_write: p,
+				},
+			}),
+		);
+		expect(
+			parseOpenRouterModels({ data }).map((m) => [
+				m.price_cache_read,
+				m.price_cache_write,
+			]),
+		).toEqual([
+			[0, 0],
+			[1e-7, 1e-7],
+			...Array.from({ length: 6 }, () => [null, null]),
+		]);
+	});
+
 	test("non-object input gives []", () => {
 		expect(parseOpenRouterModels(null)).toEqual([]);
 		expect(parseOpenRouterModels({ data: "x" })).toEqual([]);
@@ -105,6 +135,8 @@ describe("loadOpenRouterModels", () => {
 			name: "Cached",
 			price_prompt: 1,
 			price_completion: 2,
+			price_cache_read: null,
+			price_cache_write: null,
 			context_length: null,
 			supported_efforts: null,
 		},
@@ -149,6 +181,30 @@ describe("loadOpenRouterModels", () => {
 			ttlMs: DAY,
 		});
 		expect(result).toEqual(cached);
+		expect(f.calls).toHaveLength(0);
+	});
+
+	test("old offline cache without cache prices remains readable with null prices", async () => {
+		const cachePath = await setup();
+		const {
+			price_cache_read: _read,
+			price_cache_write: _write,
+			...old
+		} = cached[0] as OpenRouterModel;
+		await Bun.write(
+			cachePath,
+			JSON.stringify({ fetched_at: NOW, models: [old] }),
+		);
+		const f = fakeFetch(ok);
+		expect(
+			await loadOpenRouterModels({
+				fetch: f.fn,
+				env: { SPATZ_NO_NETWORK: "1" },
+				cachePath,
+				clock,
+				ttlMs: DAY,
+			}),
+		).toEqual(cached);
 		expect(f.calls).toHaveLength(0);
 	});
 
@@ -295,6 +351,8 @@ describe("loadOpenRouterModels", () => {
 		const bad: unknown[] = [
 			null,
 			{ ...cached[0], price_completion: "2" },
+			{ ...cached[0], price_cache_read: "2" },
+			{ ...cached[0], price_cache_write: -1 },
 			{ ...cached[0], id: 1 },
 			{ ...cached[0], context_length: undefined },
 			{ ...cached[0], supported_efforts: [1] },

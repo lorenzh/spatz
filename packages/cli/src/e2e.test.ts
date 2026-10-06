@@ -619,6 +619,7 @@ test("mod CLI stores explicit attribution, usage replays, direct reports and sco
 		output_tokens: 20,
 		cache_read_tokens: 60,
 		cache_creation_tokens: 30,
+		cost_usd: 0.000307,
 		cache_read_share: 0.6,
 	});
 	expect(scopes?.some((r) => r.scope === null)).toBe(true);

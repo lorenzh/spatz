@@ -64,6 +64,7 @@ const statsReport: StatsReport = {
 					success_rate: 1,
 				},
 			],
+			cost_usd: null,
 			adoption_rate: 0.75,
 			input_tokens: 1200,
 			output_tokens: 340,
@@ -666,7 +667,7 @@ describe("stats", () => {
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
 			[
-				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340",
+				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cost_usd=-",
 				"  openai/gpt-6-sol:medium  n=3  success=67%",
 				"  anthropic/claude-opus-5.5:-  n=1  success=100%",
 				"coverage: 80%  learned_success: 70%  control_success: -",
@@ -806,6 +807,8 @@ describe("mod CLI", () => {
 					"t",
 					"--source",
 					"claude-code-mod",
+					"--cost-usd",
+					"0.123",
 					"--json",
 				],
 				io,
@@ -816,6 +819,7 @@ describe("mod CLI", () => {
 			{
 				suggestionId: "id",
 				model: "m",
+				costUsd: 0.123,
 				input: 1,
 				output: 2,
 				cacheRead: 3,
@@ -877,6 +881,7 @@ describe("mod CLI", () => {
 							output_tokens: 20,
 							cache_read_tokens: 60,
 							cache_creation_tokens: 30,
+							cost_usd: null,
 							cache_read_share: 0.6,
 						},
 					],
@@ -886,7 +891,7 @@ describe("mod CLI", () => {
 		expect(await main(["stats", "--by", "scope"], io, api)).toBe(0);
 		expect(seen).toEqual([{ by: "scope" }]);
 		expect(stdout()).toContain(
-			"unscoped  n=2  success=50%  input_tokens=10  output_tokens=20  cache_read_tokens=60  cache_creation_tokens=30  cache_read_share=60%",
+			"unscoped  n=2  success=50%  input_tokens=10  output_tokens=20  cache_read_tokens=60  cache_creation_tokens=30  cache_read_share=60%  cost_usd=-",
 		);
 	});
 	test.each(["-1", "1.5", "NaN", "9007199254740992", ""])(

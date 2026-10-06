@@ -27,7 +27,7 @@ const USAGE = `usage:
   spatz --version
   spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
-  spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
+  spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--cost-usd <n>] [--json]
   spatz hook <event> [--agent codex]
   spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
   spatz stats [--type <t>] [--by scope] [--json]`;
@@ -72,12 +72,12 @@ function formatStats(r: StatsReport): string {
 		return r.by_scope
 			.map(
 				(s) =>
-					`${s.scope ?? "unscoped"}  n=${s.n}  success=${s.success_rate === null ? "-" : pct(s.success_rate)}  input_tokens=${s.input_tokens}  output_tokens=${s.output_tokens}  cache_read_tokens=${s.cache_read_tokens}  cache_creation_tokens=${s.cache_creation_tokens}  cache_read_share=${pct(s.cache_read_share)}`,
+					`${s.scope ?? "unscoped"}  n=${s.n}  success=${s.success_rate === null ? "-" : pct(s.success_rate)}  input_tokens=${s.input_tokens}  output_tokens=${s.output_tokens}  cache_read_tokens=${s.cache_read_tokens}  cache_creation_tokens=${s.cache_creation_tokens}  cache_read_share=${pct(s.cache_read_share)}  cost_usd=${s.cost_usd ?? "-"}`,
 			)
 			.concat(diagnostics)
 			.join("\n");
 	const lines = r.by_type.flatMap((t) => [
-		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}`,
+		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cost_usd=${t.cost_usd ?? "-"}`,
 		...t.pairs.map(
 			(p) =>
 				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}`,
@@ -116,6 +116,7 @@ function parse(argv: string[]) {
 				output: { type: "string" },
 				"cache-read": { type: "string" },
 				"cache-creation": { type: "string" },
+				"cost-usd": { type: "string" },
 				by: { type: "string" },
 			},
 		});
@@ -176,6 +177,7 @@ export async function main(
 					required(v["cache-creation"], "--cache-creation"),
 					"--cache-creation",
 				),
+				...(v["cost-usd"] !== undefined && { costUsd: Number(v["cost-usd"]) }),
 				turn: required(v.turn, "--turn"),
 				source: "claude-code-mod" as const,
 			};

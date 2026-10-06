@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
+keywords: [cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
 ---
 
 # Claude Code hooks for spatz
@@ -81,7 +81,7 @@ spatz handles these four events. Other events do no harm, but they give no signa
 | `PostToolUse` | Bash command is a spatz suggestion call | Links the session to the suggestion. See [Link a suggestion to a session](#link-a-suggestion-to-a-session). |
 | `PostToolUse` | Bash command is a test or a build | Signal `test` or `build` with value 1 (success). |
 | `PostToolUseFailure` | Bash command is a test or a build | Signal `test` or `build` with value 0 (failure). |
-| `PostToolUse` | Tool is `Agent` | The subagent model from `tool_response.resolvedModel`, with 0 tokens and no effort. |
+| `PostToolUse` | Tool is `Agent` | The subagent model from `tool_response.resolvedModel`, with unknown token counts and no effort. |
 | `Stop` | Event has a `prompt_id` | Model, effort and tokens of the main session for this turn, read from the transcript. |
 | `SubagentStop` | Always | Model, effort and tokens of the subagent, read from the subagent transcript. |
 
@@ -191,7 +191,7 @@ If an agent has no linked suggestion, its hooks use the main sequence as before.
 If it has a linked suggestion, closure does not send later events back to the main sequence.
 
 - `SubagentStop` reads `<session>/subagents/agent-<agent_id>.jsonl`. spatz sums the tokens per model.
-- `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has 0 tokens and no effort, because the `effort.level` in this event belongs to the main session.
+- `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts and no effort, because the `effort.level` in this event belongs to the main session.
 
 Without a report, the used pair is the model with the most output tokens assigned to the suggestion. Its effort is the newest effort that a hook gave for that model. A report always sets the used pair.
 
@@ -275,13 +275,19 @@ If turn totals are absent, spatz uses the change in thread totals or sums per-re
 Older rollouts use `event_msg` records with type `token_count`.
 For these records, spatz takes the change in `info.total_token_usage` for the turn.
 If any stored counter has a negative delta, spatz treats usage as unavailable.
-For Codex, OpenAI `input_tokens` already includes `cached_input_tokens`. Claude reports these separately.
-Spatz stores the inclusive input count in `input_tokens` and the cached subset in `cache_read_tokens` without subtraction.
-It stores `cache_write_input_tokens` in `cache_creation_tokens`.
+Codex input includes both cached input and cache writes. Claude reports these separately.
+spatz subtracts `cached_input_tokens` and `cache_write_input_tokens` from Codex input.
+The resulting `input_tokens` counts only uncached input, as it does for Claude.
+It stores the cache counts in `cache_read_tokens` and `cache_creation_tokens`.
+Missing counters stay null. If either cache counter is missing, uncached input is also unknown and stays null.
+Such rows have `tokens_complete = 0`. Pricing treats null counters as zero.
+New rows use `tokens_schema = 2` and the suggestion's stored prices.
+The migration preserves pre-change Codex counts with `tokens_schema = 1`.
+USD totals exclude those rows. See [cost storage](how-it-works.md#normalized-tokens-and-cost).
 `output_tokens` already includes `reasoning_output_tokens`, so spatz counts reasoning once.
 A rollout without usage does not replace an existing usage row.
 The zero-token Codex rows in [#60](https://github.com/lorenzh/spatz/issues/60) came from `spatz report`, which records no tokens by design.
-Those report rows are tracked separately from transcript usage. The earlier Codex transcript rows were correct.
+New report rows store null counters. Historical report rows keep their zeros.
 
 ### Hook diagnostics
 

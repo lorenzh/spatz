@@ -226,15 +226,16 @@ export interface ReportInput {
 }
 
 export interface UsageInput {
+	costUsd?: number;
 	suggestionId: string;
 	model: string;
 	effort?: string;
 	source: "claude-code-mod";
 	turn: string;
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheCreation: number;
+	input: number | null;
+	output: number | null;
+	cacheRead: number | null;
+	cacheCreation: number | null;
 }
 
 export interface LinkInput {

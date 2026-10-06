@@ -72,13 +72,14 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		const types = await rows<Omit<TypeStats, "pairs">>(
 			`, tok AS (
 				SELECT s.task_type, COALESCE(SUM(u.input_tokens), 0)::DOUBLE AS input_tokens,
-					COALESCE(SUM(u.output_tokens), 0)::DOUBLE AS output_tokens
+					COALESCE(SUM(u.output_tokens), 0)::DOUBLE AS output_tokens,
+					SUM(u.cost_usd) FILTER (WHERE u.tokens_schema = 2)::DOUBLE AS cost_usd
 				FROM s LEFT JOIN db.usages u ON u.suggestion_id = s.id GROUP BY ALL
 			), agg AS (
 				SELECT task_type, COUNT(*)::INTEGER AS n, AVG(adopted) AS adoption_rate FROM o GROUP BY ALL
 			)
 			SELECT tok.task_type, COALESCE(agg.n, 0) AS n, COALESCE(agg.adoption_rate, 0) AS adoption_rate,
-				tok.input_tokens, tok.output_tokens
+				tok.input_tokens, tok.output_tokens, tok.cost_usd
 			FROM tok LEFT JOIN agg USING (task_type) ORDER BY tok.task_type`,
 		);
 		const pairs = await rows<PairStats & { task_type: TaskType }>(
@@ -119,14 +120,16 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				? await rows<ScopeStats>(`
 			, tok AS (
 				SELECT suggestion_id, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
-					SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens
+					SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens,
+					SUM(cost_usd) FILTER (WHERE tokens_schema = 2)::DOUBLE AS cost_usd
 				FROM db.usages GROUP BY suggestion_id
 			), agg AS (
 				SELECT s.scope, COUNT(oq.suggestion_id)::INTEGER AS n, AVG(oq.success::INTEGER) AS success_rate,
 					COALESCE(SUM(tok.input_tokens), 0)::DOUBLE AS input_tokens,
 					COALESCE(SUM(tok.output_tokens), 0)::DOUBLE AS output_tokens,
 					COALESCE(SUM(tok.cache_read_tokens), 0)::DOUBLE AS cache_read_tokens,
-					COALESCE(SUM(tok.cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens
+					COALESCE(SUM(tok.cache_creation_tokens), 0)::DOUBLE AS cache_creation_tokens,
+					SUM(tok.cost_usd)::DOUBLE AS cost_usd
 				FROM s LEFT JOIN oq ON oq.suggestion_id = s.id LEFT JOIN tok ON tok.suggestion_id = s.id
 				${type ? `WHERE s.task_type = '${type.replaceAll("'", "''")}'` : ""}
 				GROUP BY s.scope
@@ -155,6 +158,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					adoption_rate: t.adoption_rate,
 					input_tokens: t.input_tokens,
 					output_tokens: t.output_tokens,
+					cost_usd: t.cost_usd,
 				})),
 			coverage: cov?.coverage ?? 0,
 			learned_success: cmp?.learned_success ?? null,
