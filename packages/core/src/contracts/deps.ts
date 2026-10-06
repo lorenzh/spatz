@@ -1,4 +1,5 @@
 // Injection seams. Unit tests pass fakes for all of these; no network, no real home dir.
+import type { AttemptStore } from "./attempts.ts";
 import type { DifficultyInput } from "./difficulty.ts";
 import type {
 	Agent,
@@ -91,7 +92,7 @@ export type RandomFn = () => number;
 
 // ---------- Store (implemented by store module with bun:sqlite) ----------
 
-export interface Store {
+export interface Store extends AttemptStore {
 	/** One observation per session and agent; fill missing fields only. */
 	upsertDispatch(record: DispatchRecord): void;
 	/** Count once per kind, event, session and turn; count each call when either id is absent. */
@@ -117,6 +118,7 @@ export interface Store {
 		promptId: string | null,
 		at: number,
 		agentId?: string,
+		harness?: "codex" | "claude-code",
 	): string[];
 	/** Latest suggestion of the selected agent sequence with closed_at null and last_event_at >= now - openWindowMs; else null. */
 	/** Unknown agents use the main sequence. An agent with a closed window does not fall back. */
@@ -205,6 +207,7 @@ export interface CoreDeps {
 // ---------- Use-case API (what the CLI and a later MCP server call) ----------
 
 export interface SuggestInput {
+	retryOf?: string;
 	/** Original explicit model before routing; "-" means no explicit model. */
 	requested?: string;
 	/** Custom Claude agent whose definition supplies the model when none is explicit. */
@@ -222,6 +225,8 @@ export interface SuggestInput {
 }
 
 export interface ReportInput {
+	attempt?: string;
+	correct?: boolean;
 	suggestionId: string;
 	model: string;
 	effort: string;
@@ -233,6 +238,10 @@ export interface ReportInput {
 }
 
 export interface UsageInput {
+	attempt?: string;
+	key?: string;
+	session?: string;
+	agentId?: string;
 	costUsd?: number;
 	suggestionId: string;
 	model: string;
@@ -257,6 +266,23 @@ export interface StatsInput {
 }
 
 export interface SpatzApi {
+	startAttempt(input: {
+		suggestionId: string;
+		key: string;
+		model: string;
+		effort?: string;
+		session: string;
+		agentId?: string;
+		turn?: string;
+		ownsUsage?: boolean;
+	}): Promise<import("./attempts.ts").AttemptRecord>;
+	bindAttempt(input: {
+		attempt: string;
+		call: string;
+		session: string;
+		agentId?: string;
+	}): Promise<void>;
+	finalizeAttempts(input: { session: string; agentId?: string }): Promise<void>;
 	/** Import each Codex turn against an explicit suggestion; the same turn replaces its prior records. */
 	importRollout(input: {
 		file: string;

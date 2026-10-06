@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -11,8 +11,8 @@ Each spatz command calls the `@spatz/core` API and formats the result. The CLI h
 
 ```text
 spatz --version
-spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
-spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
+spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>] [--retry-of <suggestion_id>]
+spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
 spatz import-rollout <file> --suggestion <id> [--json]
@@ -41,6 +41,7 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--family <family>` | string | no filter | Keep `claude`/`anthropic` or `gpt`/`openai` candidates. Applied after resolution, including explicit `--models`. An empty result exits 2. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 | `--dry-run` | boolean | `false` | Mark the suggestion as a test (`is_test: true`). A test suggestion never counts for learning or for `spatz stats`. |
+| `--retry-of <suggestion_id>` | string | none | Join the named suggestion's recovery chain. |
 | `--scope <scope>` | string | `null` | Store `step`, `turn`, `subagent`, `session` or `escalate`. This labels the routing decision. |
 | `--session <id>` | string | `null` | Link the suggestion at creation. This does not need a Bash hook. With `--source claude-code-mod`, you must also give `--turn` or `--agent-id`. Otherwise the call fails. |
 | `--turn <id>` | string | `null` | Store the initial turn id. |
@@ -57,6 +58,13 @@ spatz "Review the parser" --models claude-sonnet-5-5:high \
   --scope subagent --session session-1 --turn turn-1 \
   --agent-id agent-1 --source claude-code-mod --json
 ```
+
+`spatz suggest "<task>"` is the explicit form of the same command.
+Each suggestion opens an implicit attempt with an unknown actual pair.
+Execution evidence or a report supplies the actual pair.
+Use `--retry-of <suggestion_id>` to join the earlier suggestion's recovery chain.
+Without this flag, the suggestion starts a new chain.
+A separately routed review keeps its own chain.
 
 ### Candidate resolution
 
@@ -162,7 +170,9 @@ Both examples ran with `SPATZ_NO_JEV=1` and an empty database. That is why `fall
 
 ## spatz report
 
-This command records the pair you used and the result of the task. A report wins over all hook signals for this suggestion. The report also closes the suggestion, so later hook events do not go to it.
+This command records the actual pair and result for one attempt.
+A report wins over that attempt's hook signals.
+It closes the attempt and suggestion window. Late evidence can still bind by source identity.
 
 ### Flags
 
@@ -172,16 +182,21 @@ This command records the pair you used and the result of the task. A report wins
 | `--model <m>` | string | required | The model you used. spatz converts it with the same id rules as `--models`. |
 | `--effort <e>` | string | required | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. Another value gives exit code 1. `none` is rejected for catalog models with real efforts; unknown models still accept it. |
 | `--result <r>` | `pass`, `partial` or `fail` | required | The result. spatz stores it as quality 1, 0.5 or 0. |
+| `--attempt <id>` | string | automatic selection | Select an attempt belonging to this suggestion. Its known pair must match. |
+| `--correct` | boolean | `false` | Replace a prior report on the selected attempt. Keep its pair and usage unchanged. |
 | `--rounds <n>` | non-negative integer | none | Count of rounds the agent needed. |
 | `--note <t>` | string | none | A short note. spatz stores it in the database. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 | `--turn <id>` | string | none | Identify a direct report's turn. Needs `--source claude-code-mod`. |
 | `--source claude-code-mod` | string | none | Identify a direct mod report. Needs `--turn`. |
 
-If you send a second report for the same suggestion, the newest report counts.
-Direct reports replace the signal for the same suggestion, source, turn and kind.
-Each new turn keeps its own signal. The outcome view still returns one outcome per suggestion.
-The report stores the turn id and the suggestion's agent id on its usage and signal rows.
+Without `--attempt`, the report selects the highest compatible ordinal.
+An unused implicit attempt also qualifies. If no attempt matches, spatz creates one.
+An identical report returns the same attempt without adding an outcome or usage.
+A changed verdict on an already reported attempt creates a retry.
+Use `--correct` to fix a mistaken verdict instead. It requires a prior report.
+Reports can fill unknown pair fields but cannot overwrite known execution metadata.
+An identical same-pair retry needs an observed new start to distinguish it from replay.
 
 ### Text output
 
@@ -197,6 +212,11 @@ reported: <suggestion_id>  quality: <0..1>  pair: <model>:<effort>
 | `quality` | number | `1`, `0.5` or `0` from `--result`. |
 | `model` | string | Canonical id of the used model. |
 | `effort` | string | The used effort. |
+| `attempt_id` | string or null | UUID of the attempt selected by this report. Null for legacy outcomes. |
+| `ordinal` | number or null | Attempt number within this suggestion. Null for legacy outcomes. |
+| `root_id` | string or null | First attempt of the recovery chain. Null for legacy outcomes. |
+| `input_tokens`, `output_tokens` | number or null | Recorded uncached input and output tokens for this attempt. |
+| `cache_read_tokens`, `cache_creation_tokens` | number or null | Recorded cache tokens for this attempt. |
 
 ### Example
 
@@ -207,8 +227,28 @@ reported: 3b257996-110b-48c4-b61d-79761ad7400b  quality: 1  pair: anthropic/clau
 
 ```console
 $ spatz report 3b257996-110b-48c4-b61d-79761ad7400b --model claude-sonnet-5-5 --effort medium --result pass --json
-{"suggestion_id":"3b257996-110b-48c4-b61d-79761ad7400b","quality":1,"model":"anthropic/claude-sonnet-5.5","effort":"medium"}
+{"suggestion_id":"3b257996-110b-48c4-b61d-79761ad7400b","quality":1,"model":"anthropic/claude-sonnet-5.5","effort":"medium","attempt_id":"<attempt-uuid>","ordinal":1,"root_id":"<attempt-uuid>","input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_creation_tokens":null}
 ```
+
+To correct that verdict, repeat the report with `--attempt <attempt-uuid> --correct`.
+To route more work in the same recovery chain, use `spatz suggest "Retry the task" --retry-of <suggestion_id>`.
+
+## spatz attempt
+
+The mod uses these commands to register execution identity. The routing skill does not need them.
+
+```sh
+spatz attempt start <suggestion_id> --key <turnId:index> --model <m> \
+  [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--owns-usage] [--json]
+spatz attempt bind <attempt_id> --call <tool_use_id> --session <id> [--agent-id <id>]
+spatz attempt finalize --session <id> [--agent-id <id>]
+```
+
+`start` registers a segment before execution. A repeated start key returns the same attempt.
+Unknown effort stays null. `--owns-usage` marks mod usage ownership for this context.
+`bind` connects a hook/mod tool-call ID to the active attempt.
+`finalize` closes observed execution without inventing a successful verdict.
+The main session omits `--agent-id`. Each subagent supplies its own ID.
 
 ## spatz usage
 
@@ -219,6 +259,10 @@ It does not create a success signal or close the suggestion.
 | --- | --- | --- |
 | `<suggestion_id>` | required | The existing suggestion id. |
 | `--model <m>` | required | The model used. spatz applies its model-id rules. |
+| `--attempt <id>` | absent | Bind the measurement to this attempt. |
+| `--key <turnId:index>` | absent | Stable identity of a disjoint mod step measurement. |
+| `--session <id>` | absent | Session context for explicit attempt measurements. |
+| `--agent-id <id>` | absent | Subagent context for explicit attempt measurements. |
 | `--effort <e>` | `null` | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. `none` is rejected for catalog models with real efforts; unknown models still accept it. Missing or supplied efforts are stored as `none` for catalog models whose only effort is `none`. |
 | `--input <n>` | required | Uncached input tokens. |
 | `--output <n>` | required | Output tokens. |
@@ -230,8 +274,10 @@ It does not create a success signal or close the suggestion.
 | `--json` | `false` | Print the stored usage record. |
 
 All token counts must be non-negative safe integers.
-A replay replaces the row for the same suggestion, source, turn and canonical model.
-A follow-up turn adds a row. The suggestion's `agent_id` also goes on each row.
+Step measurements use `--attempt`, `--key` and `--session` with the actual sent effort.
+Replaying the same measurement does not add its tokens twice.
+Each step keeps separate counts even when its pair matches another step.
+The command also accepts direct turn measurements without step identity.
 For a linked subagent, mod usage replaces hook estimates by session and agent id.
 Later hook replays cannot add those estimates again.
 
@@ -254,8 +300,8 @@ The remaining fields are `is_sidechain`, `rounds`, `note` and `reported_at`.
 If the suggestion has an agent id, `is_sidechain` is true.
 
 If completion has no usage, do not submit invented zero counts.
-If one turn used several models, its completion usage names only the last response model.
-The command does not infer a per-model breakdown.
+The mod records disjoint step measurements with their actual pairs.
+It does not submit a mixed turn total against the last response model.
 
 ## spatz link
 
@@ -294,7 +340,8 @@ It records the actual model, effort, normalized tokens, and test/build results.
 It uses the suggestion's stored prices for cost, as the hooks do.
 It stores no raw prompts, commands, or tool output.
 
-The import works after the suggestion closes. It leaves the parent session link unchanged.
+The import binds each run to attempts within the named suggestion.
+It works after the suggestion closes and leaves the parent session link unchanged.
 Repeated imports replace the same records without adding tokens twice. This also applies after hooks ran.
 A turn without usage leaves stored usage unchanged. Use the latest complete rollout.
 The file must contain only turns that belong to the named suggestion.
@@ -355,15 +402,21 @@ For none-only catalog models, stats count old rows with a missing effort as `non
 | `by_scope` field | Meaning |
 | --- | --- |
 | `scope` | The stored routing scope, or `null`. |
-| `n` | Number of suggestions with an outcome. Several usage rows still count as one outcome. |
-| `success_rate` | Share of outcomes with quality at least 0.8. Without outcomes, JSON gives `null` and text gives `-`. |
+| `n` | Completed recovery chains counted once under the root scope, plus legacy outcomes. |
+| `success_rate` | Share of completed chains that succeeded, plus legacy results. Without results, JSON gives `null` and text gives `-`. |
 | `input_tokens`, `output_tokens` | Total recorded input and output tokens. |
 | `cache_read_tokens`, `cache_creation_tokens` | Total recorded cache tokens. |
 | `cost_usd` | Sum of USD costs from schema-2 usage rows, or `null`. |
 | `cache_read_share` | `cache_read_tokens / (input_tokens + cache_read_tokens + cache_creation_tokens)`. With no input tokens, the share is zero. |
 
-Token totals include suggestions without outcomes. Output tokens do not enter the cache-read share.
-Both task-type and scope stats include `cost_usd`.
+Token totals include suggestions without outcomes. Each measurement counts once before outcome joins.
+Output tokens do not enter the cache-read share.
+Scope totals use the root suggestion's scope for each recovery chain.
+Coverage counts distinct scored suggestions over distinct non-test suggestions.
+Adoption and learned/control comparisons use first-attempt quality once per root.
+Pair statistics count each scored attempt. A same-pair reported fail/pass contributes two outcomes.
+Legacy statistics keep their pre-migration meaning.
+Both task-type and scope stats include all four token totals and `cost_usd`.
 The sum includes reported costs and costs calculated from stored prices.
 Schema-1 rows never enter USD totals. If no row has a schema-2 cost, the total is `null` (`-` in text).
 Missing counters contribute zero to the calculation, so incomplete rows can understate cost.
@@ -381,7 +434,7 @@ The first run needs network access once. See [configuration.md](configuration.md
 ### Text output
 
 ```text
-<task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cost_usd=<amount or ->
+<task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cache_read_tokens=<count>  cache_creation_tokens=<count>  cost_usd=<amount or ->
   <model>:<effort>  n=<count>  success=<pct>
 coverage: <pct>  learned_success: <pct or ->  control_success: <pct or ->
 dispatches: <count>  routed_by_mod: <count>  swapped: <count>
@@ -447,18 +500,20 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | --- | --- | --- |
 | `by_type` | array | One entry per task type that has suggestions. |
 | `by_type[].task_type` | string | The task type. |
-| `by_type[].n` | number | Count of outcomes. An outcome exists when a suggestion has at least one signal. |
+| `by_type[].n` | number | Count of scored attempts plus legacy outcomes. |
 | `by_type[].pairs` | array | One entry per used pair. |
 | `by_type[].pairs[].model` | string | Canonical model id. |
 | `by_type[].pairs[].effort` | string or null | `null` when no hook input gave an effort. |
 | `by_type[].pairs[].n` | number | Count of outcomes with this pair. |
 | `by_type[].pairs[].success_rate` | number, 0 to 1 | Share of outcomes with quality of 0.8 or more. |
-| `by_type[].adoption_rate` | number, 0 to 1 | Share of outcomes whose used pair is `ranking[0]`. |
+| `by_type[].adoption_rate` | number, 0 to 1 | Share of root decisions whose first actual pair is `ranking[0]`. |
 | `by_type[].input_tokens` | number | Sum of recorded input tokens. |
 | `by_type[].output_tokens` | number | Sum of recorded output tokens. |
+| `by_type[].cache_read_tokens` | number | Sum of input tokens read from cache. |
+| `by_type[].cache_creation_tokens` | number | Sum of input tokens written to cache. |
 | `by_type[].cost_usd` | number or null | Sum of USD costs from schema-2 usage rows. Null if none have a cost. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
-| `learned_success` | number or null | Success rate of learned picks. spatz compares only cells that have both learned and control outcomes, and weights each cell by its count. |
+| `learned_success` | number or null | First-attempt success rate of learned root decisions in cells with both learned and control outcomes, weighted by their counts. |
 | `control_success` | number or null | Success rate of the control group in the same cells. |
 | `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |
 | `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
@@ -468,7 +523,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 
 ```console
 $ spatz stats
-other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cost_usd=-
+other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-
   anthropic/claude-sonnet-5.5:medium  n=1  success=100%
 coverage: 14%  learned_success: -  control_success: -
 dispatches: 0  routed_by_mod: 0  swapped: 0
@@ -478,7 +533,7 @@ failures: parse=0  hook=0  launcher=0
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cost_usd":null}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":null}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes

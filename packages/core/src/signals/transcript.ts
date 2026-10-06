@@ -15,7 +15,27 @@ export interface CodexRollout {
 	model: string;
 	effort: string | null;
 	usage: TranscriptUsage | null;
-	calls: { command: string; exit_code: number }[];
+	at: number | null;
+	session_id: string | null;
+	usage_at: number | null;
+	usage_revision: number;
+	mixed_pair: boolean;
+	segments: {
+		key: string;
+		source_seq: number;
+		at: number | null;
+		model: string;
+		effort: string | null;
+	}[];
+	calls: {
+		id: string;
+		command: string;
+		exit_code: number;
+		source_seq: number;
+		at: number | null;
+		model: string;
+		effort: string | null;
+	}[];
 }
 
 type CodexUsage = {
@@ -36,6 +56,7 @@ const CODEX_TOKEN_FIELDS = [
 ] as const;
 
 type RolloutRecord = {
+	timestamp?: string;
 	type?: string;
 	payload?: {
 		[key: string]: unknown;
@@ -102,23 +123,68 @@ function parseCodexTurn(
 	rows: RolloutRecord[],
 	turnId: string,
 ): CodexRollout | null {
-	const turn = rows.find(
+	const first = rows.find(
 		(r) => r.type === "turn_context" && r.payload?.turn_id === turnId,
-	)?.payload;
+	);
+	const turn = first?.payload;
 	if (!turn || typeof turn.model !== "string") return null;
 	let usage: CodexUsage | null = null;
 	let turnUsage: CodexUsage | null = null;
 	let threadUsage: CodexUsage | null = null;
 	let beforeTurn: CodexUsage | null = null;
-	const calls = new Map<string, string>();
+	const calls = new Map<
+		string,
+		Omit<CodexRollout["calls"][number], "exit_code">
+	>();
+	let model = turn.model;
+	let effort = typeof turn.effort === "string" ? turn.effort : null;
+	let mixed_pair = false;
+	let usage_revision = 0;
+	let usage_at: number | null = null;
+	const metaId = rows.find((row) => row.type === "session_meta")?.payload?.id;
+	let session_id: string | null = typeof metaId === "string" ? metaId : null;
 	const exits = new Map<string, number>();
 	const completed = new Map<string, CodexRollout["calls"][number]>();
 	let currentTurn: string | undefined;
-	for (const { type, payload: p } of rows) {
+	const segments: CodexRollout["segments"] = [];
+	const contextIndexes = new Map<string, number>();
+	let segment: CodexRollout["segments"][number] | undefined;
+	for (const [source_seq, row] of rows.entries()) {
+		const { type, payload: p } = row;
+		const at = sourceTime(row.timestamp);
 		if (type === "turn_context") {
+			if (typeof p?.model === "string") {
+				const nextEffort = typeof p.effort === "string" ? p.effort : null;
+				if (
+					!segment ||
+					segment.model !== p.model ||
+					segment.effort !== nextEffort
+				) {
+					const id = p.turn_id ?? "";
+					const index = contextIndexes.get(id) ?? 0;
+					contextIndexes.set(id, index + 1);
+					segment = {
+						key: `${id}:${index}`,
+						source_seq,
+						at,
+						model: p.model,
+						effort: nextEffort,
+					};
+				}
+				if (
+					p.turn_id === turnId &&
+					!segments.some((s) => s.key === segment?.key)
+				)
+					segments.push(segment);
+			}
 			if (p?.turn_id === turnId && currentTurn !== turnId)
 				beforeTurn = threadUsage;
 			currentTurn = p?.turn_id;
+			if (currentTurn === turnId && typeof p?.model === "string") {
+				model = p.model;
+				effort = typeof p.effort === "string" ? p.effort : null;
+				mixed_pair ||= model !== turn.model || effort !== (turn.effort ?? null);
+			}
 		}
 		const total =
 			type === "token_usage_record"
@@ -127,6 +193,15 @@ function parseCodexTurn(
 					? p.info?.total_token_usage
 					: undefined;
 		if ((p?.turn_id ?? currentTurn) === turnId) {
+			if (typeof p?.session_id === "string") session_id = p.session_id;
+			else if (typeof p?.thread_id === "string") session_id ??= p.thread_id;
+			if (
+				type === "token_usage_record" ||
+				(type === "event_msg" && p?.type === "token_count")
+			) {
+				usage_revision = source_seq;
+				usage_at = at;
+			}
 			if (type === "token_usage_record" && p?.turn_token_usage) {
 				usage = turnUsage = p.turn_token_usage;
 			} else if (total && !turnUsage) {
@@ -171,6 +246,11 @@ function parseCodexTurn(
 				typeof argv[2] === "string"
 			)
 				completed.set(item.id, {
+					id: `completed:${item.id}`,
+					source_seq,
+					at,
+					model,
+					effort,
 					command: argv[2],
 					exit_code: item.exit_code as number,
 				});
@@ -184,7 +264,14 @@ function parseCodexTurn(
 						: undefined;
 				const command = encoded ? JSON.parse(encoded) : null;
 				if (typeof command === "string")
-					calls.set(p.call_id, command.replaceAll("\\'", "'"));
+					calls.set(p.call_id, {
+						id: `legacy:${p.call_id}`,
+						command: command.replaceAll("\\'", "'"),
+						source_seq,
+						at,
+						model,
+						effort,
+					});
 			} catch {}
 		}
 		if (p.type === "custom_tool_call_output" && typeof p.call_id === "string") {
@@ -219,6 +306,12 @@ function parseCodexTurn(
 	const cacheRead = tokenCount(usage?.cached_input_tokens);
 	const cacheWrite = tokenCount(usage?.cache_write_input_tokens);
 	return {
+		at: sourceTime(first?.timestamp),
+		session_id,
+		usage_at,
+		usage_revision,
+		mixed_pair,
+		segments,
 		model: turn.model,
 		effort: typeof turn.effort === "string" ? turn.effort : null,
 		usage: usage
@@ -238,7 +331,7 @@ function parseCodexTurn(
 			? [...completed.values()]
 			: [...calls].flatMap(([id, command]) => {
 					const code = exits.get(id);
-					return code === undefined ? [] : [{ command, exit_code: code }];
+					return code === undefined ? [] : [{ ...command, exit_code: code }];
 				}),
 	};
 }
@@ -247,11 +340,20 @@ interface Line {
 	type?: unknown;
 	promptId?: unknown;
 	timestamp?: unknown;
-	message?: { id?: unknown; model?: unknown; usage?: TranscriptUsage };
+	message?: {
+		id?: unknown;
+		model?: unknown;
+		usage?: TranscriptUsage;
+		content?: { type?: string; id?: string; name?: string }[];
+	};
 }
 
 /** One API message: model, usage and when it was written (epoch ms, NaN when missing). */
 export interface AssistantMessage {
+	prompt_id?: string | null;
+	id: string;
+	source_seq: number;
+	calls: { id: string; name: string }[];
 	model: string;
 	at: number;
 	usage: TranscriptUsage;
@@ -273,16 +375,38 @@ function assistantMessages(
 	jsonl: string,
 	inTurn: (entry: Line) => boolean,
 ): AssistantMessage[] {
-	const seen = new Set<string>();
+	const seen = new Map<string, AssistantMessage>();
 	const out: AssistantMessage[] = [];
-	for (const e of lines(jsonl)) {
+	let prompt_id: string | null = null;
+	for (const [source_seq, e] of [...lines(jsonl)].entries()) {
+		if (e.type === "user" && typeof e.promptId === "string")
+			prompt_id = e.promptId;
 		if (!inTurn(e) || e.type !== "assistant") continue;
-		const { id, model, usage = {} } = e.message ?? {};
-		if (typeof id !== "string" || typeof model !== "string" || seen.has(id))
-			continue;
-		seen.add(id);
-		const at = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
-		out.push({ model, at, usage: usage ?? {} });
+		const { id, model, usage = {}, content = [] } = e.message ?? {};
+		if (typeof id !== "string" || typeof model !== "string") continue;
+		let message = seen.get(id);
+		if (!message) {
+			message = {
+				prompt_id,
+				id,
+				model,
+				at: sourceTime(e.timestamp) ?? NaN,
+				source_seq,
+				calls: [],
+				usage: usage ?? {},
+			};
+			seen.set(id, message);
+			out.push(message);
+		}
+		for (const block of Array.isArray(content) ? content : []) {
+			if (
+				block.type === "tool_use" &&
+				typeof block.id === "string" &&
+				typeof block.name === "string" &&
+				!message.calls.some((call) => call.id === block.id)
+			)
+				message.calls.push({ id: block.id, name: block.name });
+		}
 	}
 	return out;
 }
@@ -350,3 +474,9 @@ export const parseMainTranscript = (jsonl: string, promptId: string) =>
 /** A subagent transcript's usage summed per model. */
 export const parseSubagentTranscript = (jsonl: string) =>
 	sumByModel(subagentMessages(jsonl));
+
+/** Only source timestamps can open a fallback attribution window. */
+export function sourceTime(value: unknown): number | null {
+	const at = typeof value === "string" ? Date.parse(value) : NaN;
+	return Number.isFinite(at) ? at : null;
+}

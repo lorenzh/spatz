@@ -24,7 +24,7 @@ describe("parseCodexRollout", () => {
 		const rollout = await Bun.file(
 			`${import.meta.dir}/fixtures/codex-command-events.jsonl`,
 		).text();
-		expect(parseCodexRollout(rollout, "todo-turn")).toEqual({
+		expect(parseCodexRollout(rollout, "todo-turn")).toMatchObject({
 			model: "gpt-6-luna",
 			effort: "low",
 			usage: {
@@ -39,7 +39,7 @@ describe("parseCodexRollout", () => {
 			],
 		});
 		// Legacy records also stay in their own turn.
-		expect(parseCodexRollout(rollout, "later")?.calls).toEqual([
+		expect(parseCodexRollout(rollout, "later")?.calls).toMatchObject([
 			{ command: "bun test", exit_code: 0 },
 		]);
 	});
@@ -51,7 +51,7 @@ describe("parseCodexRollout", () => {
 			rollout,
 			"11111111-1111-1111-1111-111111111111",
 		);
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			model: "gpt-6-luna",
 			effort: "low",
 			usage: {
@@ -325,7 +325,7 @@ describe("signalFromBashEvent", () => {
 		).toBe(0);
 	});
 	test("PostToolUse bun test -> test 1", () => {
-		expect(signalFromBashEvent(ok("bun test"), "sid", 123)).toEqual({
+		expect(signalFromBashEvent(ok("bun test"), "sid", 123)).toMatchObject({
 			suggestion_id: "sid",
 			kind: "test",
 			value: 1,
@@ -335,7 +335,7 @@ describe("signalFromBashEvent", () => {
 		});
 	});
 	test("PostToolUseFailure tsc -> build 0", () => {
-		expect(signalFromBashEvent(fail("tsc"), "sid", 5)).toEqual({
+		expect(signalFromBashEvent(fail("tsc"), "sid", 5)).toMatchObject({
 			suggestion_id: "sid",
 			kind: "build",
 			value: 0,

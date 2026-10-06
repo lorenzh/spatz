@@ -307,7 +307,14 @@ export interface UsageRecord {
 /** One row of the SQL view `outcomes`. */
 export interface Outcome {
 	suggestion_id: string;
-	quality: number;
+	quality: number | null;
+	attempt_id: string | null;
+	ordinal: number | null;
+	root_id: string | null;
+	input_tokens: number | null;
+	output_tokens: number | null;
+	cache_read_tokens: number | null;
+	cache_creation_tokens: number | null;
 	/** Used pair: report usage, else model with most output tokens. */
 	model: string | null;
 	effort: Effort | null;
@@ -326,6 +333,7 @@ export type Agent = (typeof AGENTS)[number];
 
 /** One dispatch, joined by the session and child agent identity. */
 export interface DispatchRecord {
+	attempt_id?: string | null;
 	session_id: string;
 	agent_id: string;
 	tool_use_id: string | null;
@@ -337,6 +345,8 @@ export interface DispatchRecord {
 
 /** Row of table `suggestions`. No task text is ever stored. */
 export interface SuggestionRecord {
+	retry_of?: string;
+	is_legacy?: number;
 	/** Original model before mod routing; null when absent or unknown. */
 	requested_model?: string | null;
 	/** Candidate model IDs mapped to four USD-per-token rates captured at creation. */
@@ -383,6 +393,8 @@ export interface PairStats {
 }
 
 export interface TypeStats {
+	cache_read_tokens: number;
+	cache_creation_tokens: number;
 	cost_usd: number | null;
 	task_type: TaskType;
 	/** Outcomes of non-test suggestions. */

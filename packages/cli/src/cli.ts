@@ -15,6 +15,9 @@ const code = await main(
 		readStdin: () => Bun.stdin.text(),
 	},
 	{
+		startAttempt: async (input) => api().startAttempt(input),
+		bindAttempt: async (input) => api().bindAttempt(input),
+		finalizeAttempts: async (input) => api().finalizeAttempts(input),
 		importRollout: async (input) => api().importRollout(input),
 		suggest: async (input) => api().suggest(input),
 		usage: async (input) => api().usage(input),

@@ -18,6 +18,7 @@ import {
 	resolveModels,
 } from "../catalog/presets.ts";
 import { classify } from "../classify/index.ts";
+import type { AttemptEvent } from "../contracts/attempts.ts";
 import type { CoreDeps, SpatzApi, Store } from "../contracts/deps.ts";
 import type {
 	AgentToolResponse,
@@ -48,14 +49,11 @@ import {
 	signalFromBashEvent,
 } from "../signals/index.ts";
 import {
-	type AssistantMessage,
 	type CodexRollout,
-	type ModelUsage,
 	mainTurnMessages,
 	parseCodexRollout,
 	parseCodexRollouts,
 	subagentMessages,
-	sumByModel,
 } from "../signals/transcript.ts";
 import { loadConfig } from "./deps.ts";
 
@@ -75,13 +73,6 @@ async function readTranscript<T>(
 		return null;
 	}
 }
-
-const NO_TOKENS = {
-	input_tokens: null,
-	output_tokens: null,
-	cache_read_tokens: null,
-	cache_creation_tokens: null,
-};
 
 export function createApi(
 	deps: CoreDeps,
@@ -208,141 +199,85 @@ export function createApi(
 	async function onHook(input: HookInput, cfg: Config): Promise<void> {
 		if (isIgnoredHookInput(input)) return;
 		const now = deps.clock.now();
-		const canonical = (model: string) => toCanonicalId(model, cfg.aliases);
-		const usage = (
-			id: string,
-			u: Pick<UsageRecord, "model" | "source" | "scope_key" | "is_sidechain"> &
-				Partial<UsageRecord>,
-		): UsageRecord => ({
-			suggestion_id: id,
-			effort: null,
-			...NO_TOKENS,
-			rounds: null,
-			note: null,
-			reported_at: now,
-			...u,
-		});
-		type ScopeFields = Pick<
-			UsageRecord,
-			"source" | "scope_key" | "is_sidechain" | "effort"
-		>;
-		const fromTranscript = (
-			id: string,
-			rows: ModelUsage[],
-			fields: ScopeFields,
-		) => {
-			// Sum per canonical model: two raw names can map to one id, and upsert would overwrite.
-			const byModel = new Map<string, UsageRecord>();
-			for (const r of rows) {
-				const model = canonical(r.model);
-				const u =
-					byModel.get(model) ??
-					usage(id, {
-						...fields,
-						model,
-						input_tokens: 0,
-						output_tokens: 0,
-						cache_read_tokens: 0,
-						cache_creation_tokens: 0,
-					});
-				u.input_tokens =
-					u.input_tokens === null || r.input_tokens === null
-						? null
-						: u.input_tokens + r.input_tokens;
-				u.output_tokens =
-					u.output_tokens === null || r.output_tokens === null
-						? null
-						: u.output_tokens + r.output_tokens;
-				u.cache_read_tokens =
-					u.cache_read_tokens === null || r.cache_read_tokens === null
-						? null
-						: u.cache_read_tokens + r.cache_read_tokens;
-				u.cache_creation_tokens =
-					u.cache_creation_tokens === null || r.cache_creation_tokens === null
-						? null
-						: u.cache_creation_tokens + r.cache_creation_tokens;
-				byModel.set(model, u);
-			}
-			return [...byModel.values()];
+		const context = {
+			harness: "claude-code",
+			session_key: input.session_id,
+			agent_key: input.agent_id ?? "",
 		};
-		/**
-		 * Each suggestion of the session gets the messages inside its own time window [created_at, end).
-		 * Rewrites the whole scope atomically, so replays drop stale rows; an older snapshot is skipped.
-		 */
-		const writeWindowed = (
-			store: Store,
-			messages: AssistantMessage[],
-			fields: ScopeFields,
-		) => {
-			const timed = messages.filter((m) => Number.isFinite(m.at));
-			if (timed.length === 0) {
-				store.recordFailure(
-					"parse",
-					fields.source === "subagent" ? "SubagentStop" : "Stop",
-					now,
-					input.session_id,
-					fields.scope_key,
-				);
-				return;
-			}
-			const times = timed.map((m) => m.at);
-			store.rewriteScope(
-				{
-					session_id: input.session_id,
-					source: fields.source,
-					scope_key: fields.scope_key,
-					agent_id: fields.source === "subagent" ? fields.scope_key : null,
-					message_count: timed.length,
-					from: Math.min(...times),
-					last_at: Math.max(...times),
-					openWindowMs: cfg.tuning.openWindowMs,
-				},
-				(windows) =>
-					windows.flatMap((w) =>
-						fromTranscript(
-							w.id,
-							sumByModel(timed.filter((m) => m.at >= w.start && m.at < w.end)),
-							fields,
-						),
-					),
-			);
-		};
-
+		const sub = !!input.agent_id;
+		const path =
+			input.hook_event_name === "SubagentStop"
+				? input.agent_transcript_path
+				: input.transcript_path;
+		const messages =
+			(await readTranscript(path, (text) =>
+				sub
+					? subagentMessages(text)
+					: mainTurnMessages(text, input.prompt_id ?? ""),
+			)) ?? [];
 		return withStore(async (store) => {
-			// Each event refreshes its agent window; handbacks are ignored above.
-			const open = store.findOpenSuggestion(
-				input.session_id,
-				now,
-				cfg.tuning.openWindowMs,
-				...(input.agent_id ? [input.agent_id] : []),
-			);
-			if (open) store.touch(open, now);
-
-			switch (input.hook_event_name) {
-				case "PostToolUse":
-				case "PostToolUseFailure": {
-					if (
-						input.hook_event_name === "PostToolUse" &&
-						input.tool_name === "Agent"
-					) {
-						const r = input.tool_response as AgentToolResponse | null;
-						if (
-							typeof r?.agentId !== "string" ||
-							!r.agentId ||
-							!input.session_id
-						)
-							return;
+			const ownsUsage = store.attemptOwnsUsage(context);
+			const effort = sub || ownsUsage ? null : effortFromHook(input);
+			const events: AttemptEvent[] = [];
+			for (const message of messages) {
+				const base = {
+					...context,
+					prompt_id: message.prompt_id ?? input.prompt_id ?? null,
+					message_id: message.id,
+					source_seq: message.source_seq,
+					occurred_at: Number.isFinite(message.at) ? message.at : null,
+					received_at: now,
+					model: toCanonicalId(message.model, cfg.aliases),
+					effort,
+					revision: 0,
+				};
+				if (
+					!ownsUsage &&
+					(input.hook_event_name === "Stop" ||
+						input.hook_event_name === "SubagentStop")
+				)
+					events.push({
+						...base,
+						event_id: `message:${message.id}`,
+						kind: "usage",
+						source: sub ? "subagent" : "transcript",
+						call_id: message.calls[0]?.id ?? null,
+						input_tokens: message.usage.input_tokens ?? null,
+						output_tokens: message.usage.output_tokens ?? null,
+						cache_read_tokens: message.usage.cache_read_input_tokens ?? null,
+						cache_creation_tokens:
+							message.usage.cache_creation_input_tokens ?? null,
+					});
+				for (const call of message.calls)
+					if (call.name === "Agent")
+						events.push({
+							...base,
+							event_id: `delegate:${call.id}`,
+							kind: "delegate",
+							call_id: call.id,
+						});
+			}
+			if (
+				input.hook_event_name === "PostToolUse" ||
+				input.hook_event_name === "PostToolUseFailure"
+			) {
+				const message = messages.find((m) =>
+					m.calls.some((call) => call.id === input.tool_use_id),
+				);
+				if (
+					input.hook_event_name === "PostToolUse" &&
+					input.tool_name === "Agent"
+				) {
+					const response = input.tool_response as AgentToolResponse | null;
+					if (typeof response?.agentId === "string" && response.agentId) {
 						const requested = input.tool_input as {
 							model?: unknown;
 							subagent_type?: unknown;
 						} | null;
 						store.upsertDispatch({
 							session_id: input.session_id,
-							agent_id: r.agentId,
-							tool_use_id:
-								typeof input.tool_use_id === "string"
-									? input.tool_use_id
-									: null,
+							agent_id: response.agentId,
+							tool_use_id: input.tool_use_id,
 							requested_model: await requestedDispatchModel(
 								requested?.model,
 								requested?.subagent_type,
@@ -352,143 +287,182 @@ export function createApi(
 								typeof requested?.subagent_type === "string"
 									? requested.subagent_type
 									: null,
-							answered_model: await dispatchModel(r.resolvedModel),
+							answered_model: await dispatchModel(response.resolvedModel),
 							suggestion_id: null,
 						});
-						if (!r.resolvedModel) return;
-						const target = store.findOpenSuggestion(
-							input.session_id,
-							now,
-							cfg.tuning.openWindowMs,
-							r.agentId,
-						);
-						if (!target) return;
-						// effort.level here is the main session's, not the subagent's: leave it empty.
-						store.upsertUsage(
-							usage(target, {
-								model: canonical(r.resolvedModel),
-								source: "agent_tool",
-								scope_key: r.agentId,
-								is_sidechain: true,
-							}),
-						);
-						return;
 					}
-					if (input.tool_name !== "Bash") return;
+				}
+				if (input.tool_name === "Bash") {
 					const command =
 						(input.tool_input as BashToolInput | null)?.command ?? "";
 					if (
 						input.hook_event_name === "PostToolUse" &&
 						detectCommandKind(command) === "spatz-suggest"
 					) {
-						const stdout =
-							(input.tool_response as BashToolResponse | null)?.stdout ?? "";
-						const id = extractSuggestionId(stdout);
-						if (!id) return;
-						const shrunk = store.linkSession(
-							id,
-							input.session_id,
-							input.prompt_id ?? null,
-							now,
-							...(input.agent_id ? [input.agent_id] : []),
+						const id = extractSuggestionId(
+							(input.tool_response as BashToolResponse | null)?.stdout ?? "",
 						);
-						// A delayed link can shrink windows that Stop or SubagentStop already filled: rewrite those scopes.
-						for (const scope of store.usageScopes(shrunk)) {
-							const sub = scope.source === "subagent";
-							// ponytail: subagent path derived from the Claude Code layout <session>/subagents/agent-<id>.jsonl
-							const path = sub
-								? `${input.transcript_path.replace(/\.jsonl$/, "")}/subagents/agent-${scope.scope_key}.jsonl`
-								: input.transcript_path;
-							const messages = await readTranscript(path, (text) =>
-								sub
-									? subagentMessages(text)
-									: mainTurnMessages(text, scope.scope_key),
+						if (id) {
+							store.linkSession(
+								id,
+								input.session_id,
+								input.prompt_id ?? null,
+								store.getSuggestion(id)?.created_at ?? now,
+								input.agent_id,
 							);
-							writeWindowed(store, messages ?? [], {
-								...scope,
-								is_sidechain: sub,
-							});
+							store.reconcileAttempts(cfg.tuning.openWindowMs);
 						}
-						return;
+					} else {
+						const signal = signalFromBashEvent(input, "", now);
+						if (signal)
+							events.push({
+								...context,
+								event_id: `call:${input.tool_use_id}:${signal.kind}`,
+								revision: message ? 1 : 0,
+								prompt_id: message?.prompt_id ?? input.prompt_id ?? null,
+								call_id: input.tool_use_id,
+								message_id: message?.id ?? null,
+								source_seq: message?.source_seq ?? null,
+								occurred_at:
+									message && Number.isFinite(message.at) ? message.at : null,
+								received_at: now,
+								model: message
+									? toCanonicalId(message.model, cfg.aliases)
+									: null,
+								effort,
+								kind: signal.kind as "test" | "build",
+								value: signal.value,
+								weight: signal.weight,
+								source: input.hook_event_name,
+							});
 					}
-					const signal = open && signalFromBashEvent(input, open, now);
-					if (signal) store.insertSignal(signal);
-					return;
 				}
-				case "Stop": {
-					const promptId = input.prompt_id;
-					if (!promptId) throw new Error("missing prompt id");
-					return writeWindowed(
-						store,
-						(await readTranscript(input.transcript_path, (text) =>
-							mainTurnMessages(text, promptId),
-						)) ?? [],
-						{
-							source: "transcript",
-							scope_key: promptId,
-							is_sidechain: false,
-							effort: effortFromHook(input),
-						},
+			}
+			if (events.length)
+				store.recordAttemptEvents(events, cfg.tuning.openWindowMs);
+			if (
+				input.hook_event_name === "Stop" ||
+				input.hook_event_name === "SubagentStop"
+			) {
+				const times = messages.map((m) => m.at).filter(Number.isFinite);
+				if (times.length)
+					store.finalizeAttempts(
+						context,
+						Math.max(...times),
+						cfg.tuning.successQuality,
 					);
-				}
-				case "SubagentStop":
-					return writeWindowed(
-						store,
-						(await readTranscript(
-							input.agent_transcript_path,
-							subagentMessages,
-						)) ?? [],
-						{
-							source: "subagent",
-							scope_key: input.agent_id,
-							is_sidechain: true,
-							effort: effortFromHook(input),
-						},
+				else
+					store.recordFailure(
+						"parse",
+						input.hook_event_name,
+						now,
+						input.session_id,
+						input.agent_id ?? input.prompt_id ?? null,
 					);
 			}
 		});
 	}
 
-	/** Explicit dispatch links do not replace the suggestion's parent session or time window. */
+	/** Keep calls and the final cumulative measurement together for atomic reconciliation. */
 	function recordCodexTurn(
 		store: Store,
 		cfg: Config,
-		suggestionId: string,
+		suggestionId: string | null,
 		turnId: string,
 		rollout: CodexRollout,
+		sessionId?: string,
 	) {
 		const now = deps.clock.now();
+		const context = {
+			harness: "codex",
+			session_key:
+				rollout.session_id ??
+				(suggestionId ? `suggestion:${suggestionId}` : (sessionId ?? "")),
+			agent_key: "",
+		};
+		if (suggestionId) {
+			const attempts = rollout.segments.map((segment) => ({
+				segment,
+				attempt: store.startAttempt({
+					...context,
+					suggestion_id: suggestionId,
+					key: `dispatch:${context.session_key}:${segment.key}`,
+					model: toCanonicalId(segment.model, cfg.aliases),
+					effort: EFFORTS.find((e) => e === segment.effort) ?? null,
+					at:
+						segment.at ?? store.getSuggestion(suggestionId)?.created_at ?? now,
+				}),
+			}));
+			for (const { attempt } of attempts)
+				store.bindAttempt({
+					...context,
+					attempt_id: attempt.id,
+					id_kind: "turn",
+					external_id: turnId,
+				});
+			for (const call of rollout.calls) {
+				const owner = attempts.findLast(
+					({ segment }) => segment.source_seq <= call.source_seq,
+				);
+				if (owner)
+					store.bindAttempt({
+						...context,
+						attempt_id: owner.attempt.id,
+						id_kind: "call",
+						external_id: call.id,
+					});
+			}
+		}
+		const events: AttemptEvent[] = [];
 		for (const call of rollout.calls) {
 			const kind = detectCommandKind(call.command);
 			if (kind !== "test" && kind !== "build") continue;
-			store.insertSignal({
-				suggestion_id: suggestionId,
+			events.push({
+				...context,
+				event_id: call.id,
+				revision: 0,
+				turn_id: turnId,
+				call_id: call.id,
+				source_seq: call.source_seq,
+				occurred_at: call.at,
+				received_at: now,
+				model: toCanonicalId(call.model, cfg.aliases),
+				effort: EFFORTS.find((e) => e === call.effort) ?? null,
 				kind,
 				value: call.exit_code === 0 ? 1 : 0,
 				weight: SIGNAL_WEIGHTS[kind],
 				source: "Stop",
-				turn_id: turnId,
-				observed_at: now,
 			});
 		}
-		const { usage } = rollout;
-		if (!usage) return;
-		store.upsertUsage({
-			suggestion_id: suggestionId,
-			model: toCanonicalId(rollout.model, cfg.aliases),
-			effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
-			source: "transcript",
-			scope_key: turnId,
-			turn_id: turnId,
-			is_sidechain: false,
-			input_tokens: usage.input_tokens ?? null,
-			output_tokens: usage.output_tokens ?? null,
-			cache_read_tokens: usage.cache_read_input_tokens ?? null,
-			cache_creation_tokens: usage.cache_creation_input_tokens ?? null,
-			rounds: null,
-			note: null,
-			reported_at: now,
-		});
+		if (rollout.usage)
+			events.push({
+				...context,
+				event_id: `usage:${turnId}`,
+				revision: rollout.usage_revision,
+				turn_id: turnId,
+				source_seq: rollout.usage_revision,
+				occurred_at: rollout.usage_at ?? rollout.at,
+				received_at: now,
+				model: rollout.mixed_pair
+					? null
+					: toCanonicalId(rollout.model, cfg.aliases),
+				effort: rollout.mixed_pair
+					? null
+					: (EFFORTS.find((e) => e === rollout.effort) ?? null),
+				kind: "usage",
+				source: "transcript",
+				suggestion_only: rollout.mixed_pair,
+				input_tokens: rollout.usage.input_tokens ?? null,
+				output_tokens: rollout.usage.output_tokens ?? null,
+				cache_read_tokens: rollout.usage.cache_read_input_tokens ?? null,
+				cache_creation_tokens:
+					rollout.usage.cache_creation_input_tokens ?? null,
+			});
+		if (events.length)
+			store.recordAttemptEvents(events, cfg.tuning.openWindowMs);
+		const at = rollout.usage_at ?? rollout.at ?? rollout.calls.at(-1)?.at;
+		if (at !== null && at !== undefined)
+			store.finalizeAttempts(context, at, cfg.tuning.successQuality);
 	}
 
 	async function onCodexHook(
@@ -496,174 +470,121 @@ export function createApi(
 		cfg: Config,
 	): Promise<void> {
 		const suggestionId = deps.env.SPATZ_SUGGESTION_ID;
-		if (suggestionId !== undefined) {
-			if (input.hook_event_name !== "Stop") return;
-			return withStore(async (store) => {
-				if (!store.getSuggestion(suggestionId))
-					throw new Error(`unknown suggestion_id ${suggestionId}`);
-				const turnId = input.turn_id;
-				if (!turnId) throw new Error("missing turn id");
-				const rollout = await readTranscript(input.transcript_path, (text) =>
-					parseCodexRollout(text, turnId),
-				);
-				if (!rollout) {
-					store.recordFailure(
-						"parse",
-						"codex:Stop",
-						deps.clock.now(),
-						input.session_id,
-						turnId,
-					);
-					debugHook(
-						"Codex rollout has no matching turn context; check the rollout format.",
-					);
-					return;
-				}
-				recordCodexTurn(store, cfg, suggestionId, turnId, rollout);
-			});
-		}
-		const now = deps.clock.now();
 		return withStore(async (store) => {
-			const open = store.findOpenSuggestion(
-				input.session_id,
-				now,
-				cfg.tuning.openWindowMs,
-			);
-			if (open) store.touch(open, now);
-			if (input.hook_event_name === "PostToolUse") {
-				if (input.tool_name !== "Bash") return;
+			if (suggestionId !== undefined && !store.getSuggestion(suggestionId))
+				throw new Error(`unknown suggestion_id ${suggestionId}`);
+			if (
+				input.hook_event_name === "PostToolUse" &&
+				input.tool_name === "Bash" &&
+				suggestionId === undefined
+			) {
 				const command =
 					(input.tool_input as BashToolInput | undefined)?.command ?? "";
-				if (detectCommandKind(command) !== "spatz-suggest") return;
-				const id = extractSuggestionId(
-					typeof input.tool_response === "string" ? input.tool_response : "",
-				);
-				if (id) {
-					const shrunk = store.linkSession(
-						id,
-						input.session_id,
-						input.turn_id ?? null,
-						now,
+				if (detectCommandKind(command) === "spatz-suggest") {
+					const id = extractSuggestionId(
+						typeof input.tool_response === "string" ? input.tool_response : "",
 					);
-					for (const scope of store.usageScopes(shrunk)) {
-						if (scope.source !== "transcript") continue;
-						const rollout = await readTranscript(
-							input.transcript_path,
-							(text) => parseCodexRollout(text, scope.scope_key),
+					if (id) {
+						store.linkSession(
+							id,
+							input.session_id,
+							null,
+							store.getSuggestion(id)?.created_at ?? deps.clock.now(),
+							undefined,
+							"codex",
 						);
-						if (!rollout) {
-							store.recordFailure(
-								"parse",
-								"codex:Stop",
-								now,
-								input.session_id,
-								scope.scope_key,
-							);
-							continue;
-						}
-						// A turn without usage is not a parse failure; it must not overwrite a stored row.
-						if (!rollout.usage) continue;
-						const { usage } = rollout;
-						store.rewriteScope(
-							{
-								session_id: input.session_id,
-								source: "transcript",
-								scope_key: scope.scope_key,
-								message_count: 1,
-								from: now,
-								last_at: now,
-								openWindowMs: cfg.tuning.openWindowMs,
-							},
-							(windows) =>
-								windows.map((w) => ({
-									suggestion_id: w.id,
-									model: toCanonicalId(rollout.model, cfg.aliases),
-									effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
-									source: "transcript",
-									scope_key: scope.scope_key,
-									is_sidechain: false,
-									input_tokens: usage.input_tokens ?? null,
-									output_tokens: usage.output_tokens ?? null,
-									cache_read_tokens: usage.cache_read_input_tokens ?? null,
-									cache_creation_tokens:
-										usage.cache_creation_input_tokens ?? null,
-									rounds: null,
-									note: null,
-									reported_at: now,
-								})),
-						);
+						const attempt = store.outcome(id)?.attempt_id;
+						if (attempt && input.turn_id)
+							store.bindAttempt({
+								harness: "codex",
+								session_key: input.session_id,
+								agent_key: "",
+								attempt_id: attempt,
+								id_kind: "turn",
+								external_id: input.turn_id,
+							});
+						store.reconcileAttempts(cfg.tuning.openWindowMs);
 					}
 				}
-				return;
 			}
 			if (input.hook_event_name !== "Stop") return;
 			if (!input.turn_id) throw new Error("missing turn id");
-			const turnId = input.turn_id;
 			const rollout = await readTranscript(input.transcript_path, (text) =>
-				parseCodexRollout(text, turnId),
+				parseCodexRollout(text, input.turn_id as string),
 			);
 			if (!rollout) {
 				store.recordFailure(
 					"parse",
 					"codex:Stop",
-					now,
+					deps.clock.now(),
 					input.session_id,
-					turnId,
-				);
-				debugHook(
-					"Codex rollout has no matching turn context; check the rollout format.",
+					input.turn_id,
 				);
 				return;
 			}
-			if (open && rollout.calls.length === 0)
-				debugHook("No completed shell exit codes found for this turn.");
-			if (open)
-				for (const call of rollout.calls) {
-					const kind = detectCommandKind(call.command);
-					if (kind !== "test" && kind !== "build") continue;
-					store.insertSignal({
-						suggestion_id: open,
-						kind,
-						value: call.exit_code === 0 ? 1 : 0,
-						weight: SIGNAL_WEIGHTS[kind],
-						source: "Stop",
-						turn_id: turnId,
-						observed_at: now,
-					});
-				}
-			const { usage } = rollout;
-			if (!usage) return;
-			store.rewriteScope(
-				{
-					session_id: input.session_id,
-					source: "transcript",
-					scope_key: turnId,
-					message_count: 1,
-					from: now,
-					last_at: now,
-					openWindowMs: cfg.tuning.openWindowMs,
-				},
-				(windows) =>
-					windows.map((w) => ({
-						suggestion_id: w.id,
-						model: toCanonicalId(rollout.model, cfg.aliases),
-						effort: EFFORTS.find((e) => e === rollout.effort) ?? null,
-						source: "transcript",
-						scope_key: turnId,
-						is_sidechain: false,
-						input_tokens: usage.input_tokens ?? null,
-						output_tokens: usage.output_tokens ?? null,
-						cache_read_tokens: usage.cache_read_input_tokens ?? null,
-						cache_creation_tokens: usage.cache_creation_input_tokens ?? null,
-						rounds: null,
-						note: null,
-						reported_at: now,
-					})),
+			recordCodexTurn(
+				store,
+				cfg,
+				suggestionId ?? null,
+				input.turn_id,
+				rollout,
+				input.session_id,
 			);
 		});
 	}
 
 	return {
+		async startAttempt(input) {
+			if (!input.key.trim() || !input.session.trim() || !input.model.trim())
+				throw new Error("attempt start needs key, session and model");
+			if (
+				input.effort !== undefined &&
+				!(EFFORTS as readonly string[]).includes(input.effort)
+			)
+				throw new Error("invalid effort");
+			if (input.effort === "none") await validateNone([input.model]);
+			const cfg = await getConfig();
+			return withStore((store) =>
+				store.startAttempt({
+					harness: "claude-code",
+					session_key: input.session,
+					agent_key: input.agentId ?? "",
+					suggestion_id: input.suggestionId,
+					key: input.key,
+					model: toCanonicalId(input.model, cfg.aliases),
+					effort: (input.effort as Effort) ?? null,
+					at: deps.clock.now(),
+					turn_id: input.turn,
+					owns_usage: input.ownsUsage,
+				}),
+			);
+		},
+		async bindAttempt(input) {
+			return withStore((store) =>
+				store.bindAttempt({
+					harness: "claude-code",
+					session_key: input.session,
+					agent_key: input.agentId ?? "",
+					attempt_id: input.attempt,
+					id_kind: "call",
+					external_id: input.call,
+				}),
+			);
+		},
+		async finalizeAttempts(input) {
+			const cfg = await getConfig();
+			return withStore((store) =>
+				store.finalizeAttempts(
+					{
+						harness: "claude-code",
+						session_key: input.session,
+						agent_key: input.agentId ?? "",
+					},
+					deps.clock.now(),
+					cfg.tuning.successQuality,
+				),
+			);
+		},
 		async importRollout({ file, suggestionId }) {
 			const cfg = await getConfig();
 			return withStore(async (store) => {
@@ -690,6 +611,7 @@ export function createApi(
 			agentId,
 			requested: requestedModel,
 			requestedAgent,
+			retryOf,
 		}) {
 			if (scope !== undefined && !(SCOPES as readonly string[]).includes(scope))
 				throw new Error("invalid scope");
@@ -790,6 +712,7 @@ export function createApi(
 				const now = deps.clock.now();
 				store.insertSuggestion({
 					id,
+					retry_of: retryOf,
 					requested_model: originalModel,
 					created_at: now,
 					price_date: now,
@@ -921,6 +844,36 @@ export function createApi(
 					note: null,
 					reported_at: deps.clock.now(),
 				};
+				if (input.attempt) {
+					if (!input.session || !input.key)
+						throw new Error("attempt usage needs session and key");
+					store.recordAttemptEvents([
+						{
+							harness: "claude-code",
+							session_key: input.session,
+							agent_key: input.agentId ?? "",
+							event_id: `step:${input.key}`,
+							revision: 0,
+							suggestion_id: suggestionId,
+							attempt_id: input.attempt,
+							turn_id: turn,
+							source_seq: Number(input.key.split(":").at(-1)) || 0,
+							occurred_at: null,
+							received_at: record.reported_at,
+							model: record.model,
+							effort: record.effort,
+							kind: "usage",
+							source,
+							input_tokens: record.input_tokens,
+							output_tokens: record.output_tokens,
+							cache_read_tokens: record.cache_read_tokens,
+							cache_creation_tokens: record.cache_creation_tokens,
+							cost_usd: record.cost_usd,
+							cost_source: record.cost_source,
+						},
+					]);
+					return record;
+				}
 				store.upsertUsage(record);
 				const stored = store.getUsage(suggestionId, source, turn, record.model);
 				if (!stored) throw new Error("usage was not stored");
@@ -933,10 +886,10 @@ export function createApi(
 			model,
 			effort,
 			result,
-			rounds,
-			note,
 			source,
 			turn,
+			attempt,
+			correct,
 		}) {
 			if (source !== undefined && source !== "claude-code-mod")
 				throw new Error("invalid report source");
@@ -957,37 +910,15 @@ export function createApi(
 				const suggestion = store.getSuggestion(suggestionId);
 				if (!suggestion)
 					throw new Error(`unknown suggestion_id ${suggestionId}`);
-				const now = deps.clock.now();
-				store.upsertUsage({
+				return store.reportAttempt({
 					suggestion_id: suggestionId,
 					model: toCanonicalId(model, cfg.aliases),
 					effort: effort as Effort,
-					source: "report",
-					scope_key: turn ?? "",
-					...(turn && {
-						turn_id: turn,
-						agent_id: suggestion.agent_id,
-					}),
-					...NO_TOKENS,
-					is_sidechain: false,
-					rounds: rounds ?? null,
-					note: note ?? null,
-					reported_at: now,
+					result,
+					at: deps.clock.now(),
+					attempt_id: attempt,
+					correct,
 				});
-				store.insertSignal({
-					suggestion_id: suggestionId,
-					kind: "report",
-					value: REPORT_VALUES[result],
-					weight: SIGNAL_WEIGHTS.report,
-					source: source ?? "report",
-					...(turn && {
-						turn_id: turn,
-						agent_id: suggestion.agent_id,
-					}),
-					observed_at: now,
-				});
-				store.closeSuggestion(suggestionId, now);
-				return store.outcome(suggestionId);
 			});
 		},
 

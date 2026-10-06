@@ -198,7 +198,33 @@ export async function linkAgent(
 	}
 }
 
-/** `spatz usage`: tokens and the answering model of one turn (or step). Fails open: false on any error. */
+/** Run an attempt lifecycle command. Only start returns an attempt id. */
+export async function attemptCommand(
+	run: Run,
+	args: string[],
+	spatz = "spatz",
+): Promise<string | undefined> {
+	try {
+		const result = await run([spatz, "attempt", ...args], {
+			timeoutMs: USAGE_TIMEOUT_MS,
+		});
+		if (result.exitCode !== 0 || args[0] !== "start") return undefined;
+		const value = JSON.parse(result.stdout);
+		return typeof value.id === "string" ? value.id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export interface StepUsage {
+	attempt: string;
+	key: string;
+	session: string;
+	agentId?: string;
+	effort?: string;
+}
+
+/** Disjoint step usage. Fails open: false on any error. */
 export async function recordUsage(
 	run: Run,
 	suggestionId: string,
@@ -206,6 +232,7 @@ export async function recordUsage(
 	turn: string,
 	tokens: Tokens,
 	spatz = "spatz",
+	identity?: StepUsage,
 ): Promise<boolean> {
 	try {
 		const { exitCode } = await run(
@@ -213,6 +240,18 @@ export async function recordUsage(
 				spatz,
 				"usage",
 				suggestionId,
+				...(identity
+					? [
+							"--attempt",
+							identity.attempt,
+							"--key",
+							identity.key,
+							"--session",
+							identity.session,
+							...(identity.agentId ? ["--agent-id", identity.agentId] : []),
+							...(identity.effort ? ["--effort", identity.effort] : []),
+						]
+					: []),
 				"--model",
 				model,
 				"--input",

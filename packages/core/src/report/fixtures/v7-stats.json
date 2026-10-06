@@ -1,0 +1,312 @@
+{
+	"captured_from": "ec8e98ac38ad0da9b11ab9a6cf135cab168e725e",
+	"outcomes": [
+		{
+			"suggestion_id": "control",
+			"quality": 0,
+			"model": "D",
+			"effort": "high"
+		},
+		{
+			"suggestion_id": "equal-time",
+			"quality": 1,
+			"model": "C",
+			"effort": "low"
+		},
+		{
+			"suggestion_id": "h",
+			"quality": 0.5555555555555556,
+			"model": "m/b",
+			"effort": "medium"
+		},
+		{
+			"suggestion_id": "null-effort",
+			"quality": 0,
+			"model": "m/null",
+			"effort": null
+		},
+		{
+			"suggestion_id": "proof",
+			"quality": 1,
+			"model": "A",
+			"effort": "low"
+		},
+		{
+			"suggestion_id": "r",
+			"quality": 1,
+			"model": "m/a",
+			"effort": "low"
+		},
+		{
+			"suggestion_id": "unknown-pair",
+			"quality": 1,
+			"model": null,
+			"effort": null
+		}
+	],
+	"tokens": [
+		{
+			"suggestion_id": "control",
+			"input_tokens": 5,
+			"output_tokens": 6,
+			"cache_read_tokens": 7,
+			"cache_creation_tokens": 8
+		},
+		{
+			"suggestion_id": "equal-time",
+			"input_tokens": 1,
+			"output_tokens": 2,
+			"cache_read_tokens": 3,
+			"cache_creation_tokens": 4
+		},
+		{
+			"suggestion_id": "h",
+			"input_tokens": 3,
+			"output_tokens": 56,
+			"cache_read_tokens": 0,
+			"cache_creation_tokens": 0
+		},
+		{
+			"suggestion_id": "n",
+			"input_tokens": 100,
+			"output_tokens": 20,
+			"cache_read_tokens": 80,
+			"cache_creation_tokens": null
+		},
+		{
+			"suggestion_id": "null-effort",
+			"input_tokens": null,
+			"output_tokens": 4,
+			"cache_read_tokens": 0,
+			"cache_creation_tokens": null
+		},
+		{
+			"suggestion_id": "proof",
+			"input_tokens": 0,
+			"output_tokens": 60,
+			"cache_read_tokens": 0,
+			"cache_creation_tokens": 0
+		},
+		{
+			"suggestion_id": "r",
+			"input_tokens": 10,
+			"output_tokens": 20,
+			"cache_read_tokens": 30,
+			"cache_creation_tokens": 40
+		},
+		{
+			"suggestion_id": "usage-only",
+			"input_tokens": 11,
+			"output_tokens": 12,
+			"cache_read_tokens": 13,
+			"cache_creation_tokens": 14
+		}
+	],
+	"caches": [
+		{
+			"task_type": "code.bugfix",
+			"cache_read_tokens": 23,
+			"cache_creation_tokens": 26
+		},
+		{
+			"task_type": "code.feature",
+			"cache_read_tokens": 0,
+			"cache_creation_tokens": 0
+		},
+		{
+			"task_type": "review",
+			"cache_read_tokens": 30,
+			"cache_creation_tokens": 40
+		}
+	],
+	"learning": {
+		"code.bugfix": [
+			{
+				"task_type": "code.bugfix",
+				"difficulty": "medium",
+				"model": "C",
+				"effort": "low",
+				"n": 1,
+				"sum_quality": 1
+			},
+			{
+				"task_type": "code.bugfix",
+				"difficulty": "medium",
+				"model": "D",
+				"effort": "high",
+				"n": 1,
+				"sum_quality": 0
+			},
+			{
+				"task_type": "code.bugfix",
+				"difficulty": "medium",
+				"model": "m/b",
+				"effort": "medium",
+				"n": 1,
+				"sum_quality": 0.5555555555555556
+			}
+		],
+		"code.feature": [
+			{
+				"task_type": "code.feature",
+				"difficulty": "easy",
+				"model": "A",
+				"effort": "low",
+				"n": 1,
+				"sum_quality": 1
+			}
+		],
+		"review": [
+			{
+				"task_type": "review",
+				"difficulty": "easy",
+				"model": "m/a",
+				"effort": "low",
+				"n": 1,
+				"sum_quality": 1
+			}
+		],
+		"other": []
+	},
+	"stats": {
+		"dispatches": 1,
+		"routed_by_mod": 1,
+		"swapped": 1,
+		"fallbacks": {
+			"timeout": 1
+		},
+		"failures": {
+			"parse": 1,
+			"hook": 0,
+			"launcher": 0
+		},
+		"by_scope": [
+			{
+				"scope": "session",
+				"n": 1,
+				"success_rate": 1,
+				"input_tokens": 0,
+				"output_tokens": 0,
+				"cache_read_tokens": 0,
+				"cache_creation_tokens": 0,
+				"cost_usd": null,
+				"cache_read_share": 0
+			},
+			{
+				"scope": "step",
+				"n": 1,
+				"success_rate": 1,
+				"input_tokens": 1,
+				"output_tokens": 2,
+				"cache_read_tokens": 3,
+				"cache_creation_tokens": 4,
+				"cost_usd": 0.01,
+				"cache_read_share": 0.375
+			},
+			{
+				"scope": "subagent",
+				"n": 1,
+				"success_rate": 0,
+				"input_tokens": 5,
+				"output_tokens": 6,
+				"cache_read_tokens": 7,
+				"cache_creation_tokens": 8,
+				"cost_usd": 0.02,
+				"cache_read_share": 0.35
+			},
+			{
+				"scope": "turn",
+				"n": 2,
+				"success_rate": 0.5,
+				"input_tokens": 21,
+				"output_tokens": 36,
+				"cache_read_tokens": 43,
+				"cache_creation_tokens": 54,
+				"cost_usd": 0.213,
+				"cache_read_share": 0.3644067796610169
+			},
+			{
+				"scope": null,
+				"n": 2,
+				"success_rate": 0.5,
+				"input_tokens": 3,
+				"output_tokens": 116,
+				"cache_read_tokens": 0,
+				"cache_creation_tokens": 0,
+				"cost_usd": null,
+				"cache_read_share": 0
+			}
+		],
+		"by_type": [
+			{
+				"task_type": "code.bugfix",
+				"n": 3,
+				"pairs": [
+					{
+						"model": "C",
+						"effort": "low",
+						"n": 1,
+						"success_rate": 1
+					},
+					{
+						"model": "D",
+						"effort": "high",
+						"n": 1,
+						"success_rate": 0
+					},
+					{
+						"model": "m/b",
+						"effort": "medium",
+						"n": 1,
+						"success_rate": 0
+					}
+				],
+				"adoption_rate": 0.3333333333333333,
+				"input_tokens": 20,
+				"output_tokens": 76,
+				"cost_usd": 0.15
+			},
+			{
+				"task_type": "code.feature",
+				"n": 1,
+				"pairs": [
+					{
+						"model": "A",
+						"effort": "low",
+						"n": 1,
+						"success_rate": 1
+					}
+				],
+				"adoption_rate": 1,
+				"input_tokens": 0,
+				"output_tokens": 60,
+				"cost_usd": null
+			},
+			{
+				"task_type": "review",
+				"n": 3,
+				"pairs": [
+					{
+						"model": "m/a",
+						"effort": "low",
+						"n": 1,
+						"success_rate": 1
+					},
+					{
+						"model": "m/null",
+						"effort": null,
+						"n": 1,
+						"success_rate": 0
+					}
+				],
+				"adoption_rate": 0.3333333333333333,
+				"input_tokens": 10,
+				"output_tokens": 24,
+				"cost_usd": 0.093
+			}
+		],
+		"coverage": 0.875,
+		"learned_success": 0.5,
+		"control_success": 0
+	}
+}

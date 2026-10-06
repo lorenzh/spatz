@@ -14,7 +14,6 @@ import type {
 	TaskType,
 	TypeStats,
 } from "../contracts/types.ts";
-import { REPORT_VALUES } from "../contracts/types.ts";
 import { openStore } from "../store/index.ts";
 import { runStats } from "./index.ts";
 
@@ -38,6 +37,7 @@ afterEach(() => {
 });
 
 interface SugOpts {
+	retry_of?: string;
 	fallback_used?: boolean;
 	fallback_reason?: FallbackReason | null;
 	scope?: RoutingScope;
@@ -54,6 +54,7 @@ interface SugOpts {
 function sug(id: string, o: SugOpts = {}) {
 	const [model, effort] = o.top ?? ["m/a", "low"];
 	store.insertSuggestion({
+		...(o.retry_of && { retry_of: o.retry_of }),
 		id,
 		created_at: 1,
 		scope: o.scope ?? null,
@@ -112,14 +113,7 @@ function report(
 	tokens: [number, number] = [0, 0],
 ) {
 	usage(id, model, effort, tokens);
-	store.insertSignal({
-		suggestion_id: id,
-		kind: "report",
-		value: REPORT_VALUES[result],
-		weight: 1,
-		source: "report",
-		observed_at: 1,
-	});
+	store.reportAttempt({ suggestion_id: id, model, effort, result, at: 1 });
 }
 
 const noInstall = (sql: string) => {
@@ -160,6 +154,123 @@ const stats = (type?: TaskType) =>
 		successQuality: 0.8,
 		onSql: noInstall,
 	});
+
+test("attempt statistics count coverage once, compare the first pair, and sum usage before outcomes", async () => {
+	sug("retry", { scope: "turn", top: ["m/a", "low"] });
+	store.reportAttempt({
+		suggestion_id: "retry",
+		model: "m/a",
+		effort: "low",
+		result: "fail",
+		at: 10,
+	});
+	const a = store.startAttempt({
+		harness: "direct",
+		session_key: "suggestion:retry",
+		agent_key: "",
+		suggestion_id: "retry",
+		key: "second",
+		model: "m/b",
+		effort: "high",
+		at: 11,
+	});
+	store.recordAttemptEvents([
+		{
+			harness: "direct",
+			session_key: "suggestion:retry",
+			agent_key: "",
+			event_id: "usage",
+			revision: 1,
+			suggestion_id: "retry",
+			attempt_id: a.id,
+			occurred_at: 12,
+			received_at: 12,
+			kind: "usage",
+			model: "m/b",
+			effort: "high",
+			input_tokens: 100,
+			output_tokens: 200,
+			cache_read_tokens: 300,
+			cache_creation_tokens: 400,
+		},
+	]);
+	store.reportAttempt({
+		suggestion_id: "retry",
+		model: "m/b",
+		effort: "high",
+		result: "pass",
+		at: 20,
+	});
+	sug("unscored");
+	sug("control", { control: true });
+	store.reportAttempt({
+		suggestion_id: "control",
+		model: "m/a",
+		effort: "low",
+		result: "pass",
+		at: 30,
+	});
+	const result = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		onSql: noInstall,
+	});
+	expect(result.coverage).toBe(2 / 3);
+	expect(result.by_type[0]).toMatchObject({
+		n: 3,
+		adoption_rate: 1,
+		input_tokens: 100,
+		output_tokens: 200,
+	});
+	expect(result.learned_success).toBe(0);
+	expect(result.control_success).toBe(1);
+	expect(result.by_scope?.find((s) => s.scope === "turn")).toMatchObject({
+		n: 1,
+		success_rate: 1,
+		input_tokens: 100,
+		output_tokens: 200,
+		cache_read_tokens: 300,
+		cache_creation_tokens: 400,
+	});
+});
+
+test("linked retries use the root scope and first verdict for comparison", async () => {
+	sug("root", { scope: "turn" });
+	store.reportAttempt({
+		suggestion_id: "root",
+		model: "m/a",
+		effort: "low",
+		result: "fail",
+		at: 10,
+	});
+	sug("child", { scope: "subagent", retry_of: "root" });
+	store.reportAttempt({
+		suggestion_id: "child",
+		model: "m/b",
+		effort: "high",
+		result: "pass",
+		at: 20,
+	});
+	const result = await runStats({
+		dbPath,
+		extensionDir,
+		successQuality: 0.8,
+		by: "scope",
+		onSql: noInstall,
+	});
+	expect(result.coverage).toBe(1);
+	expect(result.by_scope?.find((s) => s.scope === "turn")).toMatchObject({
+		n: 1,
+		success_rate: 1,
+	});
+	expect(
+		result.by_scope
+			?.filter((s) => s.scope === "subagent")
+			.reduce((n, s) => n + s.n, 0),
+	).toBe(0);
+});
 
 function signal(id: string, value: number) {
 	store.insertSignal({
@@ -284,6 +395,8 @@ describe("one dataset", () => {
 		adoption_rate: 2 / 3,
 		input_tokens: 605,
 		output_tokens: 61,
+		cache_read_tokens: 0,
+		cache_creation_tokens: 0,
 	};
 	const review: TypeStats = {
 		task_type: "review",
@@ -293,6 +406,8 @@ describe("one dataset", () => {
 		adoption_rate: 1,
 		input_tokens: 7,
 		output_tokens: 3,
+		cache_read_tokens: 0,
+		cache_creation_tokens: 0,
 	};
 
 	test("by_type: n, pair success (partial is no success), adoption, tokens", async () => {
@@ -447,11 +562,13 @@ test("outcome without usage counts in n but not in pairs or adoption", async () 
 			adoption_rate: 0,
 			input_tokens: 0,
 			output_tokens: 0,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
 		},
 	]);
 });
 
-test("scope stats count outcomes once and include cache tokens, unscoped and usage-only suggestions", async () => {
+test("scope stats count completed chains once, including expired usage-only chains", async () => {
 	sug("t1", { scope: "turn" });
 	report("t1", "m/a", "low", "pass", [10, 20]);
 	usage("t1", "m/b", "high", [10, 30], "transcript");
@@ -489,8 +606,8 @@ test("scope stats count outcomes once and include cache tokens, unscoped and usa
 	expect(r.by_scope).toEqual([
 		{
 			scope: "step",
-			n: 0,
-			success_rate: null,
+			n: 1,
+			success_rate: 0,
 			input_tokens: 0,
 			output_tokens: 0,
 			cache_read_tokens: 0,
@@ -500,8 +617,8 @@ test("scope stats count outcomes once and include cache tokens, unscoped and usa
 		},
 		{
 			scope: "turn",
-			n: 2,
-			success_rate: 0.5,
+			n: 3,
+			success_rate: 1 / 3,
 			input_tokens: 40,
 			output_tokens: 60,
 			cache_read_tokens: 60,
@@ -556,10 +673,10 @@ test("USD totals exclude schema 1 even with a reported cost and remain null with
 		usage(id, "m/a", "low", [10, 20], "transcript");
 	const db = new Database(dbPath);
 	db.run(
-		"UPDATE usages SET cost_usd = 0.25, cost_source = 'reported' WHERE suggestion_id = 'new'",
+		"UPDATE attempt_events SET cost_usd = 0.25, cost_source = 'reported' WHERE suggestion_id = 'new'",
 	);
 	db.run(
-		"UPDATE usages SET tokens_schema = 1, cost_usd = 99, cost_source = 'reported' WHERE suggestion_id = 'legacy'",
+		"UPDATE attempt_events SET tokens_schema = 1, cost_usd = 99, cost_source = 'reported' WHERE suggestion_id = 'legacy'",
 	);
 	db.close();
 	const result = await runStats({

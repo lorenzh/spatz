@@ -2,7 +2,7 @@
 title: The spatz Claude Code mod
 description: How the spatz mod for Claude Code recommends and applies model and effort, the five routing scopes with their trade-offs, the /spatz commands, all config keys with defaults, fail-open behaviour, usage recording and privacy.
 tags: [claude-mod, claude-code, routing, spatz]
-keywords: [dispatch, dispatches, requested_model, swapped, mod, plugin, scope, step, turn, subagent, session, escalate, apply, show, off, /spatz, record, spatz, main, prompt cache, fail open, userConfig, alias, effort, model switch]
+keywords: [attempt, ownership, usage, identity, dispatch, dispatches, requested_model, swapped, mod, plugin, scope, step, turn, subagent, session, escalate, apply, show, off, /spatz, record, spatz, main, prompt cache, fail open, userConfig, alias, effort, model switch]
 ---
 
 # The spatz Claude Code mod
@@ -124,7 +124,7 @@ Step routing keeps both original values for the agent's later requests.
 Main-session suggestions use `-` because turn-start events carry no model request.
 
 Once the agent exists, `spatz link` merges its suggestion into the dispatch row.
-The key is the session id plus agent id.
+The key is the session id plus agent id. The attempt ledger uses this pair to link the dispatch to its attempt.
 The Agent hook adds the requested agent type and answering model.
 A mod usage observation can also supply the answering model.
 Each field keeps its first known value.
@@ -137,28 +137,37 @@ See [dispatch counts](cli.md#dispatch-counts) for the exact rules.
 
 ## Recording usage
 
-After each request and at the end of each turn, the mod can call `spatz usage` with the token counts and the model that answered. It keys them by turn. The end-of-turn call holds the sum of the turn and replaces the last request's figures. The model is the one of the last response. A turn with several models is not split by model. The `step` scope records each request against its own suggestion. A turn or agent run that has no usage in its result records nothing.
+Before each execution segment, the mod registers its actual model and sent effort with a stable start key.
+The key uses the segment's first `turnId:index`. Replaying a start returns the same attempt.
+Consecutive same-pair steps share that attempt. Each step still has separate usage.
+Same-pair follow-up turns also keep the attempt until another boundary starts new work.
+A pair switch starts a new attempt even when a later segment returns to an earlier pair.
+
+After each request, the mod records `TurnStepResult.usage` for that step and answering model.
+Each step keeps its own effort and token counters.
+Turn completion does not add a mixed aggregate to the last pair.
+A result without usage records no invented zero counts.
+Usage alone does not imply success.
 
 `record` has three values:
 
-- `on`: always record.
-- `off`: never record.
-- `auto` (default): always record routed subagents. For main-session usage, let an enabled hooks plugin record instead.
+- `on`: register starts and record step usage.
+- `off`: record no usage and register no usage-owning starts. Hooks can record transcript usage.
+- `auto` (default): register starts and record step usage, including when hooks are installed.
 
-For main-session `auto`, the mod runs `claude plugin list --json` once per session.
-It checks for an enabled plugin whose id starts with `spatz@` or the legacy `spatz-hooks@`.
-The mod's id, `spatz-mod@spatz`, does not turn recording off.
-When the hooks plugin is enabled, the mod shows one notice that hooks own main-session usage.
-If the lookup fails, the mod records. The mod records usage only, without outcomes.
-Subagent transcript output counts are unreliable ([#86](https://github.com/lorenzh/spatz/issues/86)).
-The mod's counters replace hook usage for the same session and agent.
-Later hook replays cannot add that usage again. Signals remain available from hooks.
+The mod's start bindings mark which sessions and agents it owns for usage.
+Hooks still record test/build signals. They skip usage owned by the mod.
+This rule also applies to manual hooks.
+The mod links `tool.call` IDs to hook `tool_use_id` values.
+Agent identity joins through `agentId` and `agent_id`.
+Mod `turnId` and hook `prompt_id` are different UUIDs.
+
+Subagent transcripts undercount output tokens ([#86](https://github.com/lorenzh/spatz/issues/86)).
+The mod's measurements replace hook estimates for the same session and agent.
+Later hook replays cannot add those estimates again.
 With `record: off`, hooks keep their lower-bound subagent estimates.
-The replacement uses agent identity. It never assumes that mod `turnId` equals hook `prompt_id`.
-
-Hand-written hooks and `--plugin-dir` hooks are not installed plugins.
-With manual hooks and main-session routing, set `record: off` to avoid duplicate main usage.
-With subagent-only routing, `auto` keeps the more complete mod counters.
+Sent effort records the mod's requested value. It does not prove that the API applied that value.
+See [attempt identity](how-it-works.md#attempts-and-recovery-chains) for retries and chain totals.
 
 ## Fail-open behaviour
 

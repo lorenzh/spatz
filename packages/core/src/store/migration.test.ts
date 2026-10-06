@@ -25,7 +25,7 @@ function directory() {
 	return dir;
 }
 
-async function fixture(dir: string, version = 5) {
+async function fixture(dir: string, version = SCHEMA_VERSION - 1) {
 	const path = join(dir, "spatz.db");
 	const db = new Database(path);
 	handles.push(db);
@@ -39,6 +39,7 @@ async function fixture(dir: string, version = 5) {
 // Use the previous schema to exercise a real migration and restore with the old CLI.
 async function previousStore(dir: string) {
 	const source = (await Bun.file(join(import.meta.dir, "index.ts")).text())
+		.replaceAll('from "./attempt', `from "${import.meta.dir}/attempt`)
 		.replaceAll(
 			'from "../contracts/',
 			`from "${join(import.meta.dir, "../contracts")}/`,
@@ -77,7 +78,18 @@ test("previous-schema WAL data is backed up before migration and restores with t
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION,
 	});
-	expect(rows(migrated)).toMatchObject(before);
+	expect(rows(migrated)).toMatchObject(
+		before.map((set, i) =>
+			i === 0
+				? (set as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) => ({
+							...r,
+							closed_at: closed_at ?? expect.any(Number),
+						}),
+					)
+				: set,
+		),
+	);
 	const backup = `${path}.bak-v${SCHEMA_VERSION - 1}`;
 	expect(existsSync(backup)).toBe(true);
 	const restoredPath = join(dir, "restored.db");
@@ -190,21 +202,47 @@ console.log("ready"); openDatabase(process.argv[1]).close();`;
 	}
 });
 
-test("previous-version fixture preserves all data and adds an empty dispatch ledger", async () => {
+test("previous-version fixture preserves all data and adds an empty attempt ledger", async () => {
 	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
 	const before = rows(db);
 	const migrated = openDatabase(path);
 	handles.push(migrated);
-	expect(rows(migrated)).toMatchObject(before);
-	expect(migrated.query("SELECT * FROM dispatches").all()).toEqual([]);
+	expect(rows(migrated)).toMatchObject(
+		before.map((set, i) =>
+			i === 0
+				? (set as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) => ({
+							...r,
+							closed_at: closed_at ?? expect.any(Number),
+						}),
+					)
+				: set,
+		),
+	);
+	expect(migrated.query("SELECT * FROM attempts").all()).toEqual([]);
+	expect(
+		migrated
+			.query("SELECT * FROM legacy_outcomes WHERE suggestion_id='proof'")
+			.get(),
+	).toEqual({ suggestion_id: "proof", quality: 1, model: "A", effort: "low" });
+	expect(
+		migrated
+			.query(
+				"SELECT SUM(output_tokens) AS n FROM usage_totals WHERE suggestion_id='proof'",
+			)
+			.get(),
+	).toEqual({ n: 60 });
+	expect(migrated.query("PRAGMA foreign_keys").get()).toEqual({
+		foreign_keys: 1,
+	});
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION,
 	});
 });
 
-test("dispatch migration failure rolls back every statement and the version", async () => {
+test("attempt migration failure rolls back every statement and the version", async () => {
 	const { path, db } = await fixture(directory(), SCHEMA_VERSION - 1);
-	db.run("CREATE TABLE dispatches (conflict TEXT)");
+	db.run("CREATE TABLE attempts (conflict TEXT)");
 	const before = rows(db);
 	expect(() => openDatabase(path)).toThrow();
 	expect(rows(db)).toEqual(before);
@@ -215,6 +253,6 @@ test("dispatch migration failure rolls back every statement and the version", as
 		db
 			.query("PRAGMA table_info(suggestions)")
 			.all()
-			.some((r) => (r as { name: string }).name === "requested_model"),
+			.some((r) => (r as { name: string }).name === "is_legacy"),
 	).toBe(false);
 });

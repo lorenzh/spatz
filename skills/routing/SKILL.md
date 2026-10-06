@@ -27,6 +27,8 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
 
    Default precedence: `SPATZ_MODELS` > project `.spatz.json` > user `~/.spatz/config.json` > harness preset. If you can dispatch extra models, set `models` in config. For example, Claude Code users with Codex can include GPT models. If the preset is wrong, narrow candidates with `--models <model>:<effort>+<effort>,<model>:<effort>` to pairs you can dispatch.
 
+   For a retry of earlier work, add `--retry-of <earlier suggestion_id>` to keep its recovery chain. A separately routed review keeps its own suggestion.
+
    Keep stdout unfiltered: hooks read `suggestion_id` from it. Add `--dry-run` when testing spatz itself, so tests do not count for learning. If spatz exits non-zero or returns no ranking, continue with the harness default and disclose the failure in one line. For a review, also disclose when this fallback cannot supply the other family.
 
    Done when the full output contains a ranking and suggestion ID, or the fallback is disclosed.
@@ -56,3 +58,8 @@ spatz report <suggestion_id> --model <model used> --effort <effort used> --resul
 ```
 
 Choose `pass` for complete success, `partial` for incomplete success, and `fail` for failed verification. Report a separately routed review under its own suggestion ID. If routing failed before creating a suggestion, there is no ID to report. If reporting fails, disclose it.
+
+Reports apply to one attempt. An identical report is a replay. A changed verdict creates a retry.
+To correct a mistaken verdict, repeat the report with `--correct`. To target a specific execution, use `--attempt <attempt_id>`.
+A correction keeps the known model, effort and usage unchanged. Report pair conflicts as a new attempt.
+The skill needs no attempt-start call. Keep the suggestion ID through dispatch, import and reporting.

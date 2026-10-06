@@ -156,7 +156,12 @@ describe("schema", () => {
 			);
 			for (const [i, table] of tables.entries())
 				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
-					before[i] as object[],
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
 				);
 			const row = migrated
 				.query<{ probabilities: string; reason: string }, []>(
@@ -264,7 +269,12 @@ describe("schema", () => {
 			});
 			for (const [i, table] of tables.entries()) {
 				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
-					before[i] as object[],
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
 				);
 			}
 			expect(
@@ -415,6 +425,7 @@ describe("suggestions", () => {
 		});
 		store.insertSuggestion(record);
 		expect(store.getSuggestion("abc")).toEqual({
+			is_legacy: 0,
 			...record,
 			price_snapshot: {},
 			price_date: null,
@@ -517,17 +528,17 @@ describe("outcomes", () => {
 		expect(store.outcome("s1")?.quality).toBe(0);
 	});
 
-	test("no signal -> no outcome row", () => {
+	test("no signal leaves implicit attempt quality null", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		store.upsertUsage(usage());
-		expect(store.outcome("s1")).toBeNull();
+		expect(store.outcome("s1")?.quality).toBeNull();
 		expect(store.outcome("missing")).toBeNull();
 	});
 });
 
 describe("used pair", () => {
-	test("a report usage wins", () => {
+	test("a changed report pair opens an unscored attempt", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		signal(store, "test", 1, 10);
@@ -543,15 +554,15 @@ describe("used pair", () => {
 				note: "ok",
 			}),
 		);
-		expect(store.outcome("s1")).toEqual({
+		expect(store.outcome("s1")).toMatchObject({
 			suggestion_id: "s1",
-			quality: 1,
+			quality: null,
 			model: "openai/gpt-6-sol",
 			effort: "medium",
 		});
 	});
 
-	test("otherwise the model with most summed output tokens and its latest non-null effort", () => {
+	test("changed execution pairs remain separate with their own tokens", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		signal(store, "test", 1, 10);
@@ -586,9 +597,9 @@ describe("used pair", () => {
 				reported_at: 3,
 			}),
 		);
-		expect(store.outcome("s1")).toEqual({
+		expect(store.outcome("s1")).toMatchObject({
 			suggestion_id: "s1",
-			quality: 1,
+			quality: null,
 			model: "anthropic/claude-sonnet-5.5",
 			effort: "medium",
 		});
@@ -598,7 +609,7 @@ describe("used pair", () => {
 		const store = open();
 		store.insertSuggestion(suggestion());
 		signal(store, "test", 1, 10);
-		expect(store.outcome("s1")).toEqual({
+		expect(store.outcome("s1")).toMatchObject({
 			suggestion_id: "s1",
 			quality: 1,
 			model: null,
@@ -614,7 +625,7 @@ describe("used pair", () => {
 		// Second Stop for the same prompt: same key, updated totals.
 		store.upsertUsage(usage({ output_tokens: 100 }));
 		store.upsertUsage(usage({ output_tokens: 120 }));
-		expect(store.outcome("s1")?.model).toBe("openai/gpt-6-sol");
+		expect(store.outcome("s1")?.model).toBe("anthropic/claude-opus-5.5");
 		store.upsertUsage(usage({ output_tokens: 200 }));
 		expect(store.outcome("s1")?.model).toBe("anthropic/claude-opus-5.5");
 	});
@@ -986,6 +997,7 @@ test("none-only models normalize missing usage effort and pool legacy null rows"
 });
 test("usage scopes select the highest ranked effort, not lexical maximum", () => {
 	const store = open();
+	store.insertSuggestion(suggestion());
 	for (const [i, effort] of (
 		["none", "medium", "high", "max", "xhigh", "ultra"] as const
 	).entries()) {
@@ -1018,7 +1030,14 @@ describe("v5 diagnostics", () => {
 			for (const [i, table] of tables.entries()) {
 				const rows = migrated.query(`SELECT * FROM ${table}`).all();
 				expect(rows).toHaveLength(before[i]?.length ?? 0);
-				expect(rows).toMatchObject(before[i] as object[]);
+				expect(rows).toMatchObject(
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
+				);
 			}
 			expect(
 				migrated.query("SELECT fallback_reason FROM suggestions").all(),
@@ -1105,7 +1124,14 @@ describe("normalized usage and cost", () => {
 			for (const [i, table] of tables.entries())
 				expect(
 					migrated.query(`SELECT rowid, * FROM ${table}`).all(),
-				).toMatchObject(before[i] as object[]);
+				).toMatchObject(
+					(before[i] as { closed_at?: number | null }[]).map(
+						({ closed_at, ...r }) =>
+							closed_at === null
+								? { ...r, closed_at: expect.any(Number) }
+								: { ...r, ...(closed_at === undefined ? {} : { closed_at }) },
+					),
+				);
 			expect(migrated.query("SELECT * FROM outcomes").all()).toEqual(outcomes);
 			expect(
 				migrated
@@ -1252,7 +1278,14 @@ test("Claude measured dollars and equivalent Codex normalized tokens agree", () 
 		["codex", codex],
 	] as const) {
 		const [tokens] = sumByModel([
-			{ model: fixture.model, at: 1, usage: raw ?? {} },
+			{
+				id: "message",
+				source_seq: 0,
+				calls: [],
+				model: fixture.model,
+				at: 1,
+				usage: raw ?? {},
+			},
 		]);
 		store.upsertUsage(
 			usage({ ...tokens, model: fixture.model, scope_key: source }),
@@ -1290,6 +1323,7 @@ test("dispatch upsert only fills missing fields and isolates sessions", () => {
 		expect(
 			db.query("SELECT * FROM dispatches WHERE session_id = 's'").get(),
 		).toEqual({
+			attempt_id: null,
 			...first,
 			answered_model: "sonnet",
 			tool_use_id: "call",

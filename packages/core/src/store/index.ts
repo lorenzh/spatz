@@ -17,6 +17,8 @@ import type {
 	UsageRecord,
 } from "../contracts/types.ts";
 import { EFFORTS } from "../contracts/types.ts";
+import { ATTEMPT_SCHEMA } from "./attempt-schema.ts";
+import { attemptStore } from "./attempts.ts";
 
 // No column holds task text (spec "Storage", "Privacy").
 const SCHEMA_V1 = `
@@ -197,6 +199,16 @@ const SCHEMA_V7 = [
 	)`,
 ];
 
+const SCHEMA_V8 = [
+	...ATTEMPT_SCHEMA,
+	SCHEMA_V1.slice(SCHEMA_V1.indexOf("CREATE VIEW outcomes")).replace(
+		"CREATE VIEW outcomes",
+		"CREATE VIEW legacy_outcomes",
+	),
+	"DROP VIEW outcomes",
+	`CREATE VIEW outcomes AS SELECT suggestion_id,quality,model,effort FROM legacy_outcomes UNION ALL SELECT suggestion_id,quality,model,effort FROM attempt_outcomes`,
+];
+
 const MIGRATIONS = [
 	SCHEMA_V1,
 	SCHEMA_V2,
@@ -205,6 +217,7 @@ const MIGRATIONS = [
 	SCHEMA_V5,
 	SCHEMA_V6,
 	SCHEMA_V7,
+	SCHEMA_V8,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -250,6 +263,7 @@ export function openDatabase(dbPath: string): Database {
 	};
 	try {
 		db.run("PRAGMA busy_timeout = 5000");
+		db.run("PRAGMA foreign_keys = ON");
 		version();
 		db.run("PRAGMA journal_mode = WAL");
 		if (version() === SCHEMA_VERSION) return db;
@@ -310,9 +324,11 @@ export function openStore(
 			.get(session, agent)
 			? agent
 			: null;
+	const ledger = attemptStore(db, () => store, noneOnly);
 	const store: Store = {
+		...ledger,
 		upsertDispatch(r) {
-			db.query(`INSERT INTO dispatches VALUES ($session_id, $agent_id, $tool_use_id,
+			db.query(`INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ($session_id, $agent_id, $tool_use_id,
 				$requested_model, $requested_agent_type, $answered_model, $suggestion_id)
 				ON CONFLICT (session_id, agent_id) DO UPDATE SET
 				tool_use_id = COALESCE(dispatches.tool_use_id, excluded.tool_use_id),
@@ -320,8 +336,15 @@ export function openStore(
 				requested_agent_type = COALESCE(dispatches.requested_agent_type, excluded.requested_agent_type),
 				answered_model = COALESCE(dispatches.answered_model, excluded.answered_model),
 				suggestion_id = COALESCE(dispatches.suggestion_id, excluded.suggestion_id)`).run(
-				{ ...r },
+				{ ...r, attempt_id: r.attempt_id ?? null },
 			);
+			db.query(
+				`UPDATE dispatches SET attempt_id=COALESCE(attempt_id,(SELECT id FROM attempts WHERE session_key=? AND agent_key=? ORDER BY ordinal LIMIT 1)) WHERE session_id=? AND agent_id=?`,
+			).run(r.session_id, r.agent_id, r.session_id, r.agent_id);
+			if (r.answered_model)
+				db.query(
+					"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=?",
+				).run(r.answered_model, r.session_id, r.agent_id);
 		},
 		recordFailure(kind, event, at, sessionId, turnId) {
 			db.query("INSERT OR IGNORE INTO failures VALUES (?, ?, ?, ?, ?)").run(
@@ -333,28 +356,31 @@ export function openStore(
 			);
 		},
 		insertSuggestion(r) {
-			db.query(
-				`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
+			db.transaction(() => {
+				db.query(
+					`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
 				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
-				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason, $price_snapshot, $price_date, $requested_model)`,
-			).run({
-				...r,
-				price_snapshot: r.price_snapshot
-					? JSON.stringify(r.price_snapshot)
-					: null,
-				price_date: r.price_date ?? null,
-				requested_model: r.requested_model ?? null,
-				difficulty: normalizeDifficulty(r.difficulty),
-				reason: normalizeReason(r.reason),
-				probabilities:
-					r.probabilities &&
-					JSON.stringify(normalizeProbabilities(r.probabilities)),
-				ranking: JSON.stringify(r.ranking),
-				explored: Number(r.explored),
-				control: Number(r.control),
-				fallback_used: Number(r.fallback_used),
-				is_test: Number(r.is_test),
-			});
+				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason, $price_snapshot, $price_date, $requested_model, 0)`,
+				).run({
+					...r,
+					price_snapshot: r.price_snapshot
+						? JSON.stringify(r.price_snapshot)
+						: null,
+					price_date: r.price_date ?? null,
+					requested_model: r.requested_model ?? null,
+					difficulty: normalizeDifficulty(r.difficulty),
+					reason: normalizeReason(r.reason),
+					probabilities:
+						r.probabilities &&
+						JSON.stringify(normalizeProbabilities(r.probabilities)),
+					ranking: JSON.stringify(r.ranking),
+					explored: Number(r.explored),
+					control: Number(r.control),
+					fallback_used: Number(r.fallback_used),
+					is_test: Number(r.is_test),
+				});
+				ledger.initialize(r.id, r.retry_of);
+			}).immediate();
 		},
 		getSuggestion(id) {
 			const row = db
@@ -389,16 +415,24 @@ export function openStore(
 					)
 					SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality
 					FROM suggestions s JOIN normalized o ON o.suggestion_id = s.id
-					WHERE s.task_type = ? AND s.is_test = 0 AND o.model IS NOT NULL AND o.known_effort IS NOT NULL
+					WHERE s.task_type = ? AND s.is_test = 0 AND o.quality IS NOT NULL AND o.model IS NOT NULL AND o.known_effort IS NOT NULL
 					GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.known_effort`,
 				)
 				.all(...noneOnlyModels, taskType);
 		},
-		linkSession(id, sessionId, promptId, at, agentId) {
+		linkSession(id, sessionId, promptId, at, agentId, harness) {
+			if (store.getSuggestion(id)?.is_legacy) {
+				console.error("spatz: dropped late legacy link");
+				return [];
+			}
 			// Hooks run async, so links may arrive late, twice or out of order.
 			// Creation order sets the boundaries within each session and agent sequence.
 			// Immediate: a deferred read-then-write fails with SQLITE_BUSY_SNAPSHOT under concurrent hooks.
 			const link = db.transaction(() => {
+				if (harness)
+					db.query(
+						"UPDATE suggestions SET agent=COALESCE(agent,?) WHERE id=?",
+					).run(harness, id);
 				if (agentId !== undefined)
 					db.query(
 						"UPDATE suggestions SET agent_id = COALESCE(agent_id, ?) WHERE id = ?",
@@ -462,6 +496,7 @@ export function openStore(
 						suggestion_id: id,
 					});
 				}
+				if (!store.getSuggestion(id)?.is_legacy) ledger.link(id);
 				return shrunk.map((r) => r.id);
 			});
 			return link.immediate();
@@ -513,9 +548,29 @@ export function openStore(
 			db.query("UPDATE suggestions SET closed_at = ? WHERE id = ?").run(at, id);
 		},
 		insertSignal(r) {
-			db.query(
-				`INSERT OR REPLACE INTO signals VALUES ($suggestion_id, $kind, $value, $weight, $source, $observed_at, $turn_id, $agent_id)`,
-			).run({ ...r, turn_id: r.turn_id ?? null, agent_id: r.agent_id ?? null });
+			const suggestion = store.getSuggestion(r.suggestion_id);
+			if (!suggestion || suggestion.is_legacy) {
+				console.error("spatz: dropped late legacy signal");
+				return;
+			}
+			const attempt = store.outcome(r.suggestion_id)!;
+			ledger.recordAttemptEvents([
+				{
+					harness: suggestion.agent === "codex" ? "codex" : "claude-code",
+					session_key: suggestion.session_id ?? `suggestion:${r.suggestion_id}`,
+					agent_key: suggestion.agent_id ?? "",
+					event_id: `signal:${r.source}:${r.turn_id ?? r.observed_at}:${r.kind}`,
+					revision: r.observed_at,
+					attempt_id: attempt.attempt_id!,
+					suggestion_id: r.suggestion_id,
+					kind: r.kind,
+					value: r.value,
+					weight: r.weight,
+					source: r.source,
+					occurred_at: r.observed_at,
+					received_at: r.observed_at,
+				},
+			]);
 		},
 		upsertUsage(r) {
 			return db
@@ -523,22 +578,14 @@ export function openStore(
 					const suggestion = store.getSuggestion(r.suggestion_id);
 					const session = suggestion?.session_id;
 					const agent = r.agent_id ?? suggestion?.agent_id;
-					if (
-						(r.source === "subagent" || r.source === "agent_tool") &&
-						session &&
-						db
-							.query(`SELECT 1 FROM usages u JOIN suggestions s ON s.id = u.suggestion_id
-					WHERE s.session_id = ? AND s.agent_id = ? AND u.source = 'claude-code-mod' LIMIT 1`)
-							.get(session, r.scope_key)
-					)
+					if (!suggestion || suggestion.is_legacy) {
+						console.error("spatz: dropped late legacy usage");
 						return;
+					}
 					if (r.source === "claude-code-mod" && session && agent) {
-						// #86: transcript output is a stale streaming snapshot; the mod owns subagent usage.
-						db.query(`DELETE FROM usages WHERE source IN ('subagent', 'agent_tool') AND scope_key = ?
-					AND suggestion_id IN (SELECT id FROM suggestions WHERE session_id = ?)`).run(
-							agent,
-							session,
-						);
+						db.query(
+							"DELETE FROM attempt_events WHERE session_key=? AND agent_key=? AND source IN ('subagent','agent_tool')",
+						).run(session, agent);
 						store.upsertDispatch({
 							session_id: session,
 							agent_id: agent,
@@ -549,83 +596,98 @@ export function openStore(
 							suggestion_id: r.suggestion_id,
 						});
 					}
-					const counts = [
-						r.input_tokens,
-						r.output_tokens,
-						r.cache_read_tokens,
-						r.cache_creation_tokens,
-					];
 					if (
-						counts.some(
-							(n) => n !== null && (!Number.isSafeInteger(n) || n < 0),
-						)
+						(r.source === "subagent" || r.source === "agent_tool") &&
+						db
+							.query(
+								"SELECT 1 FROM latest_attempt_events WHERE session_key=? AND agent_key=? AND source='claude-code-mod' LIMIT 1",
+							)
+							.get(session ?? `suggestion:${r.suggestion_id}`, agent ?? "")
 					)
-						throw new Error(
-							"tokens must be null or non-negative safe integers",
+						return;
+					const current = store.outcome(r.suggestion_id)!;
+					const context = {
+						harness: suggestion.agent === "codex" ? "codex" : "claude-code",
+						session_key:
+							suggestion.session_id ?? `suggestion:${r.suggestion_id}`,
+						agent_key: suggestion.agent_id ?? "",
+					};
+					let attempt = current.attempt_id!;
+					const effort = noneOnly.has(r.model) ? "none" : r.effort;
+					if (
+						current.model &&
+						(current.model !== r.model ||
+							(current.effort && effort && current.effort !== effort))
+					)
+						attempt = ledger.startAttempt({
+							...context,
+							suggestion_id: r.suggestion_id,
+							key: `usage:${r.source}:${r.scope_key}:${r.model}:${effort}`,
+							model: r.model,
+							effort,
+							at: r.reported_at,
+						}).id;
+					const eventId = `usage:${r.source}:${r.scope_key}:${r.model}`;
+					const previous = db
+						.query<{ revision: number }, [string, string, string, string]>(
+							"SELECT MAX(revision) AS revision FROM attempt_events WHERE harness=? AND session_key=? AND agent_key=? AND event_id=?",
+						)
+						.get(
+							context.harness,
+							context.session_key,
+							context.agent_key,
+							eventId,
 						);
-					let cost_usd: number | null = null;
-					let cost_source: UsageRecord["cost_source"] = "unavailable";
-					if (r.cost_source === "reported" && r.cost_usd != null) {
-						if (!Number.isFinite(r.cost_usd) || r.cost_usd < 0)
-							throw new Error("cost must be finite and non-negative");
-						cost_usd = r.cost_usd;
-						cost_source = "reported";
-					} else {
-						const price = store.getSuggestion(r.suggestion_id)
-							?.price_snapshot?.[r.model];
-						if (price && counts.some((n) => n !== null)) {
-							const rates = [
-								price.price_prompt,
-								price.price_completion,
-								price.price_cache_read,
-								price.price_cache_write,
-							];
-							if (
-								counts.every(
-									(n, i) =>
-										!n ||
-										(rates[i] != null &&
-											Number.isFinite(rates[i]) &&
-											(rates[i] as number) >= 0),
-								)
-							) {
-								cost_usd = counts.reduce<number>(
-									(sum, n, i) => sum + (n ?? 0) * (rates[i] ?? 0),
-									0,
-								);
-								if (Number.isFinite(cost_usd)) cost_source = "priced";
-								else cost_usd = null;
-							}
-						}
-					}
-					db.query(
-						`INSERT OR REPLACE INTO usages VALUES ($suggestion_id, $model, $effort, $source, $scope_key,
-				$input_tokens, $output_tokens, $cache_read_tokens, $cache_creation_tokens, $is_sidechain,
-				$rounds, $note, $reported_at, $turn_id, $agent_id, $tokens_schema, $tokens_complete, $cost_usd, $cost_source)`,
-					).run({
-						...r,
-						tokens_schema: 2,
-						tokens_complete: Number(counts.every((n) => n !== null)),
-						cost_usd,
-						cost_source,
-						effort: noneOnly.has(r.model) ? "none" : (r.effort ?? null),
-						turn_id: r.turn_id ?? null,
-						agent_id: r.agent_id ?? null,
-						is_sidechain: Number(r.is_sidechain),
-					});
+					ledger.recordAttemptEvents([
+						{
+							...context,
+							event_id: eventId,
+							revision: (previous?.revision ?? -1) + 1,
+							attempt_id: attempt,
+							suggestion_id: r.suggestion_id,
+							kind: "usage",
+							turn_id: r.turn_id ?? null,
+							source: r.source,
+							model: r.model,
+							effort,
+							occurred_at: r.reported_at,
+							received_at: r.reported_at,
+							input_tokens: r.input_tokens,
+							output_tokens: r.output_tokens,
+							cache_read_tokens: r.cache_read_tokens,
+							cache_creation_tokens: r.cache_creation_tokens,
+							cost_usd: r.cost_usd,
+							cost_source: r.cost_source,
+						},
+					]);
 				})
 				.immediate();
 		},
 		getUsage(suggestionId, source, scopeKey, model) {
+			if (!store.getSuggestion(suggestionId)?.is_legacy) {
+				const e = db
+					.query<UsageRecord, [string, string]>(
+						`SELECT suggestion_id,model,effort,source,${["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "cost_usd", "cost_source", "tokens_complete", "tokens_schema", "turn_id"].join(",")},agent_key AS agent_id,occurred_at AS reported_at FROM latest_attempt_events WHERE suggestion_id=? AND event_id=?`,
+					)
+					.get(suggestionId, `usage:${source}:${scopeKey}:${model}`);
+				return e
+					? {
+							...e,
+							scope_key: scopeKey,
+							is_sidechain: source === "subagent" || !!e.agent_id,
+							rounds: null,
+							note: null,
+						}
+					: null;
+			}
 			const row = db
 				.query<
 					Omit<UsageRecord, "is_sidechain"> & { is_sidechain: number },
 					[string, string, string, string]
 				>(
-					"SELECT * FROM usages WHERE suggestion_id = ? AND source = ? AND scope_key = ? AND model = ?",
+					"SELECT * FROM usages WHERE suggestion_id=? AND source=? AND scope_key=? AND model=?",
 				)
 				.get(suggestionId, source, scopeKey, model);
-			// SQLite stores the flag as 0/1; the record type and CLI JSON use a boolean.
 			return row ? { ...row, is_sidechain: row.is_sidechain === 1 } : null;
 		},
 		usageScopes(ids) {
@@ -634,7 +696,7 @@ export function openStore(
 					`SELECT source, scope_key, effort FROM (
 					SELECT source, scope_key, effort, ROW_NUMBER() OVER (
 						PARTITION BY source, scope_key ORDER BY CASE effort ${EFFORTS.map((e, i) => `WHEN '${e}' THEN ${i}`).join(" ")} ELSE -1 END DESC
-					) AS rank FROM usages
+					) AS rank FROM (SELECT suggestion_id,source,scope_key,effort FROM usages UNION ALL SELECT suggestion_id,source,substr(event_id,length('usage:' || source || ':')+1,length(event_id)-length('usage:' || source || ':')-length(model)-1) AS scope_key,effort FROM latest_attempt_events WHERE kind='usage' AND event_id LIKE 'usage:%')
 					WHERE source IN ('transcript', 'subagent') AND suggestion_id IN (${ids.map(() => "?").join()})
 					) WHERE rank = 1`,
 				)
@@ -672,9 +734,12 @@ export function openStore(
 						),
 					);
 					db.query(
-						`DELETE FROM usages WHERE source = $source AND scope_key = $scope_key
-						AND suggestion_id IN (SELECT id FROM suggestions WHERE session_id = $session)`,
-					).run(key);
+						`DELETE FROM attempt_events WHERE source=$source AND event_id LIKE $prefix AND session_key=$session`,
+					).run({
+						source: scope.source,
+						prefix: `usage:${scope.source}:${scope.scope_key}:%`,
+						session: scope.session_id,
+					});
 					for (const r of replacement) store.upsertUsage(r);
 					db.query(
 						`INSERT OR REPLACE INTO usage_scopes
@@ -689,9 +754,15 @@ export function openStore(
 				.immediate();
 		},
 		outcome(id) {
+			if (store.getSuggestion(id)?.is_legacy)
+				return db
+					.query<Outcome, [string]>(
+						`SELECT *,NULL AS attempt_id,NULL AS ordinal,NULL AS root_id,NULL AS input_tokens,NULL AS output_tokens,NULL AS cache_read_tokens,NULL AS cache_creation_tokens FROM legacy_outcomes WHERE suggestion_id=?`,
+					)
+					.get(id);
 			return db
 				.query<Outcome, [string]>(
-					"SELECT * FROM outcomes WHERE suggestion_id = ?",
+					`SELECT a.suggestion_id,q.quality,a.model,a.effort,a.id AS attempt_id,a.ordinal,a.root_id,u.input_tokens,u.output_tokens,u.cache_read_tokens,u.cache_creation_tokens FROM attempts a LEFT JOIN attempt_quality q ON q.attempt_id=a.id LEFT JOIN (SELECT attempt_id,SUM(input_tokens) AS input_tokens,SUM(output_tokens) AS output_tokens,SUM(cache_read_tokens) AS cache_read_tokens,SUM(cache_creation_tokens) AS cache_creation_tokens FROM attempt_usage GROUP BY attempt_id) u ON u.attempt_id=a.id WHERE a.suggestion_id=? ORDER BY a.ordinal DESC LIMIT 1`,
 				)
 				.get(id);
 		},
