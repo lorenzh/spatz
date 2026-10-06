@@ -1,0 +1,14 @@
+{
+	"mod": {
+		"kind": "turn.start",
+		"turnId": "820eb7b8-7453-4673-b8ea-19b6a05f4195"
+	},
+	"hook": {
+		"hook_event_name": "PostToolUse",
+		"prompt_id": "942c038e-03f2-4e2a-9d32-161eda5c68b4",
+		"effort": { "level": "high" },
+		"tool_use_id": "toolu_0189nnnczcmSzndmCFPjzJeu"
+	},
+	"modToolUseId": "toolu_0189nnnczcmSzndmCFPjzJeu",
+	"modToolUses": [{ "name": "Bash", "input": { "command": "[redacted]" } }]
+}

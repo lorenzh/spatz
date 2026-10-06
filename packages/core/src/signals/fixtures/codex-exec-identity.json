@@ -1,0 +1,26 @@
+{
+	"turn": {
+		"type": "turn_context",
+		"payload": {
+			"turn_id": "01a10ea0-df2c-7053-b80a-5c48c4ba87ee",
+			"model": "gpt-6-astra",
+			"effort": "high"
+		}
+	},
+	"call": {
+		"type": "response_item",
+		"payload": {
+			"type": "custom_tool_call",
+			"call_id": "call_yLMKZWo1O7DKBsXwzCrZpUge",
+			"name": "exec",
+			"input": "[redacted]"
+		}
+	},
+	"callOutput": {
+		"type": "response_item",
+		"payload": {
+			"type": "custom_tool_call_output",
+			"call_id": "call_yLMKZWo1O7DKBsXwzCrZpUge"
+		}
+	}
+}

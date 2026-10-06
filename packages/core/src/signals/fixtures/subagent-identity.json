@@ -1,0 +1,27 @@
+{
+	"modAgentId": "a2a01570eb2d1361b",
+	"modAgentSpawnId": "toolu_01H73vPTqKe8Skac5XpUgn7K",
+	"agentCallHook": {
+		"hook_event_name": "PostToolUse",
+		"tool_name": "Agent",
+		"tool_use_id": "toolu_01H73vPTqKe8Skac5XpUgn7K"
+	},
+	"hook": {
+		"hook_event_name": "PostToolUse",
+		"prompt_id": "942c038e-03f2-4e2a-9d32-161eda5c68b4",
+		"agent_id": "a2a01570eb2d1361b",
+		"agent_type": "general-purpose",
+		"tool_name": "Bash",
+		"tool_use_id": "toolu_01AcYxn3o796j2ggY4o9mZNw"
+	},
+	"start": { "hook_event_name": "SubagentStart" },
+	"stop": { "hook_event_name": "SubagentStop" },
+	"handback": {
+		"hook_event_name": "PostToolUse",
+		"tool_name": "SubagentHandback"
+	},
+	"handbackPrompt": {
+		"hook_event_name": "UserPromptSubmit",
+		"prompt": "<agent-message from=\"a2a01570eb2d1361b\">[redacted]</agent-message>"
+	}
+}

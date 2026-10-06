@@ -1,0 +1,19 @@
+{
+	"mod": {
+		"kind": "turn.step",
+		"input": {
+			"turnId": "3bb5efb1-8fd1-40f6-8740-12bc11f40843",
+			"index": 0,
+			"model": "claude-haiku-4-5-20251001",
+			"agentId": "a2a01570eb2d1361b"
+		},
+		"sent": "low",
+		"toolUses": [{ "name": "Bash", "input": { "command": "[redacted]" } }]
+	},
+	"hook": {
+		"hook_event_name": "PostToolUse",
+		"agent_id": "a2a01570eb2d1361b",
+		"tool_use_id": "toolu_01AcYxn3o796j2ggY4o9mZNw"
+	},
+	"modToolUseId": "toolu_01AcYxn3o796j2ggY4o9mZNw"
+}
