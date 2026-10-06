@@ -832,3 +832,53 @@ test("stats exposes stored fallback reasons and failures from real hook processe
 		`failures: parse=${report.failures.parse}  hook=${report.failures.hook}  launcher=2`,
 	);
 });
+
+test("Codex environment link and fallback import persist the same run", async () => {
+	const suggested = await spatz([
+		TASK,
+		"--models",
+		"gpt-6-luna:low",
+		"--dry-run",
+		"--json",
+	]);
+	expect(suggested.code).toBe(0);
+	const id = JSON.parse(suggested.stdout).suggestion_id;
+	const file = join(SIGNAL_FIXTURES, "codex-command-events.jsonl");
+	const stopped = await spatz(
+		["hook", "Stop", "--agent", "codex"],
+		JSON.stringify({
+			hook_event_name: "Stop",
+			session_id: "exec-child",
+			turn_id: "todo-turn",
+			transcript_path: file,
+		}),
+		{ SPATZ_SUGGESTION_ID: id },
+	);
+	expect(stopped).toEqual({ code: 0, stdout: "", stderr: "" });
+	const imported = await spatz([
+		"import-rollout",
+		file,
+		"--suggestion",
+		id,
+		"--json",
+	]);
+	expect(imported.code).toBe(0);
+	expect(JSON.parse(imported.stdout)).toEqual({ suggestion_id: id, turns: 3 });
+	const conn = db();
+	try {
+		expect(
+			conn
+				.query(
+					"SELECT source, output_tokens, tokens_schema FROM usages WHERE suggestion_id = ?",
+				)
+				.all(id),
+		).toEqual([{ source: "transcript", output_tokens: 674, tokens_schema: 2 }]);
+		expect(
+			conn
+				.query("SELECT COUNT(*) AS n FROM signals WHERE suggestion_id = ?")
+				.get(id),
+		).toEqual({ n: 4 });
+	} finally {
+		conn.close();
+	}
+});

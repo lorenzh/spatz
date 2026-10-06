@@ -28,6 +28,7 @@ const USAGE = `usage:
   spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
   spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--cost-usd <n>] [--json]
+  spatz import-rollout <file> --suggestion <id> [--json]
   spatz hook <event> [--agent codex]
   spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
   spatz stats [--type <t>] [--by scope] [--json]`;
@@ -96,6 +97,7 @@ function parse(argv: string[]) {
 			args: argv,
 			allowPositionals: true,
 			options: {
+				suggestion: { type: "string" },
 				version: { type: "boolean" },
 				json: { type: "boolean" },
 				models: { type: "string" },
@@ -160,7 +162,20 @@ export async function main(
 			return 0;
 		}
 		json = v.json ?? false;
-		if (cmd === "usage") {
+		if (cmd === "import-rollout") {
+			const input = {
+				file: required(rest[0], "<file>"),
+				suggestionId: required(v.suggestion, "--suggestion"),
+			};
+			run = async () => {
+				const result = await api.importRollout(input);
+				return {
+					result,
+					text: () =>
+						`rollout imported: ${result.suggestion_id}  turns: ${result.turns}`,
+				};
+			};
+		} else if (cmd === "usage") {
 			if (v.source !== "claude-code-mod")
 				throw new UsageError("--source must be claude-code-mod");
 			const input = {

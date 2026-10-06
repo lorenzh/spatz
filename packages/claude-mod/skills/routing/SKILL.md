@@ -40,7 +40,9 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
    Take `strategy` from the response and `n` from the selected ranking entry. Require the agent to report the model actually answering. Check available runtime evidence against the pick. If the selected model is unavailable, say so and stop that dispatch. Do not silently substitute another pair or claim an independent review.
 
    Efforts are `none`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`. Use only efforts offered by the selected harness model.
-   For Codex CLI, map `ultra` to `-c model_reasoning_effort=ultra` (for example, `codex exec -m gpt-6-sol -c model_reasoning_effort=ultra "<task>"`). Claude Code has no `ultra`.
+   For Codex CLI, map `ultra` to `-c model_reasoning_effort=ultra` (for example, `SPATZ_SUGGESTION_ID=<suggestion_id> codex exec -m gpt-6-sol -c model_reasoning_effort=ultra "<task>"`). Claude Code has no `ultra`.
+   Prefix every Codex dispatch with `SPATZ_SUGGESTION_ID=<suggestion_id> codex exec ...`, using the ID from this ranking. Codex inherits the environment; the spatz Codex hooks record the run's tokens and test/build results against that suggestion.
+   If hooks are not installed or trusted, run `spatz import-rollout <rollout.jsonl> --suggestion <suggestion_id>` after the run. Use the rollout from that Codex run. Reimporting the same turns does not add their tokens twice. Still report the verified result below.
    For `none`, set only the model and leave the harness effort setting untouched. Report the effort as `none`.
 
    Done when the dispatch uses the selected pair and its answering model is recorded, or its unavailability is disclosed.

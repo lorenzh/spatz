@@ -388,3 +388,11 @@ describe("effortFromHook", () => {
 		expect(effortFromHook(parsed(1))).toBeNull();
 	});
 });
+
+test.each([
+	"spatz import-rollout run.jsonl --suggestion id",
+	'spatz "import-rollout" run.jsonl --suggestion id',
+	"rtk proxy spatz import-rollout run.jsonl --suggestion id",
+])("%s does not create a suggestion link", (command) => {
+	expect(detectCommandKind(command)).toBeNull();
+});

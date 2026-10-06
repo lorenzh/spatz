@@ -250,6 +250,11 @@ export interface StatsInput {
 }
 
 export interface SpatzApi {
+	/** Import each Codex turn against an explicit suggestion; the same turn replaces its prior records. */
+	importRollout(input: {
+		file: string;
+		suggestionId: string;
+	}): Promise<{ suggestion_id: string; turns: number }>;
 	suggest(input: SuggestInput): Promise<Suggestion>;
 	usage(input: UsageInput): Promise<UsageRecord>;
 	/** Gives a suggestion made before its subagent existed the real agent id and the session. Idempotent. */

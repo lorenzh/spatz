@@ -217,7 +217,11 @@ describe("identity fixtures", () => {
 				legacy.map((row) => JSON.stringify(row)).join("\n"),
 				turn.payload.turn_id,
 			),
-		).toEqual({ ...expected, calls: [], usage: null });
+		).toEqual({
+			...expected,
+			calls: [{ command: "[redacted]", exit_code: 0 }],
+			usage: null,
+		});
 		const rows = [turn, call, tokenUsage, completed, callOutput, completed];
 		expect(
 			parseCodexRollout(
