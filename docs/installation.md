@@ -124,8 +124,8 @@ claude --plugin-dir ./spatz-plugin
 On macOS, use `shasum -a 256 --check` for the checksum.
 Use `spatz-claude-hooks-<version>.zip` for the `spatz` hooks plugin. ZIP names stay stable across the plugin ID rename.
 `--plugin-dir` loads an extracted plugin for that session.
-If you load both plugins manually, set `/spatz record off`.
-Automatic detection checks installed plugins.
+If you load both plugins manually, keep `record: auto`.
+Hooks record outcome signals and skip usage owned by the mod.
 The ZIPs include the launcher and skill. The launcher downloads the CLI when needed.
 
 ## Use with Codex

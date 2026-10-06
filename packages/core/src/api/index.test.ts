@@ -2555,6 +2555,81 @@ test("recording transaction failure leaves earlier signals and usage intact", as
 	expect(s.store.outcome(ID1)?.quality).toBe(1);
 });
 
+test.each(["low", "high"] as const)(
+	"late mod start adopts hook evidence with %s effort without creating a retry",
+	async (hookEffort) => {
+		const s = setup();
+		const { suggestion_id, classification } = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			turn: "mod-turn",
+			source: "claude-code-mod",
+		});
+		const path = join(dir, "early-hook.jsonl");
+		const row = JSON.parse(
+			assistant("early-hook", "gpt-6-luna", 10, {}, T0 + 500),
+		);
+		row.message.content = [{ type: "tool_use", id: "c1", name: "Bash" }];
+		await Bun.write(
+			path,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				JSON.stringify(row),
+			].join("\n"),
+		);
+		s.setNow(T0 + 600);
+		await s.api.handleHook(
+			"PostToolUse",
+			JSON.stringify({
+				...JSON.parse(bash("bun test")),
+				transcript_path: path,
+				tool_use_id: "c1",
+				effort: { level: hookEffort },
+			}),
+		);
+		const implicit = s.store.outcome(suggestion_id);
+		expect(implicit).toMatchObject({
+			ordinal: 1,
+			quality: 1,
+			effort: hookEffort,
+		});
+		s.setNow(T0 + 700);
+		const started = await s.api.startAttempt({
+			suggestionId: suggestion_id,
+			key: "mod-turn:0",
+			model: "gpt-6-luna",
+			effort: "low",
+			session: SESSION,
+			turn: "mod-turn",
+			ownsUsage: true,
+		});
+		expect(started).toMatchObject({
+			id: implicit?.attempt_id,
+			ordinal: 1,
+			effort: "low",
+		});
+		await s.api.bindAttempt({
+			attempt: started.id,
+			call: "c1",
+			session: SESSION,
+		});
+		expect(s.store.outcome(suggestion_id)).toMatchObject({
+			ordinal: 1,
+			quality: 1,
+			effort: "low",
+		});
+		expect(s.store.cellStats(classification.task_type)).toEqual([
+			expect.objectContaining({
+				model: "openai/gpt-6-luna",
+				effort: "low",
+				n: 1,
+				sum_quality: 1,
+			}),
+		]);
+		expect(s.store.retryStats(classification.task_type)).toEqual([]);
+	},
+);
+
 test("mod low 100/high 200 steps own usage and bind hook tools despite different prompt and turn IDs", async () => {
 	const dbPath = join(dir, "mod-steps.db");
 	const s = setup({ dbPath, openStore });

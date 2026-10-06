@@ -1041,43 +1041,64 @@ test("expired pending revisions are pruned with their history without restoring 
 	}
 });
 
-test("late mod start adopts matching hook evidence without creating a retry", () => {
-	const store = openStore(":memory:");
-	store.insertSuggestion(suggestion({ session_id: "session" }));
-	store.recordAttemptEvents([
-		{
+test.each([
+	["low", "low"],
+	["high", "low"],
+	["high", "none"],
+] as const)(
+	"late mod start adopts hook effort %s with sent effort %s without creating a retry",
+	(hookEffort, sentEffort) => {
+		const store = openStore(":memory:");
+		store.insertSuggestion(suggestion({ session_id: "session" }));
+		store.recordAttemptEvents([
+			{
+				...context,
+				event_id: "early-hook",
+				revision: 0,
+				call_id: "c1",
+				kind: "test",
+				value: 1,
+				weight: 1,
+				model: "m/a",
+				effort: hookEffort,
+				occurred_at: 1500,
+				received_at: 1600,
+			},
+		]);
+		const implicit = store.outcome("s1")?.attempt_id;
+		if (!implicit) throw new Error("missing implicit attempt");
+		const started = store.startAttempt({
 			...context,
-			event_id: "early-hook",
-			revision: 0,
-			call_id: "call",
-			kind: "test",
-			value: 0,
-			weight: 1,
+			suggestion_id: "s1",
+			key: "step:0",
 			model: "m/a",
-			effort: "low",
-			occurred_at: 1100,
-			received_at: 1200,
-		},
-	]);
-	const implicit = store.outcome("s1")?.attempt_id;
-	if (!implicit) throw new Error("missing implicit attempt");
-	const started = store.startAttempt({
-		...context,
-		suggestion_id: "s1",
-		key: "step:0",
-		model: "m/a",
-		effort: "low",
-		at: 1300,
-		owns_usage: true,
-	});
-	expect(started.id).toBe(implicit);
-	expect(started.ordinal).toBe(1);
-	store.bindAttempt({
-		...context,
-		attempt_id: started.id,
-		id_kind: "call",
-		external_id: "call",
-	});
-	expect(store.outcome("s1")).toMatchObject({ ordinal: 1, quality: 0 });
-	store.dispose();
-});
+			effort: sentEffort,
+			at: 1700,
+			owns_usage: true,
+		});
+		expect(started.id).toBe(implicit);
+		expect(started.ordinal).toBe(1);
+		expect(started.effort).toBe(sentEffort);
+		store.bindAttempt({
+			...context,
+			attempt_id: started.id,
+			id_kind: "call",
+			external_id: "c1",
+		});
+		expect(store.outcome("s1")).toMatchObject({
+			ordinal: 1,
+			quality: 1,
+			effort: sentEffort,
+		});
+		expect(store.cellStats("code.bugfix")).toEqual([
+			expect.objectContaining({
+				model: "m/a",
+				effort: sentEffort,
+				n: 1,
+				sum_quality: 1,
+			}),
+		]);
+		expect(store.retryStats("code.bugfix")).toEqual([]);
+		store.dispose();
+	},
+);

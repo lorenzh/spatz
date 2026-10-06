@@ -728,7 +728,14 @@ export function attemptStore(
 					a = latest(input.suggestion_id);
 					if (
 						a?.execution_key === "implicit" &&
-						(a.model === null || (input.owns_usage && compatible(a, input))) &&
+						(a.model === null ||
+							(input.owns_usage &&
+								compatible(
+									a,
+									input.agent_key
+										? input
+										: { model: input.model, effort: null },
+								))) &&
 						a.closed_at === null
 					) {
 						db.query(
