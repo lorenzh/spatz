@@ -411,7 +411,8 @@ For none-only catalog models, stats count old rows with a missing effort as `non
 | `success_rate` | Share of completed chains that succeeded, plus legacy results. Without results, JSON gives `null` and text gives `-`. |
 | `input_tokens`, `output_tokens` | Total recorded input and output tokens. |
 | `cache_read_tokens`, `cache_creation_tokens` | Total recorded cache tokens. |
-| `cost_usd` | Sum of USD costs from schema-2 usage rows, or `null`. |
+| `cost_usd` | Sum of eligible USD costs, or `null`. A chain with incomplete usage has no eligible cost. |
+| `incomplete` | Number of usage rows excluded from cost because `tokens_complete = 0` or `tokens_schema = 1`. |
 | `cache_read_share` | `cache_read_tokens / (input_tokens + cache_read_tokens + cache_creation_tokens)`. With no input tokens, the share is zero. |
 
 Token totals include suggestions without outcomes. Each measurement counts once before outcome joins.
@@ -421,11 +422,17 @@ Coverage counts distinct scored suggestions over distinct non-test suggestions.
 Adoption and learned/control comparisons use first-attempt quality once per root.
 Pair statistics count each scored attempt. A same-pair reported fail/pass contributes two outcomes.
 Legacy statistics keep their pre-migration meaning.
-Both task-type and scope stats include all four token totals and `cost_usd`.
+Both task-type and scope stats include all four token totals, `cost_usd` and `incomplete`.
 The sum includes reported costs and costs calculated from stored prices.
-Schema-1 rows never enter USD totals. If no row has a schema-2 cost, the total is `null` (`-` in text).
-Missing counters contribute zero to the calculation, so incomplete rows can understate cost.
-Token totals still include historical rows and treat null counters as zero.
+Only schema-2 rows with `tokens_complete = 1` enter USD totals.
+If no eligible row has a cost, the total is `null` (`-` in text).
+`incomplete` counts excluded `usage_totals` rows once, even when both flags exclude them.
+Attempt usage is grouped by suggestion, attempt, model and effort before this count.
+A chain with any incomplete usage has a null cost, including for cost-per-success inputs.
+Token totals keep lower-bound estimates and historical rows. Null counters contribute zero.
+Hooks-only Claude subagent transcripts have `tokens_complete = 0`, even when all four counters are present.
+When `incomplete` is positive, text output notes that costs exclude rows and token totals may be lower bounds.
+Mod measurements replace hook estimates for the same session and agent. Replaced rows no longer enter `incomplete`.
 Historical Codex input totals can include cached tokens. These totals are not normalized retroactively.
 Stats do not measure routing latency.
 
@@ -439,7 +446,7 @@ The first run needs network access once. See [configuration.md](configuration.md
 ### Text output
 
 ```text
-<task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cache_read_tokens=<count>  cache_creation_tokens=<count>  cost_usd=<amount or ->
+<task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cache_read_tokens=<count>  cache_creation_tokens=<count>  cost_usd=<amount or ->  incomplete=<count>
   <model>:<effort>  n=<count>  success=<pct>
 coverage: <pct>  learned_success: <pct or ->  control_success: <pct or ->
 dispatches: <count>  routed_by_mod: <count>  swapped: <count>
@@ -516,7 +523,8 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `by_type[].output_tokens` | number | Sum of recorded output tokens. |
 | `by_type[].cache_read_tokens` | number | Sum of input tokens read from cache. |
 | `by_type[].cache_creation_tokens` | number | Sum of input tokens written to cache. |
-| `by_type[].cost_usd` | number or null | Sum of USD costs from schema-2 usage rows. Null if none have a cost. |
+| `by_type[].cost_usd` | number or null | Sum of costs from complete schema-2 usage rows. Null if none have a cost. |
+| `by_type[].incomplete` | number | Count of usage rows excluded by completeness or schema version. Zero when none are excluded. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | First-attempt success rate of learned root decisions in cells with both learned and control outcomes, weighted by their counts. |
 | `control_success` | number or null | Success rate of the control group in the same cells. |
@@ -528,7 +536,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 
 ```console
 $ spatz stats
-other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-
+other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-  incomplete=0
   anthropic/claude-sonnet-5.5:medium  n=1  success=100%
 coverage: 14%  learned_success: -  control_success: -
 dispatches: 0  routed_by_mod: 0  swapped: 0
@@ -538,7 +546,7 @@ failures: parse=0  hook=0  launcher=0
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":null}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":null,"incomplete":0}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes

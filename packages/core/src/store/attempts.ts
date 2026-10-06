@@ -923,7 +923,15 @@ export function attemptStore(
 								: null,
 						cost_source:
 							input.cost_source === "reported" ? "reported" : "unavailable",
-						tokens_complete: Number(tokenKeys.every((k) => input[k] != null)),
+						tokens_complete: Number(
+							input.tokens_complete !== 0 &&
+								tokenKeys.every((k) => input[k] != null) &&
+								!(
+									input.harness === "claude-code" &&
+									(input.source === "subagent" ||
+										(input.source === "transcript" && input.agent_key !== ""))
+								),
+						),
 						tokens_schema: input.tokens_schema ?? 2,
 						suggestion_only: Number(input.suggestion_only ?? false),
 						requested_attempt_id: input.attempt_id ?? null,

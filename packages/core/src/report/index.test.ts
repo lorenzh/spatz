@@ -403,6 +403,7 @@ describe("one dataset", () => {
 			{ model: "m/b", effort: "high", n: 2, success_rate: 0.5 },
 		],
 		cost_usd: null,
+		incomplete: 0,
 		adoption_rate: 2 / 3,
 		input_tokens: 605,
 		output_tokens: 61,
@@ -414,6 +415,7 @@ describe("one dataset", () => {
 		n: 1,
 		pairs: [{ model: "m/a", effort: "low", n: 1, success_rate: 0 }],
 		cost_usd: null,
+		incomplete: 0,
 		adoption_rate: 1,
 		input_tokens: 7,
 		output_tokens: 3,
@@ -570,6 +572,7 @@ test("outcome without usage counts in n but not in pairs or adoption", async () 
 			n: 1,
 			pairs: [],
 			cost_usd: null,
+			incomplete: 0,
 			adoption_rate: 0,
 			input_tokens: 0,
 			output_tokens: 0,
@@ -624,6 +627,7 @@ test("scope stats count completed chains once, including expired usage-only chai
 			cache_read_tokens: 0,
 			cache_creation_tokens: 0,
 			cost_usd: null,
+			incomplete: 0,
 			cache_read_share: 0,
 		},
 		{
@@ -635,6 +639,7 @@ test("scope stats count completed chains once, including expired usage-only chai
 			cache_read_tokens: 60,
 			cache_creation_tokens: 20,
 			cost_usd: null,
+			incomplete: 0,
 			cache_read_share: 0.5,
 		},
 		{
@@ -646,6 +651,7 @@ test("scope stats count completed chains once, including expired usage-only chai
 			cache_read_tokens: 0,
 			cache_creation_tokens: 0,
 			cost_usd: null,
+			incomplete: 0,
 			cache_read_share: 0,
 		},
 	]);
@@ -744,4 +750,67 @@ test("dispatch counts include unlinked spawns, exclude dry runs, and do not coun
 		type: "other",
 	});
 	expect(result).toMatchObject({ dispatches: 4, routed_by_mod: 1, swapped: 1 });
+});
+
+test("incomplete usage shares schema-1 exclusions and chains retain lower-bound counts", async () => {
+	for (const id of ["complete", "partial", "old", "missing"]) {
+		sug(id, {
+			scope: "subagent",
+			task_type: id === "missing" ? "review" : "code.bugfix",
+		});
+		usage(id, "m/a", "low", [10, 20], "transcript");
+	}
+	const db = new Database(dbPath);
+	try {
+		db.run(
+			"UPDATE attempt_events SET cost_usd=1, cost_source='reported' WHERE kind='usage'",
+		);
+		db.run(
+			"UPDATE attempt_events SET tokens_complete=0 WHERE suggestion_id IN ('partial','missing')",
+		);
+		db.run(
+			"UPDATE attempt_events SET tokens_schema=1,tokens_complete=0 WHERE suggestion_id='old'",
+		);
+		expect(
+			db
+				.query(
+					"SELECT cost_usd FROM usage_totals WHERE suggestion_id='partial'",
+				)
+				.get(),
+		).toEqual({ cost_usd: null });
+		expect(
+			db
+				.query(
+					"SELECT cost_usd,incomplete FROM chain_outcomes WHERE suggestion_id='partial'",
+				)
+				.get(),
+		).toEqual({ cost_usd: null, incomplete: 1 });
+		const result = await runStats({
+			dbPath,
+			extensionDir,
+			successQuality: 0.8,
+			by: "scope",
+			onSql: noInstall,
+		});
+		expect(
+			result.by_type.find((t) => t.task_type === "code.bugfix"),
+		).toMatchObject({
+			cost_usd: 1,
+			incomplete: 2,
+			input_tokens: 30,
+			output_tokens: 60,
+		});
+		expect(result.by_type.find((t) => t.task_type === "review")).toMatchObject({
+			cost_usd: null,
+			incomplete: 1,
+		});
+		expect(result.by_scope?.[0]).toMatchObject({
+			cost_usd: 1,
+			incomplete: 3,
+			input_tokens: 40,
+			output_tokens: 80,
+		});
+	} finally {
+		db.close();
+	}
 });

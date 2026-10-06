@@ -85,9 +85,13 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 					throw new Error(`INSTALL blocked: ${sql}`);
 			},
 		});
-		// The only new statistics fields are the two cache totals on each task type.
+		// Preserve the frozen statistics; completeness counts are new in v9.
 		expect<unknown>({
 			...baseline.stats,
+			by_scope: baseline.stats.by_scope.map((row) => ({
+				...row,
+				incomplete: row.scope === "turn" ? 2 : row.scope === null ? 3 : 0,
+			})),
 			by_type: baseline.stats.by_type.map((row) => {
 				const cache = baseline.caches.find(
 					(c) => c.task_type === row.task_type,
@@ -96,6 +100,12 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 					throw new Error(`missing frozen cache totals for ${row.task_type}`);
 				return {
 					...row,
+					incomplete:
+						row.task_type === "code.bugfix"
+							? 3
+							: row.task_type === "review"
+								? 2
+								: 0,
 					cache_read_tokens: cache.cache_read_tokens,
 					cache_creation_tokens: cache.cache_creation_tokens,
 				};

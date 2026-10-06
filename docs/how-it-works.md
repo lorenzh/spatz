@@ -205,6 +205,10 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 `cache_read_tokens` and `cache_creation_tokens` hold separate input counts.
 `output_tokens` includes reasoning tokens once.
 Missing counters stay `null`. If any counter is null, `tokens_complete` is `0`.
+Claude subagent transcript `output_tokens` are stale streaming snapshots.
+Hooks store these estimates with `tokens_complete = 0`, even when all four counters are present.
+Main-session transcripts keep the counter-based check.
+Mod measurements replace hook estimates for the same session and agent.
 Reports and Agent tool events do not measure tokens. Their counters are null.
 
 Suggestions capture four OpenRouter rates per candidate model in `price_snapshot`.
@@ -225,10 +229,14 @@ Prices are USD per token. Reported cost takes priority over calculated cost.
 New usage rows have `tokens_schema = 2`.
 The v6 migration flags pre-change Codex rows with `tokens_schema = 1` and keeps their counts unchanged.
 It uses the suggestion's `agent = 'codex'` or a transcript row with an `openai/` model ID.
-All USD aggregates exclude schema-1 rows. Historical rows have unavailable cost and unknown completeness.
+All USD aggregates exclude schema-1 rows and rows with `tokens_complete = 0`.
+Historical rows have unavailable cost and unknown completeness.
 Token reports keep the historical counts. These can mix inclusive and uncached Codex input.
 
-The `usage_totals` view carries these cost fields and schema exclusions across legacy and attempt usage.
+The `usage_totals` view returns null cost for incomplete or schema-1 usage across legacy and attempt rows.
+Stats count these rows in `incomplete` and retain their token totals as possible lower bounds.
+The count uses aggregated usage rows, not individual transcript messages.
+Replaced hook estimates no longer contribute to the count.
 Stats aggregate each measurement once before joining outcomes.
 Pending usage without a suggestion contributes no tokens or cost.
 See [CLI stats](cli.md#spatz-stats) for the current totals.
@@ -251,6 +259,7 @@ Before the first migration write, a separate read-only connection creates a back
 | 6 | Suggestion price snapshots, nullable token counters, completeness and schema flags, USD cost and its source. |
 | 7 | Dispatch observations keyed by session and agent. |
 | 8 | Attempt ledger and shared event binding. Existing suggestions become closed legacy rows. |
+| 9 | Mark stored Claude subagent transcript estimates incomplete and refresh cost views. No new columns. |
 
 `SCHEMA_V3` is the third entry in `MIGRATIONS`.
 `SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.
@@ -343,7 +352,9 @@ For costs `10 → 20 → 70`, the root decision costs `100`.
 Failed completed chains also contribute cost.
 Main-session orchestration usage has a suggestion ID and a null attempt ID.
 It contributes to chain cost and remains identifiable as overhead.
-A cost-per-success consumer divides by successful chains. With zero successes, the result is null.
+A chain with any incomplete or schema-1 usage has a null cost and exposes its `incomplete` count.
+Cost-per-success consumers exclude these chains from both cost and success inputs.
+A cost-per-success consumer divides by successful eligible chains. With zero eligible successes, the result is null.
 
 ### Session and agent windows
 

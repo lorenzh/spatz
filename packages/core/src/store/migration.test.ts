@@ -275,7 +275,7 @@ test("v7 migration creates report metadata and indexed latest revisions", async 
 		{ event_id: "event", output_tokens: 30, rounds: null, note: null },
 	]);
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
-		user_version: 8,
+		user_version: SCHEMA_VERSION,
 	});
 	expect(
 		migrated
@@ -301,4 +301,79 @@ test("v8 index failure rolls back the whole ledger and keeps v7 rows", async () 
 			)
 			.get(),
 	).toBeNull();
+});
+
+test("usage completeness migration marks stored Claude subagents and filters existing costs", async () => {
+	const dir = directory();
+	const { path, db } = await fixture(dir);
+	const previous = await previousStore(dir);
+	previous.openDatabase(path).close();
+	db.run("UPDATE suggestions SET agent='claude-code' WHERE id='h'");
+	db.run("UPDATE suggestions SET agent='codex' WHERE id='n'");
+	db.run(
+		"UPDATE usages SET tokens_complete=1, cost_usd=99, cost_source='reported' WHERE source='subagent'",
+	);
+	db.run(
+		"UPDATE usages SET tokens_complete=1,is_sidechain=1 WHERE suggestion_id='n'",
+	);
+	db.run(
+		"UPDATE usages SET cost_usd=99,cost_source='reported' WHERE suggestion_id='null-effort'",
+	);
+	for (const [harness, agent, source] of [
+		["claude-code", "child", "subagent"],
+		["claude-code", "nested", "transcript"],
+		["claude-code", "", "transcript"],
+		["codex", "child", "transcript"],
+		["claude-code", "mod", "claude-code-mod"],
+	] as const) {
+		db.run(
+			`INSERT INTO attempt_events(harness,session_key,agent_key,event_id,revision,suggestion_id,binding,received_at,kind,source,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,tokens_complete,cost_usd,cost_source)
+            VALUES(?, 'session', ?, ?, 0, 'proof', 'bound', 1, 'usage', ?, 1, 3, 0, 0, 1, 99, 'reported')`,
+			[harness, agent, `${harness}:${agent}`, source],
+		);
+	}
+	const migrated = openDatabase(path);
+	handles.push(migrated);
+	expect(
+		migrated
+			.query("SELECT tokens_complete FROM usages WHERE source='subagent'")
+			.get(),
+	).toEqual({ tokens_complete: 0 });
+	expect(
+		migrated
+			.query("SELECT tokens_complete FROM usages WHERE suggestion_id='n'")
+			.get(),
+	).toEqual({ tokens_complete: 1 });
+	expect(
+		migrated
+			.query(
+				"SELECT cost_usd FROM usage_totals WHERE suggestion_id='null-effort'",
+			)
+			.get(),
+	).toEqual({ cost_usd: null });
+	expect(
+		migrated
+			.query(
+				"SELECT harness,agent_key,tokens_complete FROM attempt_events ORDER BY harness,agent_key",
+			)
+			.all(),
+	).toEqual([
+		{ harness: "claude-code", agent_key: "", tokens_complete: 1 },
+		{ harness: "claude-code", agent_key: "child", tokens_complete: 0 },
+		{ harness: "claude-code", agent_key: "mod", tokens_complete: 1 },
+		{ harness: "claude-code", agent_key: "nested", tokens_complete: 0 },
+		{ harness: "codex", agent_key: "child", tokens_complete: 1 },
+	]);
+	expect(
+		migrated
+			.query(
+				"SELECT cost_usd FROM usage_totals WHERE suggestion_id='r' AND model='m/b'",
+			)
+			.get(),
+	).toEqual({ cost_usd: 0.093 });
+	expect(
+		migrated
+			.query("SELECT cost_usd FROM attempt_usage WHERE suggestion_id='proof'")
+			.get(),
+	).toEqual({ cost_usd: null });
 });
