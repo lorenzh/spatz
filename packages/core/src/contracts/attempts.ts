@@ -12,6 +12,8 @@ export interface AttemptRecord {
 	execution_key: string;
 	model: string | null;
 	effort: Effort | null;
+	/** Dated model revision when the harness exposed one. */
+	model_version?: string | null;
 	root_id: string;
 	opened_at: number | null;
 	closed_at: number | null;
@@ -48,6 +50,7 @@ export interface AttemptEvent extends AttemptContext {
 	rounds?: number | null;
 	note?: string | null;
 	model?: string | null;
+	model_version?: string | null;
 	effort?: Effort | null;
 	kind: "report" | "test" | "build" | "usage" | "delegate";
 	source?: string;
@@ -70,6 +73,7 @@ export interface AttemptReport {
 	effort: Effort;
 	result: ReportResult;
 	at: number;
+	model_version?: string | null;
 	attempt_id?: string;
 	correct?: boolean;
 	confirm?: boolean;

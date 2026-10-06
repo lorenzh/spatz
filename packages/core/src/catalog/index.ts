@@ -56,6 +56,11 @@ export function toCanonicalId(
 	return id;
 }
 
+/** Model revision from a dated id ("-20250929" or "-2025-08-07"), else null. */
+export function modelVersion(id: string): string | null {
+	return /-(\d{8}|\d{4}-\d{2}-\d{2})$/.exec(id)?.[1] ?? null;
+}
+
 function priceClass(m: OpenRouterModel | undefined, model: string): string {
 	if (!m) return `${model}, Preisklasse: unbekannt`;
 	const perM = Number((m.price_completion * 1e6).toPrecision(6));

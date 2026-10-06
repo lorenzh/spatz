@@ -230,6 +230,8 @@ export interface LinkInput {
 export interface StatsInput {
 	by?: "scope";
 	type?: TaskType;
+	/** Only outcomes recorded under this model version. */
+	modelVersion?: string;
 }
 
 export interface SpatzApi {

@@ -17,7 +17,7 @@ spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> 
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
 spatz import-rollout <file> --suggestion <id> [--json]
 spatz hook <event> [--agent codex]
-spatz stats [--type <t>] [--by scope] [--json]
+spatz stats [--type <t>] [--by scope] [--model-version <v>] [--json]
 ```
 
 Related docs: [hooks.md](hooks.md) for Claude Code and Codex integrations, [configuration.md](configuration.md) for environment variables and files.
@@ -397,6 +397,7 @@ This command shows how well each pair worked, per task type. It reads the databa
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.explain`, `review`, `spec`, `planning`, `other`. Another value gives exit code 2. |
+| `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 
 `--by scope` adds `by_scope` to the JSON response. Text output shows one line per recorded scope.
