@@ -2,7 +2,7 @@
 title: How spatz works
 description: The terms, core modules, suggestion flow, Jev classification and SQLite data model of spatz.
 tags: [spatz, architecture, classification, data-model]
-keywords: [concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
+keywords: [fallback, failures, launcher, diagnostics, concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
 ---
 
 # How spatz works
@@ -174,7 +174,9 @@ The rules give these values:
 - `criticality` comes from keywords in the task text. spatz checks the `security` words first, for example `auth` or `password`. Then it checks the `data_integrity` words, for example `migration`. Then it checks the `business_logic` words, for example `payment`. The lists include German words. The check is a substring match, so `author` counts as `auth`.
 - There is no best candidate.
 
-The output shows `fallback_used: true`. The reason itself is not in the output and not in the database.
+The suggestion output shows `fallback_used: true`. The database stores `fallback_reason` on each recommendation.
+`spatz stats` shows the counts for each reason in text and JSON.
+Successful Jev classifications store `null`. Legacy rows also contain `null` because their reasons cannot be recovered.
 
 ## Data model
 
@@ -187,6 +189,7 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 | `signals` | One row per signal: kind (`report`, `test`, `build`), value, weight, source and time. |
 | `outcomes` | A view, not a table. It computes quality and the used pair per suggestion. See [recommendation.md](recommendation.md#quality-and-success). |
 | `usage_scopes` | One watermark per transcript scope. See below. |
+| `failures` | Parse and hook failures with kind, event, timestamp, session id and turn key. No transcript text or error messages. |
 
 ### Migrations
 
@@ -198,6 +201,7 @@ spatz keeps one SQLite file at `~/.spatz/spatz.db`. SQLite runs in WAL mode with
 | 2 | Table `usage_scopes` |
 | 3 | Nullable routing and attribution fields. A unique index prevents duplicate direct signals per turn. |
 | 4 | English difficulty values, probability keys and pooling reasons. Row counts and outcomes stay unchanged. |
+| 5 | Nullable `suggestions.fallback_reason` and the `failures` table. Existing rows and outcomes stay unchanged. |
 
 `SCHEMA_V3` is the third entry in `MIGRATIONS`.
 `SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.
@@ -210,6 +214,31 @@ Ranking entries contain no difficulty field. The migration preserves them and al
 Store reads and writes accept the old values. Classification and recommendation also accept legacy difficulty inputs.
 Stats group old and new spellings into the same cell, including `stats --by scope`.
 English probability keys take precedence when both spellings exist.
+
+`SCHEMA_V5` is an array of single SQL statements in `MIGRATIONS`.
+The existing migration transaction covers both statements and the version update.
+If either statement fails, SQLite rolls back the entire migration.
+
+### Failure recording
+
+If no assistant message has a usable timestamp for the prompt id, Claude `Stop` counts a parse failure.
+`SubagentStop` checks the subagent transcript in the same way.
+If the rollout has no matching turn context with a model, Codex `Stop` counts a parse failure.
+Missing files, unreadable files and parser exceptions also count as parse failures.
+Transcript refreshes after delayed links use the same counters.
+These checks do not change suggestion windows or signal attribution.
+
+The `failures` table rejects duplicates for the same kind, event, session and turn key.
+For subagent parsing, the turn key is the agent id.
+For malformed hooks without usable ids, each failure adds a row.
+Hooks still swallow errors and exit successfully. If SQLite cannot record a failure, the hook continues without a counter.
+
+If the CLI fails to start, plugin launchers cannot use SQLite.
+For each failed hook invocation, the outer launcher appends `1` and a newline to `$HOME/.spatz/launcher-failures`.
+A nested launcher does not append another marker. The launcher preserves stdin, stdout and the exit code.
+The marker contains no hook input or error text. Failed non-hook commands keep their existing stderr and exit behavior.
+The API counts markers for `spatz stats` without consuming them.
+See [configuration.md](configuration.md#launcher-failures) for retention and write failures.
 
 ### Direct attribution
 

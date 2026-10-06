@@ -249,6 +249,7 @@ describe("suggest", () => {
 			explored: false,
 			control: false,
 			fallback_used: false,
+			fallback_reason: null,
 			is_test: false,
 			last_event_at: T0,
 			closed_at: null,
@@ -1326,6 +1327,8 @@ describe("stats", () => {
 			coverage: 0,
 			learned_success: null,
 			control_success: null,
+			fallbacks: {},
+			failures: { parse: 0, hook: 0, launcher: 0 },
 		};
 		const seen: unknown[] = [];
 		const s = setup();
@@ -1420,6 +1423,8 @@ describe("direct mod attribution", () => {
 						coverage: 0,
 						learned_success: null,
 						control_success: null,
+						fallbacks: {},
+						failures: { parse: 0, hook: 0, launcher: 0 },
 					};
 				},
 			},
@@ -2040,4 +2045,94 @@ test("missing efforts from mod usage, Claude hooks and Codex hooks use the avail
 	} finally {
 		db.close();
 	}
+});
+
+describe("failure diagnostics", () => {
+	test("stores the classification fallback reason and null for Jev", async () => {
+		for (const [jev, reason] of [
+			[null, "no_key"],
+			[fakeJev(), null],
+		] as const) {
+			const s = setup({ jev });
+			const out = await s.api.suggest(suggestInput());
+			expect(s.store.getSuggestion(out.suggestion_id)?.fallback_reason).toBe(
+				reason,
+			);
+		}
+	});
+	test("counts empty Claude, subagent and Codex transcripts and read failures", async () => {
+		const s = setup();
+		const path = join(dir, "empty.jsonl");
+		await Bun.write(path, '{"type":"future_format"}\nnot json');
+		for (const event of ["Stop", "SubagentStop", "codex:Stop"]) {
+			await s.api.handleHook(
+				event,
+				JSON.stringify({
+					session_id: SESSION,
+					prompt_id: PROMPT,
+					turn_id: PROMPT,
+					agent_id: "a1",
+					transcript_path: path,
+					agent_transcript_path: path,
+					hook_event_name: event.replace("codex:", ""),
+				}),
+			);
+		}
+		expect(s.argsOf("recordFailure").map((a) => a[0])).toEqual([
+			"parse",
+			"parse",
+			"parse",
+		]);
+		await s.api.handleHook(
+			"Stop",
+			JSON.stringify({
+				session_id: SESSION,
+				prompt_id: "missing-file",
+				transcript_path: `${path}.missing`,
+				hook_event_name: "Stop",
+			}),
+		);
+		expect(s.argsOf("recordFailure").at(-1)?.[0]).toBe("parse");
+	});
+	test("counts invalid hook inputs and exceptions, but never throws if recording fails", async () => {
+		const s = setup();
+		for (const event of ["Stop", "codex:Stop"]) {
+			await s.api.handleHook(event, "not json");
+			await s.api.handleHook(event, "{}");
+		}
+		expect(s.argsOf("recordFailure").map((a) => a[0])).toEqual([
+			"hook",
+			"hook",
+			"hook",
+			"hook",
+		]);
+		s.store.findOpenSuggestion = () => {
+			throw new Error("private");
+		};
+		await s.api.handleHook("PostToolUse", bash("bun test"));
+		expect(s.argsOf("recordFailure").at(-1)?.[0]).toBe("hook");
+		const broken = setup({
+			openStore: () => {
+				throw new Error("disk full");
+			},
+		});
+		await expect(broken.api.handleHook("Stop", "{}")).resolves.toBeUndefined();
+	});
+	test("stats reads launcher markers without consuming them", async () => {
+		const s = setup();
+		const api = createApi(s.deps, {
+			runStats: async () => ({
+				by_type: [],
+				coverage: 0,
+				learned_success: null,
+				control_success: null,
+				fallbacks: {},
+				failures: { parse: 0, hook: 0, launcher: 0 },
+			}),
+		});
+		expect((await api.stats({})).failures.launcher).toBe(0);
+		await Bun.write(join(dir, ".spatz", "launcher-failures"), "1\n1\n");
+		expect((await api.stats({})).failures.launcher).toBe(2);
+		expect((await api.stats({})).failures.launcher).toBe(2);
+	});
 });

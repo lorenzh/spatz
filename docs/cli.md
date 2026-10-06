@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -324,7 +324,7 @@ spatz stats --by scope
 spatz stats --by scope --type review --json
 ```
 
-The first run needs network access once. See [configuration.md](configuration.md#duckdb-sqlite-extension). The command fails with exit code 1 when the database does not exist yet. The database exists after the first `spatz "<task>"`.
+The first run needs network access once. See [configuration.md](configuration.md#duckdb-sqlite-extension). spatz creates an empty database if none exists. Launcher failures remain visible before the first successful suggestion.
 
 ### Text output
 
@@ -332,9 +332,37 @@ The first run needs network access once. See [configuration.md](configuration.md
 <task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>
   <model>:<effort>  n=<count>  success=<pct>
 coverage: <pct>  learned_success: <pct or ->  control_success: <pct or ->
+fallbacks: <reason>=<count>  ...
+failures: parse=<count>  hook=<count>  launcher=<count>
 ```
 
 There is one block per task type, with one indented line per used pair. `-` means "no data".
+The fallback and failure lines also appear with `--by scope`.
+
+### Fallbacks and failures
+
+`fallbacks` counts non-test suggestions by their stored `fallback_reason`.
+Reasons are `opt_out`, `secret`, `no_key`, `timeout`, `auth`, `rate_limit` and `error`.
+Legacy fallback rows without a stored reason count as `unknown`.
+Without fallbacks, JSON gives `{}` and text gives `fallbacks: -`.
+
+| Counter | Meaning |
+| --- | --- |
+| `failures.parse` | Transcript reads or parsing failed, or no usable messages matched the requested turn or subagent. |
+| `failures.hook` | Hook input was invalid, a required turn id was missing, or recording threw an error. |
+| `failures.launcher` | A plugin launcher could not run a hook command successfully. |
+
+Parse and hook failures count once per kind, event, session and turn.
+Subagent parsing uses the agent id as its turn key.
+Without a session or turn id, each failure counts separately.
+A later successful replay does not erase an earlier failure.
+If the turn still yields usable data, malformed transcript lines do not count separately.
+Failures do not need a linked suggestion. They also include hooks for dry-run suggestions.
+
+Fallback and failure counts are global. Neither `--type` nor `--by scope` filters them.
+Counters start with the first failure recorded by this version. They need no `SPATZ_DEBUG` setting.
+See [how-it-works.md](how-it-works.md#failure-recording) for storage and [configuration.md](configuration.md#launcher-failures) for the launcher file.
+
 
 ### JSON output
 
@@ -354,6 +382,8 @@ There is one block per task type, with one indented line per used pair. `-` mean
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | Success rate of learned picks. spatz compares only cells that have both learned and control outcomes, and weights each cell by its count. |
 | `control_success` | number or null | Success rate of the control group in the same cells. |
+| `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
+| `failures` | object | Global `parse`, `hook` and `launcher` counts. Each defaults to zero. |
 
 ### Example
 
@@ -362,11 +392,13 @@ $ spatz stats
 other  n=1  adoption=100%  input_tokens=0  output_tokens=0
   anthropic/claude-sonnet-5.5:medium  n=1  success=100%
 coverage: 14%  learned_success: -  control_success: -
+fallbacks: opt_out=7
+failures: parse=0  hook=0  launcher=0
 ```
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0}],"coverage":0.14285714285714285,"learned_success":null,"control_success":null,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes
@@ -374,7 +406,7 @@ $ spatz stats --json
 | Code | Meaning | Examples |
 | --- | --- | --- |
 | 0 | Success. `spatz hook` always returns 0. | |
-| 1 | Runtime error. spatz prints `spatz: <message>` to stderr. | Unknown effort in `--models`. No usable candidate in `--models`. Invalid `--effort` in `report`. Unknown `suggestion_id`. Database missing for `stats`. DuckDB extension download failed. |
+| 1 | Runtime error. spatz prints `spatz: <message>` to stderr. | Unknown effort in `--models`. No usable candidate in `--models`. Invalid `--effort` in `report`. Unknown `suggestion_id`. DuckDB extension download failed. |
 | 2 | Usage error. spatz prints the message and the usage text to stderr. | No candidate source. Invalid `--family` or no family matches. Non-string `models` default. Missing task, `<suggestion_id>`, `--model`, `--effort` or `--result`. `--result` not `pass`, `partial` or `fail`. `--rounds` not a non-negative integer. Invalid `--type`. Unknown flag. |
 
 An invalid effort gives code 1 in `--models` and in `report --effort`, because the core checks it. An invalid `--result` gives code 2, because the CLI checks it.

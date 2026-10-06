@@ -729,3 +729,51 @@ test("none and ultra survive CLI validation, storage, reports and stats", async 
 		);
 	}
 });
+
+test("stats exposes stored fallback reasons and failures from real hook processes", async () => {
+	const before = JSON.parse(
+		(await spatz(["stats", "--json"])).stdout,
+	) as StatsReport;
+	const suggestion = JSON.parse(
+		(await spatz([TASK, "--models", MODELS, "--json"])).stdout,
+	) as Suggestion;
+	const db = new Database(dbPath, { readonly: true });
+	try {
+		expect(
+			db
+				.query("SELECT fallback_reason FROM suggestions WHERE id = ?")
+				.get(suggestion.suggestion_id),
+		).toEqual({ fallback_reason: "opt_out" });
+	} finally {
+		db.close();
+	}
+	const path = join(home, "unknown-format.jsonl");
+	await Bun.write(path, '{"type":"future_format"}');
+	const stop = JSON.stringify({
+		session_id: "diagnostic-session",
+		prompt_id: "diagnostic-turn",
+		transcript_path: path,
+		hook_event_name: "Stop",
+	});
+	for (let i = 0; i < 2; i++)
+		expect((await spatz(["hook", "Stop"], stop)).code).toBe(0);
+	expect((await spatz(["hook", "Stop"], "not json")).code).toBe(0);
+	await Bun.write(join(home, ".spatz/launcher-failures"), "1\n1\n");
+	const result = await spatz(["stats", "--json"]);
+	expect(result.code).toBe(0);
+	const report = JSON.parse(result.stdout) as StatsReport;
+	expect(report.fallbacks.opt_out).toBe((before.fallbacks.opt_out ?? 0) + 1);
+	expect(report.failures).toEqual({
+		parse: before.failures.parse + 1,
+		hook: before.failures.hook + 1,
+		launcher: 2,
+	});
+	const text = await spatz(["stats", "--by", "scope"]);
+	expect(text.code).toBe(0);
+	expect(text.stdout).toContain(
+		`fallbacks: opt_out=${report.fallbacks.opt_out}`,
+	);
+	expect(text.stdout).toContain(
+		`failures: parse=${report.failures.parse}  hook=${report.failures.hook}  launcher=2`,
+	);
+});

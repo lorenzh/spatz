@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pluginNames, syncPluginAssets } from "./plugin-assets.ts";
@@ -133,3 +133,51 @@ test("plugin asset sync rejects invalid versions before writing launchers", asyn
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+test.skipIf(process.platform === "win32")(
+	"launcher failures survive swallowed stderr, including nested launchers",
+	async () => {
+		const home = await mkdtemp(join(tmpdir(), "spatz-launcher-failures-"));
+		try {
+			const bin = join(home, "bin");
+			await mkdir(bin);
+			await symlink("/bin/mkdir", join(bin, "mkdir"));
+			const launcher = resolve("packages/claude-hooks/bin/spatz");
+			const run = async () => {
+				const proc = Bun.spawn([launcher, "hook", "Stop"], {
+					env: { HOME: home, PATH: bin, SPATZ_LAUNCHER: "" },
+					stdin: new Blob(["input\n"]),
+					stdout: "pipe",
+					stderr: "ignore",
+				});
+				const stdout = await new Response(proc.stdout).text();
+				return { code: await proc.exited, stdout };
+			};
+			expect(await run()).toEqual({ code: 1, stdout: "" });
+			expect(
+				await Bun.file(join(home, ".spatz/launcher-failures")).text(),
+			).toBe("1\n");
+			await Bun.write(
+				join(bin, "bunx"),
+				'#!/bin/sh\nread -r input\nprintf "%s" "$input"\nexit 7\n',
+			);
+			await chmod(join(bin, "bunx"), 0o755);
+			await symlink(launcher, join(bin, "spatz"));
+			expect(await run()).toEqual({ code: 7, stdout: "input" });
+			expect(
+				await Bun.file(join(home, ".spatz/launcher-failures")).text(),
+			).toBe("1\n1\n");
+			await Bun.write(join(bin, "bunx"), "#!/bin/sh\nexit 0\n");
+			expect(await run()).toEqual({ code: 0, stdout: "" });
+			expect(
+				await Bun.file(join(home, ".spatz/launcher-failures")).text(),
+			).toBe("1\n1\n");
+			await rm(join(home, ".spatz"), { recursive: true });
+			await Bun.write(join(home, ".spatz"), "not a directory");
+			await Bun.write(join(bin, "bunx"), "#!/bin/sh\nexit 7\n");
+			expect((await run()).code).toBe(7);
+		} finally {
+			await rm(home, { recursive: true, force: true });
+		}
+	},
+);

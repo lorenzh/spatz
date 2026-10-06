@@ -62,6 +62,18 @@ export interface ApiInternals {
 	runStats?: (options: StatsOptions) => Promise<StatsReport>;
 }
 
+/** Missing, unreadable or malformed transcripts count as an empty parse. */
+async function readTranscript<T>(
+	path: string,
+	parse: (text: string) => T,
+): Promise<T | null> {
+	try {
+		return parse(await Bun.file(path).text());
+	} catch {
+		return null;
+	}
+}
+
 const NO_TOKENS = {
 	input_tokens: 0,
 	output_tokens: 0,
@@ -176,7 +188,16 @@ export function createApi(
 			fields: ScopeFields,
 		) => {
 			const timed = messages.filter((m) => Number.isFinite(m.at));
-			if (timed.length === 0) return;
+			if (timed.length === 0) {
+				store.recordFailure(
+					"parse",
+					fields.source === "subagent" ? "SubagentStop" : "Stop",
+					now,
+					input.session_id,
+					fields.scope_key,
+				);
+				return;
+			}
 			const times = timed.map((m) => m.at);
 			store.rewriteScope(
 				{
@@ -262,17 +283,15 @@ export function createApi(
 							const path = sub
 								? `${input.transcript_path.replace(/\.jsonl$/, "")}/subagents/agent-${scope.scope_key}.jsonl`
 								: input.transcript_path;
-							const text = await Bun.file(path)
-								.text()
-								.catch(() => null);
-							if (text === null) continue;
-							writeWindowed(
-								store,
+							const messages = await readTranscript(path, (text) =>
 								sub
 									? subagentMessages(text)
 									: mainTurnMessages(text, scope.scope_key),
-								{ ...scope, is_sidechain: sub },
 							);
+							writeWindowed(store, messages ?? [], {
+								...scope,
+								is_sidechain: sub,
+							});
 						}
 						return;
 					}
@@ -282,13 +301,12 @@ export function createApi(
 				}
 				case "Stop": {
 					const promptId = input.prompt_id;
-					if (!promptId) return;
+					if (!promptId) throw new Error("missing prompt id");
 					return writeWindowed(
 						store,
-						mainTurnMessages(
-							await Bun.file(input.transcript_path).text(),
-							promptId,
-						),
+						(await readTranscript(input.transcript_path, (text) =>
+							mainTurnMessages(text, promptId),
+						)) ?? [],
 						{
 							source: "transcript",
 							scope_key: promptId,
@@ -300,9 +318,10 @@ export function createApi(
 				case "SubagentStop":
 					return writeWindowed(
 						store,
-						subagentMessages(
-							await Bun.file(input.agent_transcript_path).text(),
-						),
+						(await readTranscript(
+							input.agent_transcript_path,
+							subagentMessages,
+						)) ?? [],
 						{
 							source: "subagent",
 							scope_key: input.agent_id,
@@ -343,12 +362,20 @@ export function createApi(
 					);
 					for (const scope of store.usageScopes(shrunk)) {
 						if (scope.source !== "transcript") continue;
-						const text = await Bun.file(input.transcript_path)
-							.text()
-							.catch(() => null);
-						if (text === null) continue;
-						const rollout = parseCodexRollout(text, scope.scope_key);
-						if (!rollout) continue;
+						const rollout = await readTranscript(
+							input.transcript_path,
+							(text) => parseCodexRollout(text, scope.scope_key),
+						);
+						if (!rollout) {
+							store.recordFailure(
+								"parse",
+								"codex:Stop",
+								now,
+								input.session_id,
+								scope.scope_key,
+							);
+							continue;
+						}
 						store.rewriteScope(
 							{
 								session_id: input.session_id,
@@ -381,11 +408,20 @@ export function createApi(
 				}
 				return;
 			}
-			if (input.hook_event_name !== "Stop" || !input.turn_id) return;
+			if (input.hook_event_name !== "Stop") return;
+			if (!input.turn_id) throw new Error("missing turn id");
 			const turnId = input.turn_id;
-			const text = await Bun.file(input.transcript_path).text();
-			const rollout = parseCodexRollout(text, turnId);
+			const rollout = await readTranscript(input.transcript_path, (text) =>
+				parseCodexRollout(text, turnId),
+			);
 			if (!rollout) {
+				store.recordFailure(
+					"parse",
+					"codex:Stop",
+					now,
+					input.session_id,
+					turnId,
+				);
 				debugHook(
 					"Codex rollout has no matching turn context; check the rollout format.",
 				);
@@ -557,6 +593,7 @@ export function createApi(
 					explored: d.explored,
 					control: d.control,
 					fallback_used: c.fallback_used,
+					fallback_reason: c.fallback_reason,
 					is_test: dryRun,
 					last_event_at: now,
 					closed_at: null,
@@ -716,16 +753,40 @@ export function createApi(
 			try {
 				if (_event.startsWith("codex:")) {
 					const input = JSON.parse(stdin) as CodexHookInput;
-					if (input && typeof input.hook_event_name === "string")
-						await onCodexHook(input, await getConfig());
+					if (!input || typeof input.hook_event_name !== "string")
+						throw new Error("invalid hook input");
+					await onCodexHook(input, await getConfig());
 				} else {
 					const input = parseHookInput(stdin);
-					if (input) await onHook(input, await getConfig());
+					if (!input) throw new Error("invalid hook input");
+					await onHook(input, await getConfig());
 				}
 			} catch {
 				debugHook(
 					"Recording failed; check hook input, transcript access and database permissions.",
 				);
+				// Recording must also work when config loading failed. Never block a hook on diagnostics.
+				try {
+					const input = parseHookInput(stdin);
+					const session = input?.session_id;
+					const turn =
+						input?.hook_event_name === "SubagentStop"
+							? input.agent_id
+							: (input?.prompt_id ??
+								(input as unknown as CodexHookInput)?.turn_id);
+					const store = deps.openStore(deps.dbPath);
+					try {
+						store.recordFailure(
+							"hook",
+							_event,
+							deps.clock.now(),
+							typeof session === "string" ? session : null,
+							typeof turn === "string" ? turn : null,
+						);
+					} finally {
+						store.dispose();
+					}
+				} catch {}
 			}
 		},
 
@@ -736,7 +797,7 @@ export function createApi(
 			await withStore(() => {});
 			const runStats =
 				internals.runStats ?? (await import("../report/index.ts")).runStats;
-			return runStats({
+			const report = await runStats({
 				dbPath: deps.dbPath,
 				extensionDir: deps.duckdbExtensionDir,
 				...(type && { type }),
@@ -744,6 +805,19 @@ export function createApi(
 				successQuality: cfg.tuning.successQuality,
 				noneOnlyModels,
 			});
+			// Fixed markers survive hook wrappers that discard stderr; do not consume them.
+			const launcher = await Bun.file(
+				join(deps.homeDir, ".spatz", "launcher-failures"),
+			)
+				.text()
+				.catch((error) => {
+					if (error.code === "ENOENT") return "";
+					throw error;
+				});
+			report.failures.launcher = launcher
+				.split("\n")
+				.filter((line) => line === "1").length;
+			return report;
 		},
 	};
 }

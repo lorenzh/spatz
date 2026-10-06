@@ -72,6 +72,8 @@ const statsReport: StatsReport = {
 	coverage: 0.8,
 	learned_success: 0.7,
 	control_success: null,
+	fallbacks: {},
+	failures: { parse: 0, hook: 0, launcher: 0 },
 };
 
 function fakeIO(stdin: () => Promise<string> = async () => "{}") {
@@ -668,6 +670,8 @@ describe("stats", () => {
 				"  openai/gpt-6-sol:medium  n=3  success=67%",
 				"  anthropic/claude-opus-5.5:-  n=1  success=100%",
 				"coverage: 80%  learned_success: 70%  control_success: -",
+				"fallbacks: -",
+				"failures: parse=0  hook=0  launcher=0",
 			].join("\n"),
 		);
 	});
@@ -680,11 +684,13 @@ describe("stats", () => {
 				coverage: 0,
 				learned_success: null,
 				control_success: 0.5,
+				fallbacks: {},
+				failures: { parse: 0, hook: 0, launcher: 0 },
 			}),
 		});
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
-			"coverage: 0%  learned_success: -  control_success: 50%",
+			"coverage: 0%  learned_success: -  control_success: 50%\nfallbacks: -\nfailures: parse=0  hook=0  launcher=0",
 		);
 	});
 
@@ -932,3 +938,30 @@ describe("mod CLI", () => {
 		expect(calls).toEqual([]);
 	});
 });
+
+test.each(["type", "scope", "json"])(
+	"stats shows diagnostics with %p",
+	async (mode) => {
+		const flags =
+			mode === "scope" ? ["--by", "scope"] : mode === "json" ? ["--json"] : [];
+		const { io, stdout } = fakeIO();
+		const { api } = fakeApi({
+			stats: async () => ({
+				...statsReport,
+				...(flags.includes("scope") ? { by_scope: [] } : {}),
+				fallbacks: { timeout: 2, unknown: 1 },
+				failures: { parse: 3, hook: 4, launcher: 5 },
+			}),
+		});
+		expect(await main(["stats", ...flags], io, api)).toBe(0);
+		if (flags.includes("--json")) {
+			expect(JSON.parse(stdout())).toMatchObject({
+				fallbacks: { timeout: 2, unknown: 1 },
+				failures: { parse: 3, hook: 4, launcher: 5 },
+			});
+		} else {
+			expect(stdout()).toContain("fallbacks: timeout=2  unknown=1");
+			expect(stdout()).toContain("failures: parse=3  hook=4  launcher=5");
+		}
+	},
+);

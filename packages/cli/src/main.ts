@@ -60,12 +60,21 @@ function formatOutcome(id: string, o: Outcome | null): string {
 }
 
 function formatStats(r: StatsReport): string {
+	const diagnostics = [
+		`fallbacks: ${
+			Object.entries(r.fallbacks)
+				.map(([reason, n]) => `${reason}=${n}`)
+				.join("  ") || "-"
+		}`,
+		`failures: parse=${r.failures.parse}  hook=${r.failures.hook}  launcher=${r.failures.launcher}`,
+	];
 	if (r.by_scope)
 		return r.by_scope
 			.map(
 				(s) =>
 					`${s.scope ?? "unscoped"}  n=${s.n}  success=${s.success_rate === null ? "-" : pct(s.success_rate)}  input_tokens=${s.input_tokens}  output_tokens=${s.output_tokens}  cache_read_tokens=${s.cache_read_tokens}  cache_creation_tokens=${s.cache_creation_tokens}  cache_read_share=${pct(s.cache_read_share)}`,
 			)
+			.concat(diagnostics)
 			.join("\n");
 	const lines = r.by_type.flatMap((t) => [
 		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}`,
@@ -78,7 +87,7 @@ function formatStats(r: StatsReport): string {
 	lines.push(
 		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  control_success: ${opt(r.control_success)}`,
 	);
-	return lines.join("\n");
+	return [...lines, ...diagnostics].join("\n");
 }
 
 function parse(argv: string[]) {

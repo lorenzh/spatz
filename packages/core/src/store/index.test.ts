@@ -60,6 +60,7 @@ function suggestion(over: Partial<SuggestionRecord> = {}): SuggestionRecord {
 		explored: false,
 		control: false,
 		fallback_used: true,
+		fallback_reason: null,
 		is_test: false,
 		last_event_at: 1000,
 		closed_at: null,
@@ -142,7 +143,7 @@ describe("schema", () => {
 		const migrated = new Database(path);
 		try {
 			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: 4,
+				user_version: SCHEMA_VERSION,
 			});
 			expect(
 				migrated.query("SELECT difficulty FROM suggestions ORDER BY id").all(),
@@ -235,7 +236,7 @@ describe("schema", () => {
 		}
 	});
 
-	test("populated v2 migrates to v4 without losing rows or outcomes", async () => {
+	test("populated v2 migrates to the current schema without losing rows or outcomes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "spatz-v2-"));
 		dirs.push(dir);
 		const path = join(dir, "v2.db");
@@ -257,7 +258,7 @@ describe("schema", () => {
 		const migrated = openDatabase(path);
 		try {
 			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: 4,
+				user_version: SCHEMA_VERSION,
 			});
 			for (const [i, table] of tables.entries()) {
 				expect(migrated.query(`SELECT * FROM ${table}`).all()).toMatchObject(
@@ -279,7 +280,7 @@ describe("schema", () => {
 			migrated.close();
 		}
 	});
-	test("creates tables, the outcomes view and user_version 4", () => {
+	test("creates tables, the outcomes view and current user_version", () => {
 		const path = tempDb();
 		open(path).dispose();
 		stores.length = 0;
@@ -302,11 +303,11 @@ describe("schema", () => {
 				{ name: "usage_scopes", type: "table" },
 			]),
 		);
-		expect(SCHEMA_VERSION).toBe(4);
-		expect(version?.user_version).toBe(4);
+		expect(SCHEMA_VERSION).toBe(5);
+		expect(version?.user_version).toBe(SCHEMA_VERSION);
 	});
 
-	test("a version 1 db migrates to version 4 and keeps its data", async () => {
+	test("a version 1 db migrates to the current version and keeps its data", async () => {
 		const path = join(mkdtempSync(join(tmpdir(), "spatz-v1-")), "v1.db");
 		dirs.push(join(path, ".."));
 		const db = new Database(path, { create: true });
@@ -327,7 +328,7 @@ describe("schema", () => {
 			.get();
 		check.close();
 		expect(table).toEqual({ name: "usage_scopes" });
-		expect(version?.user_version).toBe(4);
+		expect(version?.user_version).toBe(SCHEMA_VERSION);
 	});
 
 	test("reopening keeps data and does not re-migrate", () => {
@@ -986,4 +987,87 @@ test("usage scopes select the highest ranked effort, not lexical maximum", () =>
 		expect(store.usageScopes(["s1"])[0]?.effort).toBe(i === 4 ? "max" : effort);
 	}
 	expect(store.usageScopes([])).toEqual([]);
+});
+
+describe("v5 diagnostics", () => {
+	test("migrates a populated v4 fixture without losing rows or outcomes", async () => {
+		const path = join(mkdtempSync(join(tmpdir(), "spatz-v4-")), "v4.db");
+		dirs.push(join(path, ".."));
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v4.sql")).text());
+		const tables = [
+			"suggestions",
+			"usages",
+			"signals",
+			"usage_scopes",
+			"outcomes",
+		];
+		const before = tables.map((t) => db.query(`SELECT * FROM ${t}`).all());
+		db.close();
+		const migrated = openDatabase(path);
+		try {
+			expect(migrated.query("PRAGMA user_version").get()).toEqual({
+				user_version: 5,
+			});
+			for (const [i, table] of tables.entries()) {
+				const rows = migrated.query(`SELECT * FROM ${table}`).all();
+				expect(rows).toHaveLength(before[i]?.length ?? 0);
+				expect(rows).toMatchObject(before[i] as object[]);
+			}
+			expect(
+				migrated.query("SELECT fallback_reason FROM suggestions").all(),
+			).toEqual([
+				{ fallback_reason: null },
+				{ fallback_reason: null },
+				{ fallback_reason: null },
+			]);
+		} finally {
+			migrated.close();
+		}
+		const store = open(path);
+		store.insertSuggestion(
+			suggestion({ id: "new", fallback_reason: "timeout" }),
+		);
+		expect(store.getSuggestion("new")?.fallback_reason).toBe("timeout");
+		store.recordFailure("parse", "Stop", 10, "session", "turn");
+		store.recordFailure("parse", "Stop", 11, "session", "turn");
+		store.recordFailure("parse", "Stop", 12, "other-session", "turn");
+		store.recordFailure("hook", "Stop", 13, null, null);
+		store.recordFailure("hook", "Stop", 14, null, null);
+		const check = new Database(path);
+		expect(
+			check
+				.query(
+					"SELECT kind, COUNT(*) AS n FROM failures GROUP BY kind ORDER BY kind",
+				)
+				.all(),
+		).toEqual([
+			{ kind: "hook", n: 2 },
+			{ kind: "parse", n: 2 },
+		]);
+		check.close();
+	});
+	test("rolls back every v5 statement and its version when a later statement fails", async () => {
+		const path = join(mkdtempSync(join(tmpdir(), "spatz-v4-")), "v4.db");
+		dirs.push(join(path, ".."));
+		const db = new Database(path);
+		db.run(await Bun.file(join(import.meta.dir, "fixtures/v4.sql")).text());
+		db.run("CREATE TABLE failures (conflict TEXT)");
+		db.close();
+		expect(() => openDatabase(path)).toThrow();
+		const check = new Database(path);
+		expect(check.query("PRAGMA user_version").get()).toEqual({
+			user_version: 4,
+		});
+		expect(
+			check
+				.query<{ name: string }, []>("PRAGMA table_info(suggestions)")
+				.all()
+				.some((c) => c.name === "fallback_reason"),
+		).toBe(false);
+		expect(check.query("SELECT COUNT(*) AS n FROM suggestions").get()).toEqual({
+			n: 3,
+		});
+		check.close();
+	});
 });

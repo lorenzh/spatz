@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts, and how to preinstall the DuckDB sqlite extension.
 tags: [configuration, reference, spatz]
-keywords: [models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
+keywords: [failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, duckdb, extension, offline, timeout, threshold, tuning, SPATZ_DEBUG, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -29,7 +29,8 @@ The test suites also read `SPATZ_DUCKDB_EXTENSION_DIR`. The CLI does not read it
 
 | Path | Format | Written by | Purpose |
 | --- | --- | --- | --- |
-| `~/.spatz/spatz.db` | SQLite, WAL mode | spatz | All suggestions, signals and usage. |
+| `~/.spatz/spatz.db` | SQLite, WAL mode | spatz | Suggestions, signals, usage and parse or hook failures. |
+| `~/.spatz/launcher-failures` | One `1` marker per line | Plugin launchers | Failed hook launches for `spatz stats`. |
 | `~/.spatz/harness-models.json` | JSON | spatz | Cache of the harness model catalog. |
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
 | `~/.spatz/duckdb-extensions/` | DuckDB extension directory | `spatz stats` | The DuckDB sqlite extension. |
@@ -44,9 +45,21 @@ spatz creates `~/.spatz` when it opens the database. If an optional file is miss
 
 bun:sqlite writes the database in WAL mode with a busy timeout of 5000 ms. So several Claude Code sessions can write at the same time. spatz migrates the schema when it opens the file. `PRAGMA user_version` holds the schema version.
 
-The tables are `suggestions`, `signals`, `usages` and `usage_scopes`. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
+The tables are `suggestions`, `signals`, `usages`, `usage_scopes` and `failures`. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
 
 To delete all learned data, delete `~/.spatz/spatz.db` and the files `spatz.db-wal` and `spatz.db-shm` next to it.
+
+### Launcher failures
+
+If a hook command exits unsuccessfully, the plugin launcher appends a fixed marker to `$HOME/.spatz/launcher-failures`.
+This covers missing runtimes and failed package downloads. Hook wrappers can discard stderr without hiding the count.
+The launcher needs a writable `$HOME/.spatz` directory. If the directory is missing, the launcher creates it with `mkdir`.
+New marker files use owner-only permissions. If the write fails, the launcher preserves the original exit code and cannot count that failure.
+
+`spatz stats` reads the file on each run. It does not clear the file or need `SPATZ_DEBUG=1`.
+The file grows by two bytes per failed invocation and has no automatic rotation.
+To reset only the launcher counter, delete this file while hooks are idle.
+Deleting the database resets parse and hook counters but leaves launcher markers intact.
 
 ### OpenRouter cache: ~/.spatz/openrouter-models.json
 
