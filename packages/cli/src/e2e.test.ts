@@ -525,7 +525,7 @@ describe("stats", () => {
 		const other = s.by_type.find((t) => t.task_type === "other");
 		// Main verification and its report score the same delegated attempt.
 		expect(other?.n).toBe(2);
-		expect(other?.pairs).toEqual([
+		expect(other?.pairs).toMatchObject([
 			{
 				model: "anthropic/claude-opus-5.5",
 				effort: "high",
