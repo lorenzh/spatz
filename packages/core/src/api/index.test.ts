@@ -20,6 +20,38 @@ import codexExec from "../signals/fixtures/codex-exec-identity.json";
 import { openStore, SCHEMA_VERSION } from "../store/index.ts";
 import { createApi } from "./index.ts";
 
+const lvc = {
+	itt: {
+		decisions: 0,
+		outcomes: 0,
+		coverage: null,
+		rate: null,
+		control_rate: null,
+		diff: null,
+		ci95: null,
+	},
+	qualified: {
+		decisions: 0,
+		outcomes: 0,
+		coverage: null,
+		rate: null,
+		control_rate: null,
+		diff: null,
+		ci95: null,
+	},
+	fallback: {
+		decisions: 0,
+		outcomes: 0,
+		coverage: null,
+		rate: null,
+		control_rate: null,
+		diff: null,
+		ci95: null,
+	},
+	control: { decisions: 0, outcomes: 0 },
+	cells: [],
+};
+
 const OPENROUTER_FIXTURE = join(
 	import.meta.dir,
 	"../catalog/fixtures/openrouter-models.json",
@@ -212,7 +244,9 @@ describe("suggest", () => {
 			strategy: "jev-choice",
 			is_test: false,
 		});
-		expect(s.fetched).toEqual(["https://openrouter.ai/api/v1/models"]);
+		expect(s.fetched.filter(notSnapshot)).toEqual([
+			"https://openrouter.ai/api/v1/models",
+		]);
 		expect(s.draws()).toBe(1);
 		expect(jev.requests).toHaveLength(1);
 		expect(jev.requests[0]?.state).toBe(task);
@@ -273,10 +307,10 @@ describe("suggest", () => {
 		await s.api.suggest(suggestInput());
 		s.setNow(T0 + 24 * HOUR - 1);
 		await s.api.suggest(suggestInput());
-		expect(s.fetched).toHaveLength(1);
+		expect(s.fetched.filter(notSnapshot)).toHaveLength(1);
 		s.setNow(T0 + 24 * HOUR);
 		await s.api.suggest(suggestInput());
-		expect(s.fetched).toHaveLength(2);
+		expect(s.fetched.filter(notSnapshot)).toHaveLength(2);
 	});
 
 	test("without Jev: fallback_used and strategy rules (most expensive pair)", async () => {
@@ -757,6 +791,7 @@ describe("stats", () => {
 			fallback_success: null,
 			control_success: null,
 			coverage_by_source: [],
+			learned_vs_control: lvc,
 			dispatches: 0,
 			routed_by_mod: 0,
 			swapped: 0,
@@ -857,6 +892,7 @@ describe("direct mod attribution", () => {
 						fallback_success: null,
 						control_success: null,
 						coverage_by_source: [],
+						learned_vs_control: lvc,
 						dispatches: 0,
 						routed_by_mod: 0,
 						swapped: 0,
@@ -1335,9 +1371,41 @@ test("harness catalog is used only at preset precedence", async () => {
 		models: "gpt-explicit:high",
 		dryRun: true,
 	});
-	expect(urls.some((url) => url.includes("raw.githubusercontent.com"))).toBe(
+	expect(urls.some((url) => url.endsWith("/catalog/harness-models.json"))).toBe(
 		false,
 	);
+});
+
+const notSnapshot = (url: string) =>
+	!/\/catalog\/[^/]+\/[^/]+\.json$/.test(url);
+
+test("a bench snapshot changes the estimate and shows n_prior and n_bench, not n", async () => {
+	const snapshot = {
+		schema: "spatz-bench-snapshot/1",
+		model: "anthropic/claude-opus-5.5",
+		model_version: null,
+		efforts: {
+			high: { "code.bugfix": { easy: { n: 5, successes: 5 } } },
+		},
+	};
+	const s = setup({
+		jev: fakeJev(),
+		fetch: async (url) =>
+			url.endsWith("/catalog/anthropic/claude-opus-5.5.json")
+				? Response.json(snapshot)
+				: notSnapshot(url)
+					? new Response(Bun.file(OPENROUTER_FIXTURE))
+					: new Response("", { status: 404 }),
+	});
+	const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
+	const top = out.ranking.find((r) => r.model === snapshot.model);
+	expect(top).toMatchObject({ n: 0, n_prior: 2, n_bench: 5 });
+	expect(top?.estimate).toBeCloseTo(0.75);
+	expect(
+		await Bun.file(
+			join(dir, ".spatz/catalog/anthropic/claude-opus-5.5.json"),
+		).exists(),
+	).toBe(true);
 });
 
 test("SPATZ_NO_NETWORK skips both catalogs and Jev, including injected config", async () => {
@@ -1359,6 +1427,7 @@ test("preset catalogs start in parallel and the mod receives the full resolved l
 	const { api } = setup({
 		env: { CLAUDECODE: "1" },
 		fetch: async (url) => {
+			if (!notSnapshot(url)) return new Response("", { status: 404 });
 			started.push(url);
 			await new Promise<void>((resolve) => {
 				releases.push(resolve);
@@ -1569,6 +1638,7 @@ describe("failure diagnostics", () => {
 				fallback_success: null,
 				control_success: null,
 				coverage_by_source: [],
+				learned_vs_control: lvc,
 				dispatches: 0,
 				routed_by_mod: 0,
 				swapped: 0,

@@ -99,10 +99,18 @@ function formatStats(r: StatsReport): string {
 		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cache_read_tokens=${t.cache_read_tokens}  cache_creation_tokens=${t.cache_creation_tokens}  cost_usd=${t.cost_usd ?? "-"}  incomplete=${t.incomplete}${t.incomplete ? " (excluded from cost; token totals may be lower bounds)" : ""}`,
 		...t.pairs.map(
 			(p) =>
-				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}`,
+				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}  cost_per_success=${usd(p.cost_usd_per_success)}  tokens_per_success=${p.tokens_per_success === null ? "-" : Math.round(p.tokens_per_success)}  cost_per_attempt=${usd(p.cost_usd_per_attempt)}${p.cost_incomplete_share ? `  cost_incomplete=${pct(p.cost_incomplete_share)}` : ""}`,
 		),
 	]);
 	const opt = (x: number | null) => (x === null ? "-" : pct(x));
+	for (const [name, a] of Object.entries({
+		itt: r.learned_vs_control.itt,
+		qualified: r.learned_vs_control.qualified,
+		fallback: r.learned_vs_control.fallback,
+	}))
+		lines.push(
+			`${name}: learned=${opt(a.rate)}  control=${opt(a.control_rate)}  diff=${a.diff === null ? "-" : pct(a.diff)}${a.ci95 ? ` [${pct(a.ci95[0])}, ${pct(a.ci95[1])}]` : ""}  outcomes=${a.outcomes}/${a.decisions}`,
+		);
 	lines.push(
 		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
 	);
@@ -114,6 +122,8 @@ function formatStats(r: StatsReport): string {
 	}
 	return [...lines, ...diagnostics].join("\n");
 }
+
+const usd = (x: number | null) => (x === null ? "-" : `$${x.toFixed(4)}`);
 
 function parse(argv: string[]) {
 	try {

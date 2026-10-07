@@ -461,6 +461,20 @@ export function openStore(
 		cellStats(taskType, successQuality = DEFAULT_TUNING.successQuality) {
 			return historyStats(taskType, false, successQuality);
 		},
+		liveModelVersions() {
+			return Object.fromEntries(
+				db
+					.query<{ model: string; model_version: string }, []>(
+						`SELECT model, model_version FROM (
+							SELECT a.model, a.model_version, ROW_NUMBER() OVER (PARTITION BY a.model ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
+							FROM attempts a JOIN suggestions s ON s.id = a.suggestion_id
+							WHERE a.model_version IS NOT NULL AND s.is_test = 0
+						) WHERE rn = 1`,
+					)
+					.all()
+					.map((r) => [r.model, r.model_version]),
+			);
+		},
 		retryStats(taskType, successQuality = DEFAULT_TUNING.successQuality) {
 			return historyStats(taskType, true, successQuality);
 		},

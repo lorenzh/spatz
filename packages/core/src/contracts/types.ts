@@ -228,7 +228,12 @@ export interface RankingEntry {
 	effort: Effort;
 	/** Beta mean of success (1 + successes) / (2 + n). */
 	estimate: number;
+	/** Live first attempts; the only count gates use. */
 	n: number;
+	/** Prior weight from the bench snapshot (min(2, n_eff)); absent without a prior. */
+	n_prior?: number;
+	/** Raw bench runs behind the prior; absent without a prior. */
+	n_bench?: number;
 }
 
 /** Pure result of recommend; no id, no persistence. */
@@ -431,6 +436,16 @@ export interface PairStats {
 	n: number;
 	/** Share of outcomes with quality >= 0.8. */
 	success_rate: number;
+	/** Chain spend (attempts only) of completed chains rooted at this pair with known cost / their successes. null without a success or cost. */
+	cost_usd_per_success: number | null;
+	/** Same for tokens (input + output + cache read + cache creation). */
+	tokens_per_success: number | null;
+	/** Mean cost of one attempt of this pair. null without priced attempts. */
+	cost_usd_per_attempt: number | null;
+	/** Orchestration spend of the counted chains, listed apart from attempt spend. */
+	orchestration_cost_usd: number | null;
+	/** Share of completed chains in `n` with incomplete cost evidence; excluded from the spend. */
+	cost_incomplete_share: number;
 }
 
 export interface TypeStats {
@@ -486,6 +501,39 @@ export interface StatsReport {
 	/** Success rate of learned-fallback picks (best estimate, no pair met the limits) vs control in the same cells. null without data. */
 	fallback_success: number | null;
 	control_success: number | null;
+	learned_vs_control: LearnedVsControl;
+}
+
+/** First-attempt success of an arm against control, weighted per (task_type, difficulty) cell by the arm's outcomes. */
+export interface ArmComparison {
+	/** Routed non-control decisions of the arm, with and without outcome. */
+	decisions: number;
+	outcomes: number;
+	/** outcomes / decisions. null without decisions. */
+	coverage: number | null;
+	rate: number | null;
+	control_rate: number | null;
+	/** rate - control_rate. null when no cell has both. */
+	diff: number | null;
+	/** Bootstrap 95 % interval of diff. null without diff. */
+	ci95: [number, number] | null;
+}
+
+export interface LearnedVsControl {
+	/** All routed non-control decisions by assigned arm: qualified and fallback together. */
+	itt: ArmComparison;
+	/** strategy learned, not explored. */
+	qualified: ArmComparison;
+	/** strategy learned-fallback, not explored. */
+	fallback: ArmComparison;
+	control: { decisions: number; outcomes: number };
+	/** Cell mix: outcomes per cell, learned arms together vs control. */
+	cells: {
+		task_type: TaskType;
+		difficulty: string;
+		learned: number;
+		control: number;
+	}[];
 }
 
 // ---------- Config ----------

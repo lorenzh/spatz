@@ -12,7 +12,6 @@ import type {
 	RoutingScope,
 	StrategyName,
 	TaskType,
-	TypeStats,
 } from "../contracts/types.ts";
 import { openStore } from "../store/index.ts";
 import { runStats } from "./index.ts";
@@ -278,7 +277,7 @@ function signal(id: string, value: number) {
 }
 
 test("empty db: no types, coverage 0, no comparison", async () => {
-	expect(await stats()).toEqual({
+	expect(await stats()).toMatchObject({
 		by_type: [],
 		coverage: 0,
 		learned_success: null,
@@ -314,7 +313,7 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 		successQuality: 0.8,
 		noneOnlyModels: [model],
 	});
-	expect(result.by_type[0]?.pairs).toEqual([
+	expect(result.by_type[0]?.pairs).toMatchObject([
 		{ model, effort: "none", n: 1, success_rate: 1 },
 	]);
 });
@@ -342,10 +341,10 @@ test("stats filters by model_version and keeps old versions visible under their 
 				modelVersion,
 			})
 		).by_type[0]?.pairs;
-	expect(await by("20250101")).toEqual([
+	expect(await by("20250101")).toMatchObject([
 		{ model: "m/a", effort: "low", n: 1, success_rate: 1 },
 	]);
-	expect(await by("20260101")).toEqual([
+	expect(await by("20260101")).toMatchObject([
 		{ model: "m/a", effort: "low", n: 1, success_rate: 0 },
 	]);
 	expect(await by("x'y")).toEqual([]);
@@ -385,7 +384,7 @@ describe("one dataset", () => {
 		report("r1", "m/a", "low", "fail", [7, 3]);
 	});
 
-	const bugfix: TypeStats = {
+	const bugfix = {
 		task_type: "code.bugfix",
 		n: 3,
 		pairs: [
@@ -400,7 +399,7 @@ describe("one dataset", () => {
 		cache_read_tokens: 0,
 		cache_creation_tokens: 0,
 	};
-	const review: TypeStats = {
+	const review = {
 		task_type: "review",
 		n: 1,
 		pairs: [{ model: "m/a", effort: "low", n: 1, success_rate: 0 }],
@@ -414,7 +413,7 @@ describe("one dataset", () => {
 	};
 
 	test("by_type: n, pair success (partial is no success), adoption, tokens", async () => {
-		expect((await stats()).by_type).toEqual([bugfix, review]);
+		expect((await stats()).by_type).toMatchObject([bugfix, review]);
 	});
 
 	test("coverage counts non-test suggestions with an outcome", async () => {
@@ -429,7 +428,7 @@ describe("one dataset", () => {
 
 	test("type option limits by_type", async () => {
 		const r = await stats("review");
-		expect(r.by_type).toEqual([review]);
+		expect(r.by_type).toMatchObject([review]);
 		expect(r.coverage).toBe(4 / 5);
 	});
 });
@@ -437,7 +436,7 @@ describe("one dataset", () => {
 test("only dry-run suggestions: counts nothing", async () => {
 	sug("t1", { is_test: true });
 	report("t1", "m/a", "low", "pass", [1, 1]);
-	expect(await stats()).toEqual({
+	expect(await stats()).toMatchObject({
 		by_type: [],
 		coverage: 0,
 		learned_success: null,
@@ -525,7 +524,7 @@ test("success is quality >= 0.8; pairs and adoption distinguish effort", async (
 	usage("e4", "m/a", "high", [1, 1]);
 	signal("e4", 0.79);
 	const [s] = (await stats()).by_type;
-	expect(s?.pairs).toEqual([
+	expect(s?.pairs).toMatchObject([
 		{ model: "m/a", effort: "high", n: 3, success_rate: 1 / 3 },
 		{ model: "m/a", effort: "low", n: 1, success_rate: 1 },
 	]);
@@ -540,7 +539,7 @@ test("success boundary keeps double precision: 0.79999999 fails, 0.8 passes", as
 	usage("b2", "m/b", "high", [1, 1]);
 	signal("b2", 0.8);
 	const r = await stats();
-	expect(r.by_type[0]?.pairs).toEqual([
+	expect(r.by_type[0]?.pairs).toMatchObject([
 		{ model: "m/a", effort: "low", n: 1, success_rate: 0 },
 		{ model: "m/b", effort: "high", n: 1, success_rate: 1 },
 	]);
@@ -577,7 +576,7 @@ test("learned vs control cells are (task_type, difficulty), not difficulty alone
 test("outcome without usage counts in n but not in pairs or adoption", async () => {
 	sug("h1");
 	signal("h1", 1);
-	expect((await stats()).by_type).toEqual([
+	expect((await stats()).by_type).toMatchObject([
 		{
 			task_type: "code.bugfix",
 			n: 1,
@@ -822,4 +821,152 @@ test("only known subagent estimates count as incomplete; unknown usage retains n
 	} finally {
 		db.close();
 	}
+});
+
+test("pairs show cost and tokens per success; chains without cost evidence are excluded with their share", async () => {
+	for (const [id, res] of [
+		["c1", "pass"],
+		["c2", "fail"],
+		["c3", "pass"],
+		["c4", "pass"],
+	] as const) {
+		sug(id);
+		report(id, "m/a", "low", res, [10, 10]);
+	}
+	const db = new Database(dbPath);
+	for (const [id, cost] of [
+		["c1", 0.1],
+		["c2", 0.3],
+		["c3", 0.2],
+	] as const)
+		db.run(
+			`UPDATE attempt_events SET cost_usd = ${cost}, cost_source = 'priced' WHERE suggestion_id = '${id}' AND kind = 'usage'`,
+		);
+	db.close();
+	const r = await runStats({ dbPath, successQuality: 0.8 });
+	const p = r.by_type[0]?.pairs[0];
+	expect(p?.n).toBe(4);
+	expect(p?.cost_usd_per_success).toBeCloseTo(0.3, 12); // 0.6 / 2
+	expect(p?.tokens_per_success).toBe(30); // 60 tokens of chains with cost / 2
+	expect(p?.cost_incomplete_share).toBeCloseTo(0.25, 12);
+	expect(p?.cost_usd_per_attempt).toBeCloseTo(0.2, 12);
+});
+
+test("zero successes give null cost per success", async () => {
+	sug("f");
+	report("f", "m/a", "low", "fail", [10, 10]);
+	const db = new Database(dbPath);
+	db.run(
+		"UPDATE attempt_events SET cost_usd = 0.5, cost_source = 'priced' WHERE suggestion_id = 'f' AND kind = 'usage'",
+	);
+	db.close();
+	const r = await runStats({ dbPath, successQuality: 0.8 });
+	expect(r.by_type[0]?.pairs[0]?.cost_usd_per_success).toBeNull();
+});
+
+test("learned_vs_control reports ITT, qualified, fallback, coverage and bootstrap intervals", async () => {
+	for (let i = 0; i < 6; i++) {
+		sug(`k${i}`, { control: true });
+		report(`k${i}`, "m/a", "low", i < 5 ? "pass" : "fail");
+		sug(`l${i}`);
+		report(`l${i}`, "m/b", "low", i < 3 ? "pass" : "fail");
+	}
+	sug("fb", { strategy: "learned-fallback" });
+	report("fb", "m/b", "low", "pass");
+	sug("missing"); // routed, no outcome
+	const r = await runStats({ dbPath, successQuality: 0.8 });
+	const l = r.learned_vs_control;
+	expect(l.qualified.rate).toBeCloseTo(3 / 6, 6);
+	expect(l.qualified.control_rate).toBeCloseTo(5 / 6, 6);
+	expect(l.qualified.decisions).toBe(7);
+	expect(l.qualified.outcomes).toBe(6);
+	expect(l.fallback.decisions).toBe(1);
+	expect(l.itt.decisions).toBe(8);
+	expect(l.itt.outcomes).toBe(7);
+	expect(l.itt.coverage).toBeCloseTo(7 / 8, 12);
+	expect(l.itt.diff).toBeCloseTo(
+		(l.itt.rate ?? 0) - (l.itt.control_rate ?? 0),
+		12,
+	);
+	const [lo, hi] = l.itt.ci95 ?? [Number.NaN, Number.NaN];
+	expect(lo).toBeLessThanOrEqual(l.itt.diff ?? 0);
+	expect(hi).toBeGreaterThanOrEqual(l.itt.diff ?? 0);
+	expect(l.control.decisions).toBe(6);
+	expect(l.cells).toEqual([
+		{ task_type: "code.bugfix", difficulty: "easy", learned: 7, control: 6 },
+	]);
+});
+
+function retry(id: string, result: ReportResult, withUsage: boolean) {
+	const a = store.startAttempt({
+		harness: "direct",
+		session_key: `suggestion:${id}`,
+		agent_key: "",
+		suggestion_id: id,
+		key: "second",
+		model: "m/b",
+		effort: "high",
+		at: 11,
+	});
+	if (withUsage)
+		store.recordAttemptEvents([
+			{
+				harness: "direct",
+				session_key: `suggestion:${id}`,
+				agent_key: "",
+				event_id: "usage2",
+				revision: 1,
+				suggestion_id: id,
+				attempt_id: a.id,
+				occurred_at: 12,
+				received_at: 12,
+				kind: "usage",
+				model: "m/b",
+				effort: "high",
+				input_tokens: 1,
+				output_tokens: 1,
+				cache_read_tokens: 0,
+				cache_creation_tokens: 0,
+			},
+		]);
+	store.reportAttempt({
+		suggestion_id: id,
+		model: "m/b",
+		effort: "high",
+		result,
+		at: 20,
+	});
+}
+
+test("ITT keeps retried and explored root decisions; qualified drops explored", async () => {
+	sug("r");
+	report("r", "m/a", "low", "fail");
+	retry("r", "pass", false);
+	sug("x", { explored: true });
+	report("x", "m/a", "low", "pass");
+	sug("k", { control: true });
+	report("k", "m/b", "high", "pass");
+	const l = (await runStats({ dbPath, successQuality: 0.8 }))
+		.learned_vs_control;
+	expect(l.itt.decisions).toBe(2);
+	expect(l.itt.outcomes).toBe(2);
+	expect(l.itt.rate).toBeCloseTo(0.5, 12);
+	expect(l.qualified.decisions).toBe(1);
+	expect(l.qualified.rate).toBe(0);
+});
+
+test("a chain with an attempt lacking usage evidence is excluded from spend", async () => {
+	sug("c");
+	report("c", "m/a", "low", "fail", [10, 10]);
+	const db = new Database(dbPath);
+	db.run(
+		"UPDATE attempt_events SET cost_usd = 0.1, cost_source = 'priced' WHERE suggestion_id = 'c' AND kind = 'usage'",
+	);
+	db.close();
+	retry("c", "pass", false);
+	const p = (
+		await runStats({ dbPath, successQuality: 0.8 })
+	).by_type[0]?.pairs.find((x) => x.model === "m/a");
+	expect(p?.cost_usd_per_success).toBeNull();
+	expect(p?.cost_incomplete_share).toBe(1);
 });

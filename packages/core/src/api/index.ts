@@ -18,6 +18,7 @@ import {
 	labelModelsError,
 	resolveModels,
 } from "../catalog/presets.ts";
+import { loadSnapshot, priorCells } from "../catalog/snapshot.ts";
 import { classify } from "../classify/index.ts";
 import type { AttemptEvent } from "../contracts/attempts.ts";
 import type { CoreDeps, SpatzApi, Store } from "../contracts/deps.ts";
@@ -750,6 +751,14 @@ export function createApi(
 			const catalog = buildCatalog(requested, openRouter, cfg);
 			if (catalog.length === 0)
 				throw new Error("--models: no usable candidate");
+			const snapshots = await Promise.all(
+				[...new Set(catalog.map((c) => c.model))].map((model) =>
+					loadSnapshot(model, {
+						...options,
+						cacheDir: join(deps.homeDir, ".spatz", "catalog"),
+					}),
+				),
+			);
 			// The task text goes to classify (and maybe Jev) only; it is never stored.
 			const c = await classify(
 				task,
@@ -758,8 +767,17 @@ export function createApi(
 				cfg,
 			);
 			return withStore((store) => {
+				const versions = store.liveModelVersions();
+				const priors = snapshots.flatMap((s) =>
+					s ? priorCells(s, versions[s.model] ?? null) : [],
+				);
 				const d = recommend(
-					{ classification: c, random: deps.random(), tuning: cfg.tuning },
+					{
+						classification: c,
+						random: deps.random(),
+						tuning: cfg.tuning,
+						priors,
+					},
 					catalog,
 					cfg.tuning.familyPooling
 						? TASK_TYPES.filter(
