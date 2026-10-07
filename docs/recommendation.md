@@ -2,7 +2,7 @@
 title: How spatz picks a model and effort
 description: The decision rule of spatz: cells, the Beta estimate, thresholds, cost order, critical tasks, exploration, the control group and how quality is computed.
 tags: [spatz, recommendation, learning]
-keywords: [attempt, retry, chain, outcome, decision rule, strategy, learned, learned-fallback, credible bound, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
+keywords: [bench prior, snapshot, n_prior, n_bench, attempt, retry, chain, outcome, decision rule, strategy, learned, learned-fallback, credible bound, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
 ---
 
 # How spatz picks a model and effort
@@ -45,6 +45,20 @@ A sequence `A → B → A` keeps three attempts even when the first and last pai
 Outcomes do not decay with age. Instead, each attempt stores a `model_version` when the harness shows a dated model id (for example `claude-sonnet-4-5-20250929` gives `20250929`). Otherwise it stores null.
 For each model, the newest known version is the live one. Outcomes of an older known version do not count, so a new version starts with an empty estimate. Outcomes with a null version count for every version.
 The old outcomes stay in the database. `spatz stats --model-version <v>` shows them.
+
+### Bench prior
+
+spatz can use a bench snapshot as a weak prior. A snapshot is one file per model, `catalog/<provider>/<model>.json` in the spatz repository (schema `spatz-bench-snapshot/1`). spatz fetches it from `main` for the current candidates, caches it for 24 hours in `~/.spatz/catalog/<provider>/<model>.json` (3 s timeout), and needs no CLI release. A 404 means no prior. A stale cache is used when the refresh fails. `SPATZ_NO_NETWORK=1` reads the cache only. Without a snapshot nothing changes.
+
+For each (effort, type, difficulty) cell the bench counts are weighted by verifier kind: `tests`, `golden` and `human` count 1. `rubric` counts 1 when its judge is `validated` in the file, else 0.5. This gives `n_eff` and `s_eff` (`partials` are no successes). Pooled levels sum `n_eff` and `s_eff` like live rows. The prior weight is `w = min(2, n_eff)` and `a = w * s_eff / n_eff`:
+
+```
+estimate = (1 + successes + a) / (2 + n + w)
+```
+
+The prior changes the estimate only. `n` stays the count of live first attempts. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use `n` and live `successes` only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies, and the reason names `version_match`.
+
+The prior applies when the snapshot `model_version` equals the live model version (`version_match: exact`) or either one is null (`unknown`). A known different version seeds nothing.
 
 ### Enough data and pooling
 

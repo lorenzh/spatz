@@ -33,6 +33,7 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | `~/.spatz/spatz.db.bak-v*` | SQLite backups | spatz | Database copies made before schema upgrades, including incomplete backup files left after an interrupted process. |
 | `~/.spatz/launcher-failures` | One `1` marker per line | Plugin launchers | Failed hook launches for `spatz stats`. |
 | `~/.spatz/harness-models.json` | JSON | spatz | Cache of the harness model catalog. |
+| `~/.spatz/catalog/<provider>/<model>.json` | JSON | spatz | Cache of the bench snapshot of a model (24 h). See [recommendation.md](recommendation.md#bench-prior). |
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
 | `~/.spatz/aliases.json` | JSON object | you | Model id mapping. Optional. |
 | `~/.spatz/descriptions.json` | JSON object | you | Model descriptions for Jev. Optional. |

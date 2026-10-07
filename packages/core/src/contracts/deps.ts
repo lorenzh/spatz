@@ -111,6 +111,8 @@ export interface Store extends AttemptStore {
 	/** First attempts of root suggestions plus legacy/eval outcomes, grouped by cell and actual pair. Non-test only. */
 	/** successQuality defaults to DEFAULT_TUNING.successQuality. */
 	cellStats(taskType: TaskType, successQuality?: number): CellStat[];
+	/** Newest known model_version per model from recorded attempts; models without one are absent. Non-test only. */
+	liveModelVersions(): Record<string, string>;
 	/** Later attempts and --retry-of chain members, grouped by cell and actual pair. Non-test only. */
 	retryStats(taskType: TaskType, successQuality?: number): CellStat[];
 	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */

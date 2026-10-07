@@ -228,7 +228,12 @@ export interface RankingEntry {
 	effort: Effort;
 	/** Beta mean of success (1 + successes) / (2 + n). */
 	estimate: number;
+	/** Live first attempts; the only count gates use. */
 	n: number;
+	/** Prior weight from the bench snapshot (min(2, n_eff)); absent without a prior. */
+	n_prior?: number;
+	/** Raw bench runs behind the prior; absent without a prior. */
+	n_bench?: number;
 }
 
 /** Pure result of recommend; no id, no persistence. */
