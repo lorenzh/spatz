@@ -47,6 +47,7 @@ export const EVAL_ROW_FIELDS = [
 	"duration_s",
 	"tokens",
 	"cost_usd",
+	"estimated_cost_usd",
 	"started_at",
 	"contributor",
 	"verified",
@@ -93,6 +94,8 @@ export interface EvalRow {
 	duration_s: number;
 	tokens: EvalRowTokens;
 	cost_usd: number | null;
+	/** Tokens times the model's list prices; null when not estimated. Optional, defaults to null. */
+	estimated_cost_usd: number | null;
 	started_at: string;
 	contributor: string;
 	verified: boolean;
@@ -125,25 +128,32 @@ const oneOf = (values: readonly string[], x: unknown) =>
 	values.includes(x as string);
 const matches = (re: RegExp, x: unknown) => typeof x === "string" && re.test(x);
 
-function validUsage(t: unknown, cost: unknown): boolean {
+function validUsage(t: unknown, cost: unknown, estimate: unknown): boolean {
 	if (!isObj(t) || !COUNTERS.every((k) => k in t)) return false;
-	// No usage reported: every counter and the cost are null together.
+	// No usage reported: every counter, the cost and the estimate are null together.
 	if (t.input === null)
-		return COUNTERS.every((k) => t[k] === null) && cost === null;
+		return (
+			COUNTERS.every((k) => t[k] === null) && cost === null && estimate === null
+		);
 	return (
 		isCount(t.input) &&
 		isCount(t.output) &&
 		orNull(isCount)(t.cache_read) &&
 		orNull(isCount)(t.cache_write) &&
 		orNull(isCount)(t.reasoning) &&
-		orNull(isNum)(cost)
+		orNull(isNum)(cost) &&
+		orNull(isNum)(estimate)
 	);
 }
 
 /** The contract row in `value` without unknown fields, in contract order; null when it breaks the contract. */
 export function parseEvalRow(value: unknown): EvalRow | null {
 	if (!isObj(value)) return null;
-	const v: Obj = { ...value, criticality: value.criticality ?? "none" };
+	const v: Obj = {
+		...value,
+		criticality: value.criticality ?? "none",
+		estimated_cost_usd: value.estimated_cost_usd ?? null,
+	};
 	if (
 		v.schema !== EVAL_ROW_SCHEMA ||
 		!matches(UUID, v.run_id) ||
@@ -166,7 +176,7 @@ export function parseEvalRow(value: unknown): EvalRow | null {
 		// Tests and golden answers have no judge.
 		((v.check === "tests" || v.check === "golden") && v.judge !== null) ||
 		!isNum(v.duration_s) ||
-		!validUsage(v.tokens, v.cost_usd) ||
+		!validUsage(v.tokens, v.cost_usd, v.estimated_cost_usd) ||
 		!matches(UTC, v.started_at) ||
 		!isStr(v.contributor) ||
 		typeof v.verified !== "boolean"
