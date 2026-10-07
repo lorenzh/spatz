@@ -280,6 +280,7 @@ See [Contributing](CONTRIBUTING.md) for the full development setup.
 | [How it works](docs/how-it-works.md) | Architecture and the flow from task to outcome. |
 | [Recommendation rules](docs/recommendation.md) | Ranking, exploration, and control groups. |
 | [Measurements](docs/measurements.md) | Benchmark results for model and effort selection. |
+| [Bench rows](docs/bench.md) | The `spatz-eval-row/1` format for benchmark results. |
 | [Hooks](docs/hooks.md) | Claude Code and Codex CLI setup and recorded signals. |
 | [Claude Code mod](docs/claude-mod.md) | Modes, routing scopes, and `/spatz` commands. |
 | [Configuration](docs/configuration.md) | Environment variables and local files. |
