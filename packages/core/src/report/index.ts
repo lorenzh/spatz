@@ -50,6 +50,7 @@ interface Decision {
 	difficulty: string;
 	arm: "control" | "learned-fallback" | "learned";
 	success: number | null;
+	explored: number;
 }
 
 // Mulberry32: a fixed seed keeps the interval stable between runs.
@@ -153,11 +154,13 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			FROM tok LEFT JOIN agg USING (task_type) ORDER BY tok.task_type`,
 		);
 		// Chains rooted at the pair. Spend = every attempt; orchestration (no attempt) is listed apart. Chains with
-		// incomplete cost evidence (cost_usd NULL or lower bounds) count in n_chains but not in the spend.
+		// incomplete cost evidence (cost_usd NULL, lower bounds, or an attempt without usage) count in n_chains but not in the spend.
 		const pairs = rows<PairStats & { task_type: TaskType }>(
 			`, ch AS (
 				SELECT s.task_type, c.model, c.effort, c.success, c.cost_usd,
-					COALESCE(c.cost_usd IS NOT NULL AND c.incomplete = 0, 0) AS known,
+					COALESCE(c.cost_usd IS NOT NULL AND c.incomplete = 0 AND NOT EXISTS (
+						SELECT 1 FROM attempts a WHERE a.root_id = c.root_id
+						AND NOT EXISTS (SELECT 1 FROM attempt_usage u WHERE u.attempt_id = a.id)), 0) AS known,
 					COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) + COALESCE(c.cache_read_tokens, 0) + COALESCE(c.cache_creation_tokens, 0)
 					- COALESCE(c.orchestration_input_tokens, 0) - COALESCE(c.orchestration_output_tokens, 0)
 					- COALESCE(c.orchestration_cache_read_tokens, 0) - COALESCE(c.orchestration_cache_creation_tokens, 0) AS tokens,
@@ -188,14 +191,17 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		);
 		const decisions = rows<Decision>(
 			`SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty,
-				CASE WHEN s.control = 1 THEN 'control' ELSE s.strategy END AS arm,
+				CASE WHEN s.control = 1 THEN 'control' ELSE s.strategy END AS arm, s.explored,
 				(SELECT success FROM oq WHERE oq.suggestion_id = s.id AND (oq.attempt_id IS NULL OR oq.attempt_id = oq.root_id) LIMIT 1) AS success
-			FROM s WHERE s.id NOT IN (SELECT suggestion_id FROM attempts WHERE id <> root_id) AND (s.control = 1 OR (s.strategy IN ('learned', 'learned-fallback') AND s.explored = 0))`,
+			FROM s WHERE (s.control = 1 OR s.strategy IN ('learned', 'learned-fallback'))
+				AND (s.id IN (SELECT suggestion_id FROM attempts WHERE id = root_id) OR s.id NOT IN (SELECT suggestion_id FROM attempts))`,
 		);
+		// ITT keeps every root decision by assigned arm; qualified and fallback drop explored picks.
+		const chosen = decisions.filter((d) => d.arm === "control" || !d.explored);
 		const lvc: LearnedVsControl = {
 			itt: compare(decisions, ["learned", "learned-fallback"]),
-			qualified: compare(decisions, ["learned"]),
-			fallback: compare(decisions, ["learned-fallback"]),
+			qualified: compare(chosen, ["learned"]),
+			fallback: compare(chosen, ["learned-fallback"]),
 			control: {
 				decisions: decisions.filter((d) => d.arm === "control").length,
 				outcomes: decisions.filter(

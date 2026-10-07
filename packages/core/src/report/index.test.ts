@@ -894,3 +894,77 @@ test("learned_vs_control reports ITT, qualified, fallback, coverage and bootstra
 		{ task_type: "code.bugfix", difficulty: "easy", learned: 7, control: 6 },
 	]);
 });
+
+function retry(id: string, result: ReportResult, withUsage: boolean) {
+	const a = store.startAttempt({
+		harness: "direct",
+		session_key: `suggestion:${id}`,
+		agent_key: "",
+		suggestion_id: id,
+		key: "second",
+		model: "m/b",
+		effort: "high",
+		at: 11,
+	});
+	if (withUsage)
+		store.recordAttemptEvents([
+			{
+				harness: "direct",
+				session_key: `suggestion:${id}`,
+				agent_key: "",
+				event_id: "usage2",
+				revision: 1,
+				suggestion_id: id,
+				attempt_id: a.id,
+				occurred_at: 12,
+				received_at: 12,
+				kind: "usage",
+				model: "m/b",
+				effort: "high",
+				input_tokens: 1,
+				output_tokens: 1,
+				cache_read_tokens: 0,
+				cache_creation_tokens: 0,
+			},
+		]);
+	store.reportAttempt({
+		suggestion_id: id,
+		model: "m/b",
+		effort: "high",
+		result,
+		at: 20,
+	});
+}
+
+test("ITT keeps retried and explored root decisions; qualified drops explored", async () => {
+	sug("r");
+	report("r", "m/a", "low", "fail");
+	retry("r", "pass", false);
+	sug("x", { explored: true });
+	report("x", "m/a", "low", "pass");
+	sug("k", { control: true });
+	report("k", "m/b", "high", "pass");
+	const l = (await runStats({ dbPath, successQuality: 0.8 }))
+		.learned_vs_control;
+	expect(l.itt.decisions).toBe(2);
+	expect(l.itt.outcomes).toBe(2);
+	expect(l.itt.rate).toBeCloseTo(0.5, 12);
+	expect(l.qualified.decisions).toBe(1);
+	expect(l.qualified.rate).toBe(0);
+});
+
+test("a chain with an attempt lacking usage evidence is excluded from spend", async () => {
+	sug("c");
+	report("c", "m/a", "low", "fail", [10, 10]);
+	const db = new Database(dbPath);
+	db.run(
+		"UPDATE attempt_events SET cost_usd = 0.1, cost_source = 'priced' WHERE suggestion_id = 'c' AND kind = 'usage'",
+	);
+	db.close();
+	retry("c", "pass", false);
+	const p = (
+		await runStats({ dbPath, successQuality: 0.8 })
+	).by_type[0]?.pairs.find((x) => x.model === "m/a");
+	expect(p?.cost_usd_per_success).toBeNull();
+	expect(p?.cost_incomplete_share).toBe(1);
+});
