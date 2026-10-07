@@ -1,5 +1,6 @@
 // recommend: estimates per cell and the four strategies; pure, no IO.
 // Spec: "Recommendation" (Cell and filters, estimation, selection, critical tasks, exploration, output).
+import type { PriorCell } from "../catalog/snapshot.ts";
 import { normalizeDifficulty } from "../contracts/difficulty.ts";
 import {
 	type Candidate,
@@ -21,11 +22,13 @@ export interface StrategyContext {
 	/** One uniform draw in [0, 1) per suggestion. */
 	random: number;
 	tuning: Tuning;
+	/** Weighted bench evidence (weak prior). Changes the estimate only, never n; absent = no prior. */
+	priors?: PriorCell[];
 }
 
-/** Beta mean: (1 + successes) / (2 + n). */
-export function estimate(successes: number, n: number): number {
-	return (1 + successes) / (2 + n);
+/** Beta mean: (1 + successes + a) / (2 + n + w), with prior pseudo-counts a (successes) and w (weight). */
+export function estimate(successes: number, n: number, a = 0, w = 0): number {
+	return (1 + successes + a) / (2 + n + w);
 }
 
 /** 5 % quantile of Beta(1 + s, 1 + n - s), by bisection on the binomial form of the CDF (integer s and n). */
@@ -58,6 +61,11 @@ interface Est {
 	n: number;
 	estimate: number;
 	successes: number;
+	/** Prior weight w = min(2, n_eff); 0 without a prior. */
+	nPrior: number;
+	/** Raw bench runs behind the prior. */
+	nBench: number;
+	versionMatch: "exact" | "unknown" | null;
 }
 /** Estimate and n per catalog candidate on one level. */
 type Level = (c: Candidate) => Est;
@@ -74,6 +82,10 @@ function level(
 		t === ctx.classification.task_type,
 ): Level {
 	const sums = new Map<string, { n: number; sum: number }>();
+	const bench = new Map<
+		string,
+		{ n: number; s: number; raw: number; match: "exact" | "unknown" }
+	>();
 	// sum counts successes; quality-mean learning overrated partial-heavy pairs.
 	for (const s of history) {
 		if (!sameType(s.task_type)) continue;
@@ -84,9 +96,36 @@ function level(
 		cur.sum += s.successes;
 		sums.set(k, cur);
 	}
+	for (const p of ctx.priors ?? []) {
+		if (!sameType(p.task_type as TaskType)) continue;
+		if (!difficulties.includes(normalizeDifficulty(p.difficulty as Difficulty)))
+			continue;
+		const k = keyOf(p);
+		const cur = bench.get(k) ?? {
+			n: 0,
+			s: 0,
+			raw: 0,
+			match: p.version_match,
+		};
+		cur.n += p.n_eff;
+		cur.s += p.s_eff;
+		cur.raw += p.n_bench;
+		if (p.version_match === "unknown") cur.match = "unknown";
+		bench.set(k, cur);
+	}
 	return (c) => {
 		const s = sums.get(keyOf(c)) ?? { n: 0, sum: 0 };
-		return { n: s.n, estimate: estimate(s.sum, s.n), successes: s.sum };
+		const b = bench.get(keyOf(c));
+		const w = b ? Math.min(2, b.n) : 0;
+		const a = b && b.n > 0 ? (w * b.s) / b.n : 0;
+		return {
+			n: s.n,
+			estimate: estimate(s.sum, s.n, a, w),
+			successes: s.sum,
+			nPrior: w,
+			nBench: b?.raw ?? 0,
+			versionMatch: w > 0 ? (b?.match ?? null) : null,
+		};
 	};
 }
 
@@ -101,13 +140,22 @@ function decision(
 	reason: string,
 	flags: { explored?: boolean; control?: boolean } = {},
 ): Decision {
+	const top = at(catalog[index] as Candidate);
 	return {
 		strategy,
 		ranking: catalog.slice(index, index + 3).map((c) => {
-			const { n, estimate } = at(c);
-			return { model: c.model, effort: c.effort, estimate, n };
+			const { n, estimate, nPrior, nBench } = at(c);
+			return {
+				model: c.model,
+				effort: c.effort,
+				estimate,
+				n,
+				...(nPrior > 0 && { n_prior: nPrior, n_bench: nBench }),
+			};
 		}),
-		reason,
+		reason: top.versionMatch
+			? `${reason} Bench prior on the estimate (version_match: ${top.versionMatch}).`
+			: reason,
 		explored: flags.explored ?? false,
 		control: flags.control ?? false,
 	};
