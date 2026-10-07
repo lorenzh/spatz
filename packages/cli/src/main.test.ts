@@ -122,6 +122,7 @@ const statsReport: StatsReport = {
 		},
 	],
 	coverage: 0.8,
+	coverage_by_source: [],
 	learned_success: 0.7,
 	fallback_success: null,
 	control_success: null,
@@ -179,6 +180,14 @@ function fakeApi(overrides: Partial<SpatzApi> = {}) {
 		stats: async (input: StatsInput) => {
 			calls.push({ method: "stats", args: [input] });
 			return statsReport;
+		},
+		pending: async (input) => {
+			calls.push({ method: "pending", args: [input] });
+			return [];
+		},
+		signalPr: async (input) => {
+			calls.push({ method: "signalPr", args: [input] });
+			return { suggestion_id: "s1", result: "pass" };
 		},
 		...overrides,
 	};
@@ -818,6 +827,7 @@ describe("stats", () => {
 				learned_success: null,
 				fallback_success: null,
 				control_success: 0.5,
+				coverage_by_source: [],
 				learned_vs_control: lvc,
 				dispatches: 0,
 				routed_by_mod: 0,
@@ -1323,5 +1333,72 @@ test("report forwards confirmation of an explicit attempt", async () => {
 	expect(calls[0]?.args[0]).toMatchObject({
 		attempt: "attempt-id",
 		confirm: true,
+	});
+});
+
+describe("pending, signal and coverage", () => {
+	test("pending parses the age and prints one line per suggestion", async () => {
+		const { io, stdout } = fakeIO();
+		const { api, calls } = fakeApi({
+			pending: async (input) => {
+				calls.push({ method: "pending", args: [input] });
+				return [
+					{
+						id: "s1",
+						created_at: 0,
+						session_id: "S",
+						agent_id: "a",
+						task_type: "code.bugfix",
+						source: "claude-code-mod",
+					},
+				];
+			},
+		});
+		expect(await main(["pending", "--older-than", "1h"], io, api)).toBe(0);
+		expect(calls[0]?.args[0]).toEqual({ olderThanMs: 3_600_000 });
+		expect(stdout()).toBe(
+			"s1  1970-01-01T00:00:00.000Z  source=claude-code-mod  session=S  agent=a  task_type=code.bugfix",
+		);
+		expect(
+			await main(["pending", "--older-than", "soon"], fakeIO().io, api),
+		).toBe(2);
+	});
+
+	test("signal pr forwards the url and review", async () => {
+		const { io, stdout } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(
+			await main(
+				["signal", "pr", "https://x/pull/1", "--review", "blocker"],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(calls[0]).toEqual({
+			method: "signalPr",
+			args: [{ url: "https://x/pull/1", review: "blocker" }],
+		});
+		expect(stdout()).toBe("signal: s1  result: pass");
+		expect(
+			await main(["signal", "pr", "u", "--review", "meh"], fakeIO().io, api),
+		).toBe(2);
+	});
+
+	test("stats prints coverage per source and warns below 80 percent", async () => {
+		const { io, stdout } = fakeIO();
+		const { api } = fakeApi({
+			stats: async () => ({
+				...statsReport,
+				coverage_by_source: [
+					{ source: "claude-code-mod", n: 10, covered: 5 },
+					{ source: "cli", n: 4, covered: 4 },
+				],
+			}),
+		});
+		await main(["stats"], io, api);
+		expect(stdout()).toContain(
+			"outcome coverage claude-code-mod: 50% (5/10)  warning: below 80%, run spatz pending",
+		);
+		expect(stdout()).toContain("outcome coverage cli: 100% (4/4)\n");
 	});
 });

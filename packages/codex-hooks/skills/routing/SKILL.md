@@ -45,6 +45,7 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
    For Codex CLI, map `ultra` to `-c model_reasoning_effort=ultra` (for example, `SPATZ_SUGGESTION_ID=<suggestion_id> codex exec -m gpt-6-sol -c model_reasoning_effort=ultra "<task>"`). Claude Code has no `ultra`.
    Prefix every Codex dispatch with `SPATZ_SUGGESTION_ID=<suggestion_id> codex exec ...`, using the ID from this ranking. Codex inherits the environment; the spatz Codex hooks record the run's tokens and test/build results against that suggestion.
    If hooks are not installed or trusted, run `spatz import-rollout <rollout.jsonl> --suggestion <suggestion_id>` after the run. Use the rollout from that Codex run. Reimporting the same turns does not add their tokens twice. Still report the verified result below.
+   Give the dispatched agent its suggestion ID (in its brief, or in `SPATZ_SUGGESTION_ID` for Codex). The hooks then close its suggestion when the agent ends: with test/build evidence as an outcome, otherwise as `unknown`. Hooks cannot judge the result, so still report from the agent's verified result. `spatz pending` lists suggestions that have neither.
    For `none`, set only the model and leave the harness effort setting untouched. Report the effort as `none`.
 
    Done when the dispatch uses the selected pair and its answering model is recorded, or its unavailability is disclosed.

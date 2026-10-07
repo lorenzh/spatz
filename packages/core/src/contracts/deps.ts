@@ -6,6 +6,7 @@ import type {
 	CellStat,
 	Config,
 	DispatchRecord,
+	Effort,
 	Outcome,
 	ReportResult,
 	RoutingScope,
@@ -91,6 +92,17 @@ export type RandomFn = () => number;
 
 // ---------- Store (implemented by store module with bun:sqlite) ----------
 
+export interface PendingSuggestion {
+	id: string;
+	created_at: number;
+	session_id: string | null;
+	agent_id: string | null;
+	/** Task text is never stored; the type is the closest identifier. */
+	task_type: string;
+	/** suggestions.agent, or "cli" when the suggestion came from no harness. */
+	source: string;
+}
+
 export interface Store extends AttemptStore {
 	/** One observation per session and agent; fill missing fields only. */
 	upsertDispatch(record: DispatchRecord): void;
@@ -142,6 +154,15 @@ export interface Store extends AttemptStore {
 		model: string,
 	): UsageRecord | null;
 	outcome(suggestionId: string): Outcome | null;
+	/** Mark open suggestions (no outcome yet) of one id, or of a session and agent (null = main), as explicitly unknown. Returns the ids newly marked. */
+	closeUnknown(
+		by: { id: string } | { session: string; agentId: string | null },
+		at: number,
+	): string[];
+	/** Non-test suggestions with neither outcome nor unknown mark, created at least olderThanMs before now. */
+	pending(olderThanMs: number, now: number): PendingSuggestion[];
+	/** First attempt pair, else the top ranked pair; null without either. */
+	pairOf(suggestionId: string): { model: string; effort: Effort } | null;
 	/** Close the database handle. */
 	dispose(): void;
 }
@@ -266,4 +287,14 @@ export interface SpatzApi {
 	/** Never throws; swallows every error (hooks must not block the session). */
 	handleHook(event: string, stdin: string): Promise<void>;
 	stats(input: StatsInput): Promise<StatsReport>;
+	/** Suggestions without an outcome or an unknown mark, oldest first. */
+	pending(input: { olderThanMs?: number }): Promise<PendingSuggestion[]>;
+	/**
+	 * Records the result of a pull request for the suggestion named by its `Spatz-Suggestion: <id>` trailer.
+	 * Returns null while the PR is open and no review verdict is given.
+	 */
+	signalPr(input: {
+		url: string;
+		review?: "approve" | "changes" | "blocker";
+	}): Promise<{ suggestion_id: string; result: ReportResult } | null>;
 }

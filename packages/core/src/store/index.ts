@@ -3,7 +3,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { Store } from "../contracts/deps.ts";
+import type { PendingSuggestion, Store } from "../contracts/deps.ts";
 import {
 	difficultySql,
 	normalizeDifficulty,
@@ -13,6 +13,7 @@ import {
 import {
 	type CellStat,
 	DEFAULT_TUNING,
+	type Effort,
 	type Outcome,
 	type SuggestionRecord,
 	type UsageRecord,
@@ -223,6 +224,11 @@ const SCHEMA_V10 = [
 	`CREATE VIEW outcomes AS SELECT suggestion_id,quality,model,effort FROM legacy_outcomes UNION ALL SELECT suggestion_id,quality,model,effort FROM attempt_outcomes`,
 ];
 
+// v11: suggestions whose agent ended without any evidence. Stored, never counted as success or failure.
+const SCHEMA_V11 = [
+	"CREATE TABLE unknown_outcomes (suggestion_id TEXT PRIMARY KEY REFERENCES suggestions(id), marked_at INTEGER NOT NULL)",
+];
+
 const MIGRATIONS = [
 	SCHEMA_V1,
 	SCHEMA_V2,
@@ -234,6 +240,7 @@ const MIGRATIONS = [
 	SCHEMA_V8,
 	USAGE_COMPLETENESS_SCHEMA,
 	SCHEMA_V10,
+	SCHEMA_V11,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -578,6 +585,44 @@ export function openStore(
 					idle: openWindowMs,
 					agent: windowAgent(sessionId, agentId),
 				});
+		},
+		closeUnknown(by, at) {
+			const params: Record<string, string | number | null> =
+				"id" in by ? { id: by.id } : { session: by.session, agent: by.agentId };
+			return db
+				.query<{ id: string }, Record<string, string | number | null>>(
+					`INSERT OR IGNORE INTO unknown_outcomes (suggestion_id, marked_at)
+					SELECT s.id, $at FROM suggestions s WHERE s.is_legacy = 0 AND ${
+						"id" in by
+							? "s.id = $id"
+							: "s.session_id = $session AND s.agent_id IS $agent"
+					} AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.suggestion_id = s.id)
+					RETURNING suggestion_id AS id`,
+				)
+				.all({ ...params, at })
+				.map((r) => r.id);
+		},
+		pending(olderThanMs, now) {
+			return db
+				.query<PendingSuggestion, { cutoff: number }>(
+					`SELECT id, created_at, session_id, agent_id, task_type, COALESCE(agent, 'cli') AS source
+					FROM suggestions s WHERE is_test = 0 AND is_legacy = 0 AND created_at <= $cutoff
+					AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.suggestion_id = s.id)
+					AND NOT EXISTS (SELECT 1 FROM unknown_outcomes u WHERE u.suggestion_id = s.id)
+					ORDER BY created_at, rowid`,
+				)
+				.all({ cutoff: now - olderThanMs });
+		},
+		pairOf(id) {
+			const attempt = db
+				.query<{ model: string | null; effort: Effort | null }, [string]>(
+					"SELECT model, effort FROM attempts WHERE suggestion_id = ? AND model IS NOT NULL AND effort IS NOT NULL ORDER BY ordinal LIMIT 1",
+				)
+				.get(id);
+			if (attempt?.model && attempt.effort)
+				return { model: attempt.model, effort: attempt.effort };
+			const top = store.getSuggestion(id)?.ranking[0];
+			return top ? { model: top.model, effort: top.effort } : null;
 		},
 		closeSuggestion(id, at) {
 			db.query("UPDATE suggestions SET closed_at = ? WHERE id = ?").run(at, id);

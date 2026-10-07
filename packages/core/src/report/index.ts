@@ -228,6 +228,13 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			`SELECT 1.0 * COUNT(DISTINCT o.suggestion_id) / NULLIF(COUNT(DISTINCT s.id), 0) AS coverage
 			FROM s LEFT JOIN outcomes o ON o.suggestion_id = s.id`,
 		);
+		// An unknown mark (agent ended without evidence) counts as covered: it is explicit, never a silent gap.
+		const bySource = rows<{ source: string; n: number; covered: number }>(
+			`SELECT COALESCE(s.agent, 'cli') AS source, COUNT(*) AS n,
+				COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM outcomes o WHERE o.suggestion_id = s.id)
+					OR EXISTS (SELECT 1 FROM unknown_outcomes u WHERE u.suggestion_id = s.id)) AS covered
+			FROM s GROUP BY 1 ORDER BY 1`,
+		);
 		const fallbacks = rows<{ reason: string; n: number }>(
 			`SELECT COALESCE(fallback_reason, 'unknown') AS reason, COUNT(*) AS n
 			FROM s WHERE fallback_used = 1 GROUP BY 1 ORDER BY 1`,
@@ -335,6 +342,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					incomplete: t.incomplete,
 				})),
 			coverage: cov?.coverage ?? 0,
+			coverage_by_source: bySource,
 			learned_success: cmp?.learned_success ?? null,
 			fallback_success: cmp?.fallback_success ?? null,
 			control_success: cmp?.control_success ?? null,

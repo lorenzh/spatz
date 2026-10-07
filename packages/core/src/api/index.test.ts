@@ -790,6 +790,7 @@ describe("stats", () => {
 			learned_success: null,
 			fallback_success: null,
 			control_success: null,
+			coverage_by_source: [],
 			learned_vs_control: lvc,
 			dispatches: 0,
 			routed_by_mod: 0,
@@ -890,6 +891,7 @@ describe("direct mod attribution", () => {
 						learned_success: null,
 						fallback_success: null,
 						control_success: null,
+						coverage_by_source: [],
 						learned_vs_control: lvc,
 						dispatches: 0,
 						routed_by_mod: 0,
@@ -1635,6 +1637,7 @@ describe("failure diagnostics", () => {
 				learned_success: null,
 				fallback_success: null,
 				control_success: null,
+				coverage_by_source: [],
 				learned_vs_control: lvc,
 				dispatches: 0,
 				routed_by_mod: 0,
@@ -3061,4 +3064,188 @@ test("Codex PostToolUse links a normal skill suggestion without a --source flag"
 	} finally {
 		db.close();
 	}
+});
+
+describe("automatic outcomes", () => {
+	const subagent = async (
+		s: ReturnType<typeof setup>,
+		agentId: string,
+		tests: "pass" | "fail" | "none",
+	) => {
+		const { suggestion_id } = await s.api.suggest({
+			...suggestInput(agentId),
+			session: SESSION,
+			agentId,
+			source: "claude-code-mod",
+		});
+		const path = join(dir, `${agentId}.jsonl`);
+		const row = JSON.parse(
+			assistant(`m-${agentId}`, "gpt-6-luna", 10, {
+				isSidechain: true,
+				agentId,
+			}),
+		);
+		row.message.content = [
+			{ type: "tool_use", id: `call-${agentId}`, name: "Bash" },
+		];
+		await Bun.write(path, JSON.stringify(row));
+		const context = base({
+			agent_id: agentId,
+			agent_type: "t",
+			transcript_path: path,
+			agent_transcript_path: path,
+		});
+		if (tests !== "none") {
+			const event = tests === "pass" ? "PostToolUse" : "PostToolUseFailure";
+			await s.api.handleHook(
+				event,
+				JSON.stringify({
+					...context,
+					hook_event_name: event,
+					tool_name: "Bash",
+					tool_use_id: `call-${agentId}`,
+					tool_input: { command: "bun test" },
+					tool_response: { stdout: "" },
+					error: "Exit code 1",
+				}),
+			);
+		}
+		await s.api.handleHook(
+			"SubagentStop",
+			JSON.stringify({
+				...context,
+				hook_event_name: "SubagentStop",
+				stop_hook_active: false,
+			}),
+		);
+		return suggestion_id;
+	};
+
+	test("three hook-tracked subagents and one CLI-routed Codex run each end with an outcome or unknown", async () => {
+		const dbPath = join(dir, "auto.db");
+		const s = setup({ dbPath, openStore });
+		const ids = [
+			await subagent(s, "a1", "pass"),
+			await subagent(s, "a2", "none"),
+			await subagent(s, "a3", "fail"),
+		];
+		const codex = await s.api.suggest({ ...suggestInput(), source: "codex" });
+		const codexApi = createApi({
+			...s.deps,
+			env: { SPATZ_SUGGESTION_ID: codex.suggestion_id },
+		});
+		await codexApi.handleHook(
+			"codex:Stop",
+			JSON.stringify({
+				hook_event_name: "Stop",
+				session_id: "codex-run",
+				turn_id: "turn-1",
+				transcript_path: join(dir, "missing.jsonl"),
+			}),
+		);
+		const store = openStore(dbPath);
+		try {
+			expect(ids.map((id) => store.outcome(id)?.quality ?? null)).toEqual([
+				1,
+				null,
+				0,
+			]);
+			expect(store.pending(0, T0 + HOUR).map((p) => p.id)).toEqual([]);
+			expect(store.closeUnknown({ id: ids[1] as string }, 1)).toEqual([]);
+		} finally {
+			store.dispose();
+		}
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			expect(
+				db
+					.query(
+						"SELECT suggestion_id FROM unknown_outcomes ORDER BY suggestion_id",
+					)
+					.all(),
+			).toEqual(
+				[ids[1], codex.suggestion_id]
+					.sort()
+					.map((suggestion_id) => ({ suggestion_id })),
+			);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("a suggestion still open is listed by pending until a hook closes it", async () => {
+		const dbPath = join(dir, "pending.db");
+		const s = setup({ dbPath, openStore });
+		const open = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			agentId: "x",
+			source: "claude-code-mod",
+		});
+		s.setNow(T0 + 2 * HOUR);
+		expect(await s.api.pending({ olderThanMs: HOUR })).toEqual([
+			expect.objectContaining({
+				id: open.suggestion_id,
+				agent_id: "x",
+				source: "claude-code-mod",
+			}),
+		]);
+		expect(await s.api.pending({ olderThanMs: 3 * HOUR })).toEqual([]);
+	});
+
+	describe("signalPr", () => {
+		const pr = (id: string, state = "MERGED", checks = ["SUCCESS"]) => ({
+			state,
+			body: `Fixes SPZ-70\n\nSpatz-Suggestion: ${id}`,
+			commits: [],
+			checks,
+		});
+		test("a merged PR with green checks turns its suggestion into pass; a closed one into fail", async () => {
+			const dbPath = join(dir, "pr.db");
+			const fetched: string[] = [];
+			const deps = setup({ dbPath, openStore }).deps;
+			const first = await createApi(deps).suggest(suggestInput());
+			const second = await createApi(deps).suggest(suggestInput());
+			let current = pr(first.suggestion_id);
+			const api = createApi(deps, {
+				fetchPr: async (url) => {
+					fetched.push(url);
+					return current;
+				},
+			});
+			expect(
+				await api.signalPr({ url: "https://github.com/o/r/pull/1" }),
+			).toEqual({
+				suggestion_id: first.suggestion_id,
+				result: "pass",
+			});
+			current = pr(second.suggestion_id, "CLOSED");
+			await api.signalPr({ url: "https://github.com/o/r/pull/2" });
+			current = pr(second.suggestion_id, "OPEN");
+			expect(
+				await api.signalPr({ url: "https://github.com/o/r/pull/2" }),
+			).toBeNull();
+			const store = openStore(dbPath);
+			try {
+				expect(store.outcome(first.suggestion_id)?.quality).toBe(1);
+				expect(store.outcome(second.suggestion_id)?.quality).toBe(0);
+			} finally {
+				store.dispose();
+			}
+			expect(fetched).toHaveLength(3);
+		});
+		test("a PR without the trailer is an error", async () => {
+			const api = createApi(setup().deps, {
+				fetchPr: async () => ({
+					state: "MERGED",
+					body: "",
+					commits: [],
+					checks: [],
+				}),
+			});
+			await expect(api.signalPr({ url: "u" })).rejects.toThrow(
+				"Spatz-Suggestion",
+			);
+		});
+	});
 });

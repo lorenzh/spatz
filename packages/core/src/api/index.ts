@@ -42,6 +42,7 @@ import {
 	TASK_TYPES,
 	type UsageRecord,
 } from "../contracts/types.ts";
+import { closeOnEnd, fromClaudeHook, fromCodexHook } from "../events/index.ts";
 import { recommend } from "../recommend/index.ts";
 import type { StatsOptions } from "../report/index.ts";
 import {
@@ -49,8 +50,11 @@ import {
 	effortFromHook,
 	extractSuggestionId,
 	isIgnoredHookInput,
+	type PrInfo,
 	parseHookInput,
+	resultFromPr,
 	signalFromBashEvent,
+	suggestionFromPr,
 } from "../signals/index.ts";
 import {
 	type CodexRollout,
@@ -64,6 +68,32 @@ import { loadConfig } from "./deps.ts";
 export interface ApiInternals {
 	/** Test seam. Default: report module, imported lazily so it loads only for stats. */
 	runStats?: (options: StatsOptions) => Promise<StatsReport>;
+	/** Test seam. Default: `gh pr view` (needs the GitHub CLI and its login). */
+	fetchPr?: (url: string) => Promise<PrInfo>;
+}
+
+async function ghPr(url: string): Promise<PrInfo> {
+	const out =
+		await Bun.$`gh pr view ${url} --json state,body,commits,statusCheckRollup`.text();
+	const pr = JSON.parse(out) as {
+		state: string;
+		body: string;
+		commits: { messageHeadline: string; messageBody: string }[];
+		statusCheckRollup: {
+			conclusion?: string;
+			state?: string;
+			status?: string;
+		}[];
+	};
+	return {
+		state: pr.state,
+		body: pr.body ?? "",
+		commits: pr.commits.map((c) => `${c.messageHeadline}\n\n${c.messageBody}`),
+		// A run that has not finished has no conclusion: not green.
+		checks: pr.statusCheckRollup.map(
+			(c) => c.conclusion || c.state || c.status || "PENDING",
+		),
+	};
 }
 
 /** Missing, unreadable or malformed transcripts count as an empty parse. */
@@ -365,6 +395,8 @@ export function createApi(
 						input.session_id,
 						input.agent_id ?? input.prompt_id ?? null,
 					);
+				const ended = fromClaudeHook(input);
+				if (ended) closeOnEnd(store, ended, now);
 			}
 		});
 	}
@@ -523,7 +555,14 @@ export function createApi(
 				}
 			}
 			if (input.hook_event_name !== "Stop") return;
-			if (!input.turn_id) throw new Error("missing turn id");
+			const ended = fromCodexHook(input);
+			// Whatever the rollout holds, the run is over: close what no evidence reached.
+			const close = () =>
+				ended && closeOnEnd(store, ended, deps.clock.now(), suggestionId);
+			if (!input.turn_id) {
+				close();
+				throw new Error("missing turn id");
+			}
 			const rollout = await readTranscript(input.transcript_path, (text) =>
 				parseCodexRollout(text, input.turn_id as string),
 			);
@@ -535,6 +574,7 @@ export function createApi(
 					input.session_id,
 					input.turn_id,
 				);
+				close();
 				return;
 			}
 			recordCodexTurn(
@@ -545,6 +585,7 @@ export function createApi(
 				rollout,
 				input.session_id,
 			);
+			close();
 		});
 	}
 
@@ -1006,6 +1047,32 @@ export function createApi(
 					}
 				} catch {}
 			}
+		},
+
+		async pending({ olderThanMs = 0 }) {
+			return withStore((store) => store.pending(olderThanMs, deps.clock.now()));
+		},
+
+		async signalPr({ url, review }) {
+			const pr = await (internals.fetchPr ?? ghPr)(url);
+			const id = suggestionFromPr(pr);
+			if (!id) throw new Error("PR has no Spatz-Suggestion trailer");
+			const result = resultFromPr(pr, review);
+			if (!result) return null;
+			return withStore((store) => {
+				const pair = store.pairOf(id);
+				if (!store.getSuggestion(id) || !pair)
+					throw new Error(`unknown suggestion_id ${id}`);
+				store.reportAttempt({
+					suggestion_id: id,
+					model: pair.model,
+					model_version: null,
+					effort: pair.effort,
+					result,
+					at: deps.clock.now(),
+				});
+				return { suggestion_id: id, result };
+			});
 		},
 
 		async stats({ type, by, modelVersion }) {

@@ -1266,3 +1266,69 @@ test("mod ownership leaves other agents and sessions intact and rolls back inval
 			?.output_tokens,
 	).toBe(3);
 });
+
+describe("unknown outcomes and pending", () => {
+	test("closeUnknown marks only open suggestions of the session and agent", () => {
+		const store = open();
+		const mk = (id: string, over: Partial<SuggestionRecord> = {}) =>
+			store.insertSuggestion(
+				suggestion({ id, session_id: "S", agent_id: null, ...over }),
+			);
+		mk("main");
+		mk("sub", { agent_id: "a1" });
+		mk("other", { session_id: "T" });
+		mk("done");
+		store.reportAttempt({
+			suggestion_id: "done",
+			model: "anthropic/claude-opus-5.5",
+			effort: "high",
+			result: "pass",
+			at: 2000,
+		});
+		expect(store.closeUnknown({ session: "S", agentId: null }, 3000)).toEqual([
+			"main",
+		]);
+		expect(store.closeUnknown({ session: "S", agentId: "a1" }, 3000)).toEqual([
+			"sub",
+		]);
+		expect(store.closeUnknown({ session: "S", agentId: "a1" }, 3000)).toEqual(
+			[],
+		);
+		expect(store.pending(0, 10_000).map((p) => p.id)).toEqual(["other"]);
+	});
+
+	test("pending honors the age threshold and lists session, agent and type", () => {
+		const store = open();
+		store.insertSuggestion(
+			suggestion({
+				id: "old",
+				created_at: 1000,
+				session_id: "S",
+				agent_id: "a",
+			}),
+		);
+		store.insertSuggestion(suggestion({ id: "new", created_at: 9000 }));
+		store.insertSuggestion(
+			suggestion({ id: "dry", created_at: 1000, is_test: true }),
+		);
+		expect(store.pending(5000, 10_000)).toEqual([
+			{
+				id: "old",
+				created_at: 1000,
+				session_id: "S",
+				agent_id: "a",
+				task_type: "code.bugfix",
+				source: "cli",
+			},
+		]);
+	});
+
+	test("pairOf prefers the first attempt, else the top ranked pair", () => {
+		const store = open();
+		store.insertSuggestion(suggestion({ id: "x" }));
+		expect(store.pairOf("x")).toEqual({
+			model: "anthropic/claude-opus-5.5",
+			effort: "high",
+		});
+	});
+});

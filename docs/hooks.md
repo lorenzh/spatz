@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [attempt, retry, binding, pending, identity, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
+keywords: [unknown outcome, coverage, events, adapters, attempt, retry, binding, pending, identity, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
 ---
 
 # Claude Code hooks for spatz
@@ -84,6 +84,7 @@ spatz handles these four events. Other events do no harm, but they give no signa
 | `PostToolUse` | Tool is `Agent` | Requested model, requested agent type and answering model in `dispatches`, even without an open suggestion. Linked usage has unknown tokens and effort. |
 | `Stop` | Event has a `prompt_id` | Model, effort and tokens of the main session for this turn, read from the transcript. |
 | `SubagentStop` | Always | Model, effort and tokens of the subagent, read from the subagent transcript. |
+| `Stop`, `SubagentStop`, Codex `Stop` | Always | Closes every suggestion of that session and agent that still has no outcome as `unknown`. A Codex run started with `SPATZ_SUGGESTION_ID` closes that suggestion too. |
 
 spatz ignores the `SubagentHandback` tool event and the second `UserPromptSubmit` that a subagent handback starts.
 
@@ -413,3 +414,13 @@ For a database access error, check write access to `~/.spatz`.
 SQLite also needs access to its WAL and shared-memory files.
 In a sandboxed `codex exec` run, use `--add-dir ~/.spatz` to allow database writes.
 Diagnostics do not change hook exit codes.
+
+## Outcomes without a manual report
+
+When an agent ends, the hooks look at its suggestions. A suggestion with test or build evidence has an outcome. A suggestion without any evidence is stored as `unknown`. `unknown` counts neither as success nor as failure, so it never changes a recommendation. It does count as covered in `spatz stats` and no longer appears in `spatz pending`. A later outcome (a hook signal, `spatz report` or `spatz signal pr`) still takes effect.
+
+Hooks cannot close a suggestion that is not linked to a session and agent. Use `spatz pending` to find those.
+
+### Harness-neutral events
+
+All hook logic works on one event contract in `packages/core/src/events`: `session_start`, `turn_start`, `tool_run` (command and exit code), `subagent_start`, `subagent_end` and `session_end`. Each harness has a thin adapter that maps its native payload to this contract. The adapter declares what the harness cannot provide: Codex has no subagent events and its tool payload has no exit code (`exit_code` is `null`).

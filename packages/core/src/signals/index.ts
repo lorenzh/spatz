@@ -9,6 +9,7 @@ import type {
 import {
 	EFFORTS,
 	type Effort,
+	type ReportResult,
 	SIGNAL_WEIGHTS,
 	type SignalRecord,
 } from "../contracts/types.ts";
@@ -37,7 +38,7 @@ export function isIgnoredHookInput(input: HookInput): boolean {
 // A command segment starts at the beginning or after ;, &, |.
 const START = String.raw`(?:^|[;&|]\s*)`;
 const SPATZ_SUGGEST = new RegExp(
-	String.raw`${START}(?:rtk(?:\s+proxy)?\s+)?(?:(?:[^\s;&|]*/)?spatz|(?:npx(?:\s+(?:-y|--yes))?|bunx(?:\s+--bun)?|npm\s+exec)\s+@spatz/cli(?:@[0-9A-Za-z.+_-]+)?(?:\s+--)?)\s+(?!(?:report|hook|stats|usage|link|import-rollout|attempt)(?:\s|$)|-)\S`,
+	String.raw`${START}(?:rtk(?:\s+proxy)?\s+)?(?:(?:[^\s;&|]*/)?spatz|(?:npx(?:\s+(?:-y|--yes))?|bunx(?:\s+--bun)?|npm\s+exec)\s+@spatz/cli(?:@[0-9A-Za-z.+_-]+)?(?:\s+--)?)\s+(?!(?:report|hook|stats|usage|link|import-rollout|attempt|pending|signal)(?:\s|$)|-)\S`,
 );
 // ponytail: keyword regexes, not a shell parser; extend the lists when a tool is missed.
 // Each matches only at the command position of a segment: after env assignments and runner prefixes.
@@ -77,7 +78,9 @@ export function detectCommandKind(command: string): CommandKind {
 		.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (quoted) => {
 			const value = quoted.slice(1, -1);
 			if (
-				/^(?:report|hook|stats|usage|link|import-rollout|attempt)$/.test(value)
+				/^(?:report|hook|stats|usage|link|import-rollout|attempt|pending|signal)$/.test(
+					value,
+				)
 			)
 				return value;
 			return /^[^"'`;|&\n()]+\/spatz$/.test(value) ? "spatz" : "''";
@@ -131,4 +134,56 @@ export function signalFromBashEvent(
 export function effortFromHook(input: HookInput): Effort | null {
 	const level = input.effort?.level;
 	return EFFORTS.find((e) => e === level) ?? null;
+}
+
+// ---------- Work-result signals: pull requests ----------
+
+export interface PrInfo {
+	/** GitHub state: OPEN, CLOSED or MERGED. */
+	state: string;
+	body: string;
+	/** Full commit messages. */
+	commits: string[];
+	/** Check conclusions or states, e.g. SUCCESS, FAILURE. Empty when the repo has no checks. */
+	checks: string[];
+}
+
+export type ReviewVerdict = "approve" | "changes" | "blocker";
+export const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
+	"approve",
+	"changes",
+	"blocker",
+];
+const REVIEW_RESULT = {
+	approve: "pass",
+	changes: "partial",
+	blocker: "fail",
+} as const;
+
+const TRAILER =
+	/^Spatz-Suggestion:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$/im;
+
+/** The suggestion id of a `Spatz-Suggestion: <id>` trailer in the PR body, else in a commit message. */
+export function suggestionFromPr(pr: PrInfo): string | null {
+	for (const text of [pr.body, ...pr.commits]) {
+		const id = TRAILER.exec(text)?.[1];
+		if (id) return id.toLowerCase();
+	}
+	return null;
+}
+
+const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
+/**
+ * Merged with green checks (or no checks) -> pass; merged with other checks -> partial; closed unmerged -> fail.
+ * An open PR has no result yet, except through a review verdict: approve pass, changes partial, blocker fail.
+ */
+export function resultFromPr(
+	pr: PrInfo,
+	review?: ReviewVerdict,
+): ReportResult | null {
+	if (pr.state === "MERGED")
+		return pr.checks.every((c) => GREEN.has(c)) ? "pass" : "partial";
+	if (pr.state === "CLOSED") return "fail";
+	return review ? REVIEW_RESULT[review] : null;
 }

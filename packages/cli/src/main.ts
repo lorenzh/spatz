@@ -35,13 +35,26 @@ const USAGE = `usage:
   spatz import-rollout <file> --suggestion <id> [--json]
   spatz hook <event> [--agent codex]
   spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
+  spatz signal pr <url> [--review approve|changes|blocker] [--json]
+  spatz pending [--older-than <n>s|m|h|d] [--json]
   spatz stats [--type <t>] [--by scope] [--model-version <v>] [--json]`;
+
+const REVIEWS: readonly string[] = ["approve", "changes", "blocker"];
+const UNIT_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
+
+/** "1h" -> milliseconds. */
+function parseAge(text: string): number {
+	const m = /^(\d+)([smhd])$/.exec(text);
+	if (!m) throw new UsageError("--older-than must look like 30m, 1h or 2d");
+	return Number(m[1]) * UNIT_MS[m[2] as keyof typeof UNIT_MS];
+}
 
 const RESULTS: readonly string[] = ["pass", "partial", "fail"];
 
 /** Thrown for bad arguments; main maps it to exit 2. */
 class UsageError extends Error {}
 
+const COVERAGE_WARN = 0.8;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 function formatSuggestion(s: Suggestion): string {
@@ -101,6 +114,12 @@ function formatStats(r: StatsReport): string {
 	lines.push(
 		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
 	);
+	for (const c of r.coverage_by_source) {
+		const share = c.n ? c.covered / c.n : 1;
+		lines.push(
+			`outcome coverage ${c.source}: ${pct(share)} (${c.covered}/${c.n})${share < COVERAGE_WARN ? "  warning: below 80%, run spatz pending" : ""}`,
+		);
+	}
 	return [...lines, ...diagnostics].join("\n");
 }
 
@@ -113,6 +132,8 @@ function parse(argv: string[]) {
 			allowPositionals: true,
 			options: {
 				"retry-of": { type: "string" },
+				"older-than": { type: "string" },
+				review: { type: "string" },
 				attempt: { type: "string" },
 				correct: { type: "boolean" },
 				confirm: { type: "boolean" },
@@ -328,6 +349,43 @@ export async function main(
 			run = async () => {
 				const o = await api.report(input);
 				return { result: o, text: () => formatOutcome(suggestionId, o) };
+			};
+		} else if (cmd === "signal") {
+			if (rest[0] !== "pr") throw new UsageError("signal needs pr");
+			const url = required(rest[1], "<url>");
+			const review = v.review;
+			if (review !== undefined && !REVIEWS.includes(review))
+				throw new UsageError("--review must be approve, changes or blocker");
+			const input = {
+				url,
+				...(review && { review: review as "approve" | "changes" | "blocker" }),
+			};
+			run = async () => {
+				const r = await api.signalPr(input);
+				return {
+					result: r,
+					text: () =>
+						r
+							? `signal: ${r.suggestion_id}  result: ${r.result}`
+							: "signal: none (PR is still open)",
+				};
+			};
+		} else if (cmd === "pending") {
+			const olderThanMs = parseAge(v["older-than"] ?? "0s");
+			run = async () => {
+				const r = await api.pending({ olderThanMs });
+				return {
+					result: r,
+					text: () =>
+						r.length
+							? r
+									.map(
+										(p) =>
+											`${p.id}  ${new Date(p.created_at).toISOString()}  source=${p.source}  session=${p.session_id ?? "-"}  agent=${p.agent_id ?? "-"}  task_type=${p.task_type}`,
+									)
+									.join("\n")
+							: "pending: none",
+				};
 			};
 		} else if (cmd === "stats") {
 			const type = v.type;
