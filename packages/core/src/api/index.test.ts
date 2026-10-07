@@ -20,6 +20,38 @@ import codexExec from "../signals/fixtures/codex-exec-identity.json";
 import { openStore, SCHEMA_VERSION } from "../store/index.ts";
 import { createApi } from "./index.ts";
 
+const lvc = {
+	itt: {
+		decisions: 0,
+		outcomes: 0,
+		coverage: null,
+		rate: null,
+		control_rate: null,
+		diff: null,
+		ci95: null,
+	},
+	qualified: {
+		decisions: 0,
+		outcomes: 0,
+		coverage: null,
+		rate: null,
+		control_rate: null,
+		diff: null,
+		ci95: null,
+	},
+	fallback: {
+		decisions: 0,
+		outcomes: 0,
+		coverage: null,
+		rate: null,
+		control_rate: null,
+		diff: null,
+		ci95: null,
+	},
+	control: { decisions: 0, outcomes: 0 },
+	cells: [],
+};
+
 const OPENROUTER_FIXTURE = join(
 	import.meta.dir,
 	"../catalog/fixtures/openrouter-models.json",
@@ -756,6 +788,7 @@ describe("stats", () => {
 			learned_success: null,
 			fallback_success: null,
 			control_success: null,
+			learned_vs_control: lvc,
 			dispatches: 0,
 			routed_by_mod: 0,
 			swapped: 0,
@@ -855,6 +888,7 @@ describe("direct mod attribution", () => {
 						learned_success: null,
 						fallback_success: null,
 						control_success: null,
+						learned_vs_control: lvc,
 						dispatches: 0,
 						routed_by_mod: 0,
 						swapped: 0,
@@ -1566,6 +1600,7 @@ describe("failure diagnostics", () => {
 				learned_success: null,
 				fallback_success: null,
 				control_success: null,
+				learned_vs_control: lvc,
 				dispatches: 0,
 				routed_by_mod: 0,
 				swapped: 0,

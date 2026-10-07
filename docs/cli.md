@@ -531,6 +531,8 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `by_type[].incomplete` | number | Count of known Claude subagent lower-bound estimates. Zero when none are present. |
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | First-attempt success rate of learned root decisions in cells with both learned and control outcomes, weighted by their counts. |
+| `learned_vs_control` | object | `itt`, `qualified`, `fallback` (each `decisions`, `outcomes`, `coverage`, `rate`, `control_rate`, `diff`, `ci95`), `control` and `cells`. See [recommendation.md](recommendation.md). |
+| `by_type[].pairs[]` cost fields | numbers or null | `cost_usd_per_success`, `tokens_per_success`, `cost_usd_per_attempt`, `orchestration_cost_usd`, `cost_incomplete_share`. |
 | `fallback_success` | number or null | The same for `learned-fallback` root decisions (best estimate, no pair met the limits). |
 | `control_success` | number or null | Success rate of the control group in the same cells. |
 | `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |

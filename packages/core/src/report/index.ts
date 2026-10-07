@@ -3,6 +3,8 @@
 import { Database } from "bun:sqlite";
 import { difficultySql } from "../contracts/difficulty.ts";
 import type {
+	ArmComparison,
+	LearnedVsControl,
 	PairStats,
 	ScopeStats,
 	StatsReport,
@@ -43,6 +45,84 @@ o AS (
 	FROM s JOIN oq o ON o.suggestion_id = s.id
 )`;
 
+interface Decision {
+	task_type: TaskType;
+	difficulty: string;
+	arm: "control" | "learned-fallback" | "learned";
+	success: number | null;
+	explored: number;
+}
+
+// Mulberry32: a fixed seed keeps the interval stable between runs.
+function rng(seed: number) {
+	return () => {
+		seed = (seed + 0x6d2b79f5) | 0;
+		let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+// Per cell with outcomes in both groups: weight = the arm's outcomes. Returns null without such a cell.
+function estimate(rows: Decision[], arms: Set<string>) {
+	const cells = new Map<string, { l: number[]; k: number[] }>();
+	for (const d of rows) {
+		if (d.success === null) continue;
+		const side = d.arm === "control" ? "k" : arms.has(d.arm) ? "l" : null;
+		if (!side) continue;
+		const key = `${d.task_type}\0${d.difficulty}`;
+		const c = cells.get(key) ?? { l: [], k: [] };
+		c[side].push(d.success);
+		cells.set(key, c);
+	}
+	let w = 0;
+	let l = 0;
+	let k = 0;
+	const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+	for (const c of cells.values()) {
+		if (!c.l.length || !c.k.length) continue;
+		w += c.l.length;
+		l += c.l.length * mean(c.l);
+		k += c.l.length * mean(c.k);
+	}
+	return w ? { rate: l / w, control: k / w } : null;
+}
+
+function compare(rows: Decision[], arms: string[]): ArmComparison {
+	const set = new Set(arms);
+	const mine = rows.filter((d) => set.has(d.arm));
+	const outcomes = mine.filter((d) => d.success !== null).length;
+	const est = estimate(rows, set);
+	let ci95: [number, number] | null = null;
+	if (est) {
+		// ponytail: 1000 plain resamples of decisions; stratified resampling if cells get thin.
+		const rand = rng(41);
+		const diffs: number[] = [];
+		for (let i = 0; i < 1000; i++) {
+			const s = rows.map(
+				() => rows[Math.floor(rand() * rows.length)] as Decision,
+			);
+			const e = estimate(s, set);
+			if (e) diffs.push(e.rate - e.control);
+		}
+		diffs.sort((a, b) => a - b);
+		if (diffs.length)
+			ci95 = [
+				diffs[Math.floor(0.025 * (diffs.length - 1))] as number,
+				diffs[Math.ceil(0.975 * (diffs.length - 1))] as number,
+			];
+	}
+	return {
+		decisions: mine.length,
+		outcomes,
+		coverage: mine.length ? outcomes / mine.length : null,
+		rate: est?.rate ?? null,
+		control_rate: est?.control ?? null,
+		diff: est ? est.rate - est.control : null,
+		ci95,
+	};
+}
+
 /** Opens dbPath read-only; aggregates from suggestions, usages and the outcomes views; is_test rows excluded. */
 export async function runStats(options: StatsOptions): Promise<StatsReport> {
 	const { dbPath, type, successQuality: q } = options;
@@ -73,10 +153,77 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				tok.input_tokens, tok.output_tokens, tok.cache_read_tokens, tok.cache_creation_tokens, tok.cost_usd, tok.incomplete
 			FROM tok LEFT JOIN agg USING (task_type) ORDER BY tok.task_type`,
 		);
+		// Chains rooted at the pair. Spend = every attempt; orchestration (no attempt) is listed apart. Chains with
+		// incomplete cost evidence (cost_usd NULL, lower bounds, or an attempt without usage) count in n_chains but not in the spend.
 		const pairs = rows<PairStats & { task_type: TaskType }>(
-			`SELECT task_type, model, effort, COUNT(*) AS n, AVG(success) AS success_rate
-			FROM o WHERE model IS NOT NULL GROUP BY task_type, model, effort ORDER BY model, effort`,
+			`, ch AS (
+				SELECT s.task_type, c.model, c.effort, c.success, c.cost_usd,
+					COALESCE(c.cost_usd IS NOT NULL AND c.incomplete = 0 AND NOT EXISTS (
+						SELECT 1 FROM attempts a WHERE a.root_id = c.root_id
+						AND NOT EXISTS (SELECT 1 FROM attempt_usage u WHERE u.attempt_id = a.id)), 0) AS known,
+					COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0) + COALESCE(c.cache_read_tokens, 0) + COALESCE(c.cache_creation_tokens, 0)
+					- COALESCE(c.orchestration_input_tokens, 0) - COALESCE(c.orchestration_output_tokens, 0)
+					- COALESCE(c.orchestration_cache_read_tokens, 0) - COALESCE(c.orchestration_cache_creation_tokens, 0) AS tokens,
+					c.cost_usd - COALESCE(c.orchestration_cost_usd, 0) AS spend, c.orchestration_cost_usd AS orch
+				FROM s JOIN chain_outcomes c ON c.suggestion_id = s.id
+				WHERE c.completed = 1 AND ($mv IS NULL OR c.root_id IN (SELECT root_id FROM attempt_outcomes WHERE model_version = $mv))
+			), cs AS (
+				SELECT task_type, model, effort,
+					1.0 * SUM(CASE WHEN known THEN success END) AS wins,
+					SUM(spend) FILTER (WHERE known) AS spend,
+					SUM(tokens) FILTER (WHERE known) AS tokens,
+					SUM(orch) FILTER (WHERE known) AS orch,
+					1.0 * COUNT(*) FILTER (WHERE NOT known) / COUNT(*) AS incomplete_share
+				FROM ch GROUP BY task_type, model, effort
+			), ap AS (
+				SELECT s.task_type, u.model, u.effort, AVG(u.cost_usd) AS per_attempt
+				FROM s JOIN attempt_usage u ON u.suggestion_id = s.id GROUP BY s.task_type, u.model, u.effort
+			)
+			SELECT o.task_type, o.model, o.effort, COUNT(*) AS n, AVG(o.success) AS success_rate,
+				CASE WHEN cs.wins > 0 THEN cs.spend / cs.wins END AS cost_usd_per_success,
+				CASE WHEN cs.wins > 0 THEN cs.tokens / cs.wins END AS tokens_per_success,
+				ap.per_attempt AS cost_usd_per_attempt,
+				cs.orch AS orchestration_cost_usd,
+				COALESCE(cs.incomplete_share, 0) AS cost_incomplete_share
+			FROM o LEFT JOIN cs ON cs.task_type = o.task_type AND cs.model IS o.model AND cs.effort IS o.effort
+			LEFT JOIN ap ON ap.task_type = o.task_type AND ap.model IS o.model AND ap.effort IS o.effort
+			WHERE o.model IS NOT NULL GROUP BY o.task_type, o.model, o.effort ORDER BY o.model, o.effort`,
 		);
+		const decisions = rows<Decision>(
+			`SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty,
+				CASE WHEN s.control = 1 THEN 'control' ELSE s.strategy END AS arm, s.explored,
+				(SELECT success FROM oq WHERE oq.suggestion_id = s.id AND (oq.attempt_id IS NULL OR oq.attempt_id = oq.root_id) LIMIT 1) AS success
+			FROM s WHERE (s.control = 1 OR s.strategy IN ('learned', 'learned-fallback'))
+				AND (s.id IN (SELECT suggestion_id FROM attempts WHERE id = root_id) OR s.id NOT IN (SELECT suggestion_id FROM attempts))`,
+		);
+		// ITT keeps every root decision by assigned arm; qualified and fallback drop explored picks.
+		const chosen = decisions.filter((d) => d.arm === "control" || !d.explored);
+		const lvc: LearnedVsControl = {
+			itt: compare(decisions, ["learned", "learned-fallback"]),
+			qualified: compare(chosen, ["learned"]),
+			fallback: compare(chosen, ["learned-fallback"]),
+			control: {
+				decisions: decisions.filter((d) => d.arm === "control").length,
+				outcomes: decisions.filter(
+					(d) => d.arm === "control" && d.success !== null,
+				).length,
+			},
+			cells: [],
+		};
+		const mix = new Map<string, LearnedVsControl["cells"][number]>();
+		for (const d of decisions) {
+			if (d.success === null) continue;
+			const key = `${d.task_type}\0${d.difficulty}`;
+			const c = mix.get(key) ?? {
+				task_type: d.task_type,
+				difficulty: d.difficulty,
+				learned: 0,
+				control: 0,
+			};
+			c[d.arm === "control" ? "control" : "learned"]++;
+			mix.set(key, c);
+		}
+		lvc.cells = [...mix.values()];
 		const [cov] = rows<{ coverage: number | null }>(
 			`SELECT 1.0 * COUNT(DISTINCT o.suggestion_id) / NULLIF(COUNT(DISTINCT s.id), 0) AS coverage
 			FROM s LEFT JOIN outcomes o ON o.suggestion_id = s.id`,
@@ -191,6 +338,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			learned_success: cmp?.learned_success ?? null,
 			fallback_success: cmp?.fallback_success ?? null,
 			control_success: cmp?.control_success ?? null,
+			learned_vs_control: lvc,
 		};
 	} finally {
 		db.close();

@@ -93,7 +93,7 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 			result.by_type.find((row) => row.task_type === "review"),
 		).toMatchObject({ incomplete: 0 });
 		// Preserve the frozen statistics; lower-bound counts are new in v9, fallback_success is newer.
-		expect<unknown>({
+		expect<unknown>(result).toMatchObject({
 			...baseline.stats,
 			fallback_success: null,
 			by_scope: baseline.stats.by_scope.map((row) => ({
@@ -113,7 +113,7 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 					cache_creation_tokens: cache.cache_creation_tokens,
 				};
 			}),
-		}).toEqual(result);
+		});
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
