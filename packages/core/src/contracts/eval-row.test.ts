@@ -97,7 +97,7 @@ const row = {
 		reasoning: 169,
 	},
 	cost_usd: 0.31,
-	estimated_cost_usd: 0.053153,
+	estimated_cost_usd: 0.066623,
 	started_at: "2026-10-06T09:00:00.000Z",
 	contributor: "anon-01234567",
 	verified: true,

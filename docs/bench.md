@@ -94,7 +94,7 @@ spatz stores each row as one attempt with `source = eval`. Eval attempts never e
 A rubric row for a UI design task:
 
 ```json
-{"schema":"spatz-eval-row/1","run_id":"0f8fad5b-d9cb-469f-a165-70867728950e","bench_version":"1","task_id":"sample/ui-1","task_version":1,"task_type":"design.ui","difficulty":"easy","criticality":"none","harness":"claude-code","agent_version":"2.1.289","model":"anthropic/claude-opus-5.5","effort":"high","answered_model":"claude-opus-5-5","model_version":null,"attempt":1,"result":"partial","check":"rubric","judge":"anthropic/claude-opus-5.5:2026-10","duration_s":41.2,"tokens":{"input":6,"output":1095,"cache_read":43895,"cache_write":4490,"reasoning":169},"cost_usd":0.31,"estimated_cost_usd":0.053153,"started_at":"2026-10-06T09:00:00.000Z","contributor":"anon-01234567","verified":true}
+{"schema":"spatz-eval-row/1","run_id":"0f8fad5b-d9cb-469f-a165-70867728950e","bench_version":"1","task_id":"sample/ui-1","task_version":1,"task_type":"design.ui","difficulty":"easy","criticality":"none","harness":"claude-code","agent_version":"2.1.289","model":"anthropic/claude-opus-5.5","effort":"high","answered_model":"claude-opus-5-5","model_version":null,"attempt":1,"result":"partial","check":"rubric","judge":"anthropic/claude-opus-5.5:2026-10","duration_s":41.2,"tokens":{"input":6,"output":1095,"cache_read":43895,"cache_write":4490,"reasoning":169},"cost_usd":0.31,"estimated_cost_usd":0.066623,"started_at":"2026-10-06T09:00:00.000Z","contributor":"anon-01234567","verified":true}
 ```
 
 A Codex row without a reported cost:
