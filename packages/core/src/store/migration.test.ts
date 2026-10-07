@@ -306,7 +306,7 @@ test("v8 index failure rolls back the whole ledger and keeps v7 rows", async () 
 test("usage completeness migration marks stored Claude subagents and filters existing costs", async () => {
 	const dir = directory();
 	const { path, db } = await fixture(dir);
-	const previous = await previousStore(dir, 2);
+	const previous = await previousStore(dir, 3);
 	previous.openDatabase(path).close();
 	db.run("UPDATE suggestions SET agent='claude-code' WHERE id IN ('h','r')");
 	db.run(

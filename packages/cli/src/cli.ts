@@ -25,6 +25,8 @@ const code = await main(
 		report: async (input) => api().report(input),
 		handleHook: async (event, stdin) => api().handleHook(event, stdin),
 		stats: async (input) => api().stats(input),
+		pending: async (input) => api().pending(input),
+		signalPr: async (input) => api().signalPr(input),
 	},
 );
 process.exit(code);

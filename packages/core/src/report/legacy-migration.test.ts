@@ -96,6 +96,8 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 		expect<unknown>({
 			...baseline.stats,
 			fallback_success: null,
+			// New in v11: per-source coverage.
+			coverage_by_source: result.coverage_by_source,
 			by_scope: baseline.stats.by_scope.map((row) => ({
 				...row,
 				incomplete: 0,

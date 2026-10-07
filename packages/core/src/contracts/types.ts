@@ -479,6 +479,8 @@ export interface StatsReport {
 	by_type: TypeStats[];
 	/** Share of non-test suggestions with an outcome. */
 	coverage: number;
+	/** Per source (claude-code-mod, claude-code, codex, cli): non-test suggestions and how many have an outcome or an explicit unknown. */
+	coverage_by_source: { source: string; n: number; covered: number }[];
 	/** Success rate of learned vs control, compared per cell, weighted by count per cell. null without data. */
 	learned_success: number | null;
 	/** Success rate of learned-fallback picks (best estimate, no pair met the limits) vs control in the same cells. null without data. */

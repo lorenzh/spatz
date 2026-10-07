@@ -10,8 +10,11 @@ import {
 	effortFromHook,
 	extractSuggestionId,
 	isIgnoredHookInput,
+	type PrInfo,
 	parseHookInput,
+	resultFromPr,
 	signalFromBashEvent,
+	suggestionFromPr,
 } from "./index.ts";
 import { parseCodexRollout } from "./transcript.ts";
 
@@ -395,4 +398,39 @@ test.each([
 	"rtk proxy spatz import-rollout run.jsonl --suggestion id",
 ])("%s does not create a suggestion link", (command) => {
 	expect(detectCommandKind(command)).toBeNull();
+});
+
+describe("pull request signals", () => {
+	const ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+	const pr = (over: Partial<PrInfo> = {}): PrInfo => ({
+		state: "MERGED",
+		body: `Fixes SPZ-1\n\nSpatz-Suggestion: ${ID}`,
+		commits: [],
+		checks: ["SUCCESS", "SKIPPED"],
+		...over,
+	});
+	test("finds the trailer in the body, else in a commit", () => {
+		expect(suggestionFromPr(pr())).toBe(ID);
+		expect(
+			suggestionFromPr(
+				pr({
+					body: "none",
+					commits: [`feat: x\n\nSpatz-Suggestion: ${ID.toUpperCase()}`],
+				}),
+			),
+		).toBe(ID);
+		expect(
+			suggestionFromPr(pr({ body: "Spatz-Suggestion: not-an-id" })),
+		).toBeNull();
+	});
+	test("merged green passes, merged red is partial, closed fails, open waits for a review", () => {
+		expect(resultFromPr(pr())).toBe("pass");
+		expect(resultFromPr(pr({ checks: [] }))).toBe("pass");
+		expect(resultFromPr(pr({ checks: ["FAILURE"] }))).toBe("partial");
+		expect(resultFromPr(pr({ state: "CLOSED" }))).toBe("fail");
+		expect(resultFromPr(pr({ state: "OPEN" }))).toBeNull();
+		expect(resultFromPr(pr({ state: "OPEN" }), "approve")).toBe("pass");
+		expect(resultFromPr(pr({ state: "OPEN" }), "changes")).toBe("partial");
+		expect(resultFromPr(pr({ state: "OPEN" }), "blocker")).toBe("fail");
+	});
 });

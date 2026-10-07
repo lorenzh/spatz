@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -17,6 +17,8 @@ spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> 
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
 spatz import-rollout <file> --suggestion <id> [--json]
 spatz hook <event> [--agent codex]
+spatz signal pr <url> [--review approve|changes|blocker] [--json]
+spatz pending [--older-than <n>s|m|h|d] [--json]
 spatz stats [--type <t>] [--by scope] [--model-version <v>] [--json]
 ```
 
@@ -388,6 +390,30 @@ $ echo $?
 
 For Codex, pass `--agent codex`, for example `spatz hook Stop --agent codex`.
 
+## spatz pending
+
+This command lists suggestions that have neither an outcome nor an `unknown` mark, oldest first. Test suggestions are not listed. An orchestrator or a Stop hook can use it to close them. spatz stores no task text, so each line shows the task type instead.
+
+| Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `--older-than <n>s\|m\|h\|d` | duration | `0s` | List only suggestions at least this old. Another format gives exit code 2. |
+| `--json` | boolean | `false` | Print a JSON array. |
+
+Each text line shows the id, the creation time, `source` (`claude-code-mod`, `claude-code`, `codex` or `cli`), `session`, `agent` and `task_type`.
+
+## spatz signal pr
+
+This command turns a pull request into an outcome. Put the line `Spatz-Suggestion: <suggestion_id>` into the PR body or into a commit message. The command reads the PR with the GitHub CLI (`gh pr view`), so `gh` must be installed and logged in. It can run in a CI step.
+
+| PR state | Result |
+| --- | --- |
+| Merged, all checks green (or no checks) | `pass` |
+| Merged, a check not green | `partial` |
+| Closed without merge | `fail` |
+| Open | No result. With `--review approve`, `changes` or `blocker`: `pass`, `partial` or `fail`. |
+
+A PR without the trailer gives exit code 1. The result is recorded like `spatz report`, for the pair of the first attempt of the suggestion, or its top ranked pair.
+
 ## spatz stats
 
 This command shows how well each pair worked, per task type. It reads the database with bun:sqlite in read-only mode. Test suggestions (`--dry-run`) are not counted.
@@ -399,6 +425,8 @@ This command shows how well each pair worked, per task type. It reads the databa
 | `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.test`, `code.explain`, `investigation`, `review`, `spec`, `planning`, `ops`, `design.ui`, `design.visual`, `design.3d`, `writing`, `research`, `data`, `other`. Another value gives exit code 2. |
 | `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
+
+Text output ends with one `outcome coverage <source>` line per source (`claude-code-mod`, `claude-code`, `codex`, `cli`). Coverage is the share of suggestions with an outcome or an explicit `unknown`. A source below 80 % shows a warning. JSON has the same data as `coverage_by_source`.
 
 `--by scope` adds `by_scope` to the JSON response. Text output shows one line per recorded scope.
 Suggestions without a scope appear as `unscoped` in text and `scope: null` in JSON.
