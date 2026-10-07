@@ -2,7 +2,7 @@
 title: Bench eval row format (spatz-eval-row/1)
 description: The versioned JSON Lines format in which a benchmark writes one row per run for spatz to import, with its field rules, null token semantics, the JSON Schema file and the TypeScript parser.
 tags: [spatz, benchmark, contract, data]
-keywords: [eval row, spatz-eval-row, EvalRow, parseEvalRow, EVAL_ROW_SCHEMA, json schema, jsonl, bench, check, rubric, judge, tokens, cost_usd, estimated_cost_usd, list price, null cost, task_type, versioning]
+keywords: [eval row, spatz-eval-row, EvalRow, parseEvalRow, EVAL_ROW_SCHEMA, json schema, jsonl, bench, check, rubric, judge, tokens, cost_usd, estimated_cost_usd, list price, official-prices.json, price-check, null cost, task_type, versioning]
 ---
 
 # Bench eval row format
@@ -83,7 +83,7 @@ estimated_cost_usd = input × input price
                    + output × output price
 ```
 
-`reasoning` is part of `output` and both providers bill it as output, so it is not added again. A null counter adds 0. The bench keeps the price table it used, with the source and date of each price. A row without the field parses with `estimated_cost_usd = null`. The field is additive, so the version stays `spatz-eval-row/1`.
+`reasoning` is part of `output` and both providers bill it as output, so it is not added again. A null counter adds 0. A row is priced once, when the bench publishes it, and the bench records the prices it used with their source and date. spatz pins the official list prices in [`catalog/official-prices.json`](../catalog/official-prices.json); a daily check compares them with OpenRouter and reports differences, but never changes the table. A row without the field parses with `estimated_cost_usd = null`. The field is additive, so the version stays `spatz-eval-row/1`.
 
 ## Import
 
