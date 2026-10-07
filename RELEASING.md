@@ -150,6 +150,10 @@ The script installs the latest published harness packages into temporary directo
 Installs disable package lifecycle scripts. Harness commands use temporary home directories without credentials or user configuration.
 The script needs no login or API key.
 
+The `prices` job runs `bun scripts/price-check.ts`. It compares the official list prices pinned in `catalog/official-prices.json` with OpenRouter's current prices and writes the result to the job summary.
+A changed price or a model OpenRouter no longer lists fails the job. Check the official pricing page, then update the table by hand with its date. The script never changes the table.
+Fields marked `prefer_official` (the Anthropic 1-hour cache write, which Claude Code bills) and prices only OpenRouter lists are expected differences and do not fail the job.
+
 The extractor uses these sources and selection rules:
 
 - **Claude Code:** the native package embeds a structured catalog marked by `https://downloads.claude.ai/model-catalog/v1/schema.json`.

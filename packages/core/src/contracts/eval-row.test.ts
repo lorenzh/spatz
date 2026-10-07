@@ -61,6 +61,7 @@ test("spatz-eval-row/1 pins its field names", () => {
 		"duration_s",
 		"tokens",
 		"cost_usd",
+		"estimated_cost_usd",
 		"started_at",
 		"contributor",
 		"verified",
@@ -96,6 +97,7 @@ const row = {
 		reasoning: 169,
 	},
 	cost_usd: 0.31,
+	estimated_cost_usd: 0.066623,
 	started_at: "2026-10-06T09:00:00.000Z",
 	contributor: "anon-01234567",
 	verified: true,
@@ -114,6 +116,7 @@ const codexNullCost = {
 	answered_model: "gpt-6.1-sol",
 	tokens: { ...row.tokens, cache_write: null, reasoning: null },
 	cost_usd: null,
+	estimated_cost_usd: 0.0153515,
 };
 const noUsage = {
 	...row,
@@ -125,6 +128,7 @@ const noUsage = {
 		reasoning: null,
 	},
 	cost_usd: null,
+	estimated_cost_usd: null,
 };
 
 test.each([
@@ -143,6 +147,14 @@ test("parseEvalRow drops unknown fields, keeps field order and defaults critical
 	expect(Object.keys(parsed ?? {})).toEqual([...EVAL_ROW_FIELDS]);
 	const { criticality: _, ...noCriticality } = row;
 	expect(parseEvalRow(noCriticality)?.criticality).toBe("none");
+});
+
+test("estimated_cost_usd is optional and defaults to null", () => {
+	const { estimated_cost_usd: _, ...noEstimate } = row;
+	expect(parseEvalRow(noEstimate)?.estimated_cost_usd).toBeNull();
+	expect(
+		parseEvalRow({ ...row, estimated_cost_usd: 0 })?.estimated_cost_usd,
+	).toBe(0);
 });
 
 test.each([
@@ -164,6 +176,13 @@ test.each([
 		{ ...row, tokens: { ...noUsage.tokens, output: 5 }, cost_usd: null },
 	],
 	["no usage but a cost", { ...noUsage, cost_usd: 0.1 }],
+	["no usage but an estimate", { ...noUsage, estimated_cost_usd: 0.1 }],
+	["a negative estimate", { ...row, estimated_cost_usd: -0.01 }],
+	[
+		"a non-finite estimate",
+		{ ...row, estimated_cost_usd: Number.POSITIVE_INFINITY },
+	],
+	["a string estimate", { ...row, estimated_cost_usd: "0.05" }],
 	["a missing field", { ...row, verified: undefined }],
 ])("parseEvalRow rejects %s", (_, value) => {
 	expect(parseEvalRow(value)).toBeNull();
@@ -173,7 +192,9 @@ test("the published JSON Schema lists the same fields and values as the parser",
 	const p = evalRowJsonSchema.properties;
 	expect(Object.keys(p)).toEqual([...EVAL_ROW_FIELDS]);
 	expect(evalRowJsonSchema.required).toEqual(
-		EVAL_ROW_FIELDS.filter((f) => f !== "criticality"),
+		EVAL_ROW_FIELDS.filter(
+			(f) => f !== "criticality" && f !== "estimated_cost_usd",
+		),
 	);
 	expect(p.schema.const).toBe(EVAL_ROW_SCHEMA);
 	expect(p.task_type.enum).toEqual([...EVAL_ROW_TASK_TYPES]);

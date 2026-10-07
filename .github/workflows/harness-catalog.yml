@@ -133,6 +133,23 @@ jobs:
           require_tested_base
           gh pr merge "$pr" --merge --delete-branch
 
+  prices:
+    # Reports differences between catalog/official-prices.json and OpenRouter; never changes the table.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.0'
+      - name: Compare official prices with OpenRouter
+        run: bun scripts/price-check.ts
+
   report:
     needs: [extract, test, publish]
     if: failure()
