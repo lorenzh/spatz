@@ -1,7 +1,12 @@
 // catalog/snapshot: bench snapshot files (spatz-bench-snapshot/1) as a weak prior. Fetch, cache, parse, effective counts.
 // Spec: issue "Use the bench snapshot as a prior" (Snapshot format, Fetch and delivery).
 import { join } from "node:path";
-import { DEFAULT_TUNING, TASK_TYPES } from "../contracts/types.ts";
+import {
+	DEFAULT_TUNING,
+	DIFFICULTIES,
+	EFFORTS,
+	TASK_TYPES,
+} from "../contracts/types.ts";
 import type { LoadModelsOptions } from "./openrouter.ts";
 
 export const SNAPSHOT_BASE_URL =
@@ -66,7 +71,7 @@ function parseCell(v: unknown): Cell | null {
 	return cell;
 }
 
-/** null for anything that is not a valid spatz-bench-snapshot/1; unknown task types and efforts are skipped, `other` never counts. */
+/** null for anything that is not a valid spatz-bench-snapshot/1; unknown efforts, task types and difficulties are skipped, `other` never counts. */
 export function parseSnapshot(value: unknown): Snapshot | null {
 	if (
 		!object(value) ||
@@ -78,7 +83,7 @@ export function parseSnapshot(value: unknown): Snapshot | null {
 		!object(value.efforts)
 	)
 		return null;
-	const judges: Snapshot["judges"] = {};
+	const judges: Snapshot["judges"] = Object.create(null);
 	if (value.judges !== undefined) {
 		if (!object(value.judges)) return null;
 		for (const [id, j] of Object.entries(value.judges))
@@ -87,6 +92,7 @@ export function parseSnapshot(value: unknown): Snapshot | null {
 	const efforts: Snapshot["efforts"] = {};
 	for (const [effort, types] of Object.entries(value.efforts)) {
 		if (!object(types)) return null;
+		if (!(EFFORTS as readonly string[]).includes(effort)) continue;
 		for (const [type, difficulties] of Object.entries(types)) {
 			if (!object(difficulties)) return null;
 			if (!(TASK_TYPES as readonly string[]).includes(type) || type === "other")
@@ -94,6 +100,7 @@ export function parseSnapshot(value: unknown): Snapshot | null {
 			for (const [difficulty, raw] of Object.entries(difficulties)) {
 				const cell = parseCell(raw);
 				if (!cell) return null;
+				if (!(DIFFICULTIES as readonly string[]).includes(difficulty)) continue;
 				efforts[effort] ??= {};
 				const byType = efforts[effort];
 				byType[type] ??= {};

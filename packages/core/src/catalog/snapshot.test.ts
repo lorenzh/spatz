@@ -170,3 +170,14 @@ test("a file for another model, and unsafe ids, are refused", async () => {
 		).toBeNull();
 	expect(calls).toBe(0);
 });
+
+test("parseSnapshot skips unknown efforts and difficulties without prototype pollution", () => {
+	const cell = { n: 1, successes: 1 };
+	const value = JSON.parse(
+		`{"schema":"spatz-bench-snapshot/1","model":"m","model_version":null,"efforts":{"__proto__":{"review":{"medium":${JSON.stringify(cell)}}},"high":{"review":{"__proto__":${JSON.stringify(cell)},"bogus":${JSON.stringify(cell)}}}},"judges":{"__proto__":{"validated":true}}}`,
+	);
+	const snap = parseSnapshot(value);
+	expect(({} as Record<string, unknown>).review).toBeUndefined();
+	expect(({} as Record<string, unknown>).validated).toBeUndefined();
+	expect(snap?.efforts).toEqual({});
+});
