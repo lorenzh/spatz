@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import table from "../catalog/official-prices.json";
 import { priceDiffs } from "./price-check.ts";
 
 const official = {
@@ -63,4 +64,15 @@ test("equal prices report nothing, despite float noise in USD per token", () => 
 			[model("anthropic/claude-opus-5.5", 4, 20, 0.2, 8)],
 		),
 	).toEqual({ changed: [], notes: [] });
+});
+
+test("pins Claude Haiku 5.5 at its rates for prompts up to 100K tokens", () => {
+	expect(
+		(table.models as Record<string, unknown>)["anthropic/claude-haiku-5.5"],
+	).toMatchObject({
+		input: 0.1,
+		cache_read: 0.01,
+		cache_write: 0.2,
+		output: 0.5,
+	});
 });
