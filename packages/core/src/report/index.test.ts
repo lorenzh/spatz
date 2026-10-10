@@ -283,6 +283,7 @@ test("empty db: no types, coverage 0, no comparison", async () => {
 		learned_success: null,
 		fallback_success: null,
 		control_success: null,
+		fallback_control_success: null,
 		coverage_by_source: [],
 		dispatches: 0,
 		routed_by_mod: 0,
@@ -507,6 +508,19 @@ test("learned-fallback picks get their own row, compared against control in the 
 	expect(r.learned_success).toBe(1);
 	expect(r.fallback_success).toBe(0.5);
 	expect(r.control_success).toBe(1);
+	expect(r.fallback_control_success).toBe(1);
+});
+
+test("fallback comparison gets its own control baseline over its cells", async () => {
+	sug("f1", { strategy: "learned-fallback" });
+	report("f1", "m/a", "low", "fail");
+	sug("k1", { control: true });
+	report("k1", "m/b", "high", "pass");
+	const r = await stats();
+	expect(r.fallback_success).toBe(0);
+	expect(r.fallback_control_success).toBe(1);
+	expect(r.learned_success).toBeNull();
+	expect(r.control_success).toBeNull();
 });
 
 test("success is quality >= 0.8; pairs and adoption distinguish effort", async () => {

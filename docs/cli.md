@@ -533,7 +533,7 @@ It needs no network access. spatz creates an empty database if none exists. Laun
 <task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cache_read_tokens=<count>  cache_creation_tokens=<count>  cost_usd=<amount or ->  incomplete=<count>
   <model>:<effort>  n=<count>  success=<pct>
 bench <model>:<effort>  n=<count>  success=<pct>  est_cost_per_success=<amount or ->
-coverage: <pct>  learned_success: <pct or ->  fallback_success: <pct or ->  control_success: <pct or ->
+coverage: <pct>  learned_success: <pct or ->  fallback_success: <pct or ->  control_success: <pct or ->  fallback_control_success: <pct or ->
 dispatches: <count>  routed_by_mod: <count>  swapped: <count>
 fallbacks: <reason>=<count>  ...
 failures: parse=<count>  hook=<count>  launcher=<count>
@@ -616,7 +616,8 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `learned_vs_control` | object | `itt`, `qualified`, `fallback` (each `decisions`, `outcomes`, `coverage`, `rate`, `control_rate`, `diff`, `ci95`), `control` and `cells`. See [recommendation.md](recommendation.md). |
 | `by_type[].pairs[]` cost fields | numbers or null | `cost_usd_per_success`, `tokens_per_success`, `cost_usd_per_attempt`, `orchestration_cost_usd`, `cost_incomplete_share`. |
 | `fallback_success` | number or null | The same for `learned-fallback` root decisions (best estimate, no pair met the limits). |
-| `control_success` | number or null | Success rate of the control group in the same cells. |
+| `control_success` | number or null | Success rate of the control group in the cells and weights of `learned_success`. |
+| `fallback_control_success` | number or null | Success rate of the control group in the cells and weights of `fallback_success`. Compare `fallback_success` with this field, not with `control_success`. |
 | `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |
 | `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
 | `failures` | object | Global `parse`, `hook` and `launcher` counts. Each defaults to zero. |
@@ -628,7 +629,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 $ spatz stats
 other  n=1  adoption=100%  input_tokens=0  output_tokens=0  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-  incomplete=0
   anthropic/claude-sonnet-5.5:medium  n=1  success=100%
-coverage: 14%  learned_success: -  fallback_success: -  control_success: -
+coverage: 14%  learned_success: -  fallback_success: -  control_success: -  fallback_control_success: -
 dispatches: 0  routed_by_mod: 0  swapped: 0
 fallbacks: opt_out=7
 failures: parse=0  hook=0  launcher=0
@@ -636,7 +637,7 @@ failures: parse=0  hook=0  launcher=0
 
 ```console
 $ spatz stats --json
-{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":null,"incomplete":0}],"coverage":0.14285714285714285,"learned_success":null,"fallback_success":null,"control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
+{"by_type":[{"task_type":"other","n":1,"pairs":[{"model":"anthropic/claude-sonnet-5.5","effort":"medium","n":1,"success_rate":1}],"adoption_rate":1,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":null,"incomplete":0}],"coverage":0.14285714285714285,"learned_success":null,"fallback_success":null,"control_success":null,"fallback_control_success":null,"dispatches":0,"routed_by_mod":0,"swapped":0,"fallbacks":{"opt_out":7},"failures":{"parse":0,"hook":0,"launcher":0}}
 ```
 
 ## Exit codes
