@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [import-eval, bench, eval row, run_id, dry-run, pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -16,6 +16,7 @@ spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
 spatz import-rollout <file> --suggestion <id> [--json]
+spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
 spatz hook <event> [--agent codex]
 spatz signal pr <url> [--review approve|changes|blocker] [--json]
 spatz pending [--older-than <n>s|m|h|d] [--json]
@@ -367,6 +368,57 @@ spatz skips malformed lines and unsupported records.
 Use [the environment link](hooks.md#link-a-dispatched-codex-run) for automatic recording.
 Run `spatz report` separately to record your verified verdict.
 
+## spatz import-eval
+
+This command imports benchmark rows in the [`spatz-eval-row/1`](bench.md) format.
+
+```sh
+spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
+```
+
+Each argument is one of these:
+
+- A JSON Lines file with one row per line.
+- A run directory that contains `rows.jsonl`.
+- A directory of run directories, as in the measurements layout `runs/<id>/rows.jsonl`. spatz reads the run directories in name order and ignores entries without `rows.jsonl`.
+
+spatz checks each row with `parseEvalRow`. A valid row is stored once per `run_id` in its own table, apart from live attempts. A second import of the same row changes nothing. spatz also stores `bench_version`, the list-price estimate `estimated_cost_usd` and, when the row has one, the extra field `task_hash`.
+
+Cost per row:
+
+| Row | `cost_usd` | `cost_source` |
+| --- | --- | --- |
+| `cost_usd` is set | The reported cost | `reported` |
+| `cost_usd` is null, `estimated_cost_usd` is set | The list-price estimate | `priced` |
+| No usage, or no cost and no estimate | null | `unavailable` |
+
+A null `cache_read` or `cache_write` is stored as null and sets `tokens_complete = 0`.
+
+Bench rows never enter live outcomes, the learned and control comparison or coverage. They change recommendations only when you set [`bench.use`](configuration.md#bench-evidence-benchuse). `spatz stats` lists them in their own lines.
+
+| Flag | Effect |
+| --- | --- |
+| `--dry-run` | Check and count the rows, but store nothing. spatz still creates and migrates the database. |
+| `--json` | Print one JSON object instead of text. |
+
+Text output has one line per file, one indented line per rejected row and a total:
+
+```text
+runs/2026-10-07-17e49b62d03a/rows.jsonl  imported=55  duplicate=0  rejected=1
+  line 12: invalid effort
+total  imported=55  duplicate=0  rejected=1  (dry-run, nothing stored)
+```
+
+| JSON field | Meaning |
+| --- | --- |
+| `dry_run` | `true` with `--dry-run`. |
+| `imported` | New rows. |
+| `duplicate` | Rows whose `run_id` is already stored or occurs earlier in the same import. |
+| `rejected` | Rows that are not valid JSON or break the contract. |
+| `files[]` | `file`, `imported`, `duplicate` and `rejected` per file. Here `rejected` is a list of `{line, reason}`. The line number starts at 1. The reason is `invalid JSON`, `not an object` or `invalid <field>` for the first field that breaks the contract. |
+
+A missing argument exits with code 2. A missing path, or a directory without `rows.jsonl`, exits with code 1. Rejected rows do not change the exit code.
+
 ## spatz hook
 
 This command is the entry point for Claude Code and Codex hooks. It reads the hook JSON from stdin and records signals and token usage.
@@ -480,6 +532,7 @@ It needs no network access. spatz creates an empty database if none exists. Laun
 ```text
 <task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cache_read_tokens=<count>  cache_creation_tokens=<count>  cost_usd=<amount or ->  incomplete=<count>
   <model>:<effort>  n=<count>  success=<pct>
+bench <model>:<effort>  n=<count>  success=<pct>  est_cost_per_success=<amount or ->
 coverage: <pct>  learned_success: <pct or ->  fallback_success: <pct or ->  control_success: <pct or ->
 dispatches: <count>  routed_by_mod: <count>  swapped: <count>
 fallbacks: <reason>=<count>  ...
@@ -487,6 +540,7 @@ failures: parse=<count>  hook=<count>  launcher=<count>
 ```
 
 There is one block per task type, with one indented line per used pair. `-` means "no data".
+Each `bench` line is one pair of imported bench rows (see [import-eval](#spatz-import-eval)). `--type` filters them. Bench rows never enter the other lines.
 The dispatch, fallback and failure lines also appear with `--by scope`.
 
 ### Dispatch counts
@@ -566,6 +620,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |
 | `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
 | `failures` | object | Global `parse`, `hook` and `launcher` counts. Each defaults to zero. |
+| `bench` | array | Imported bench rows per pair, filtered by `--type`: `model`, `effort`, `n`, `success_rate` (share of `pass`) and `estimated_cost_usd_per_success` (sum of list-price estimates per pass, or null without a pass or when a row has no estimate). Empty without imported rows. |
 
 ### Example
 

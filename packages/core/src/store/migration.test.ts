@@ -39,7 +39,7 @@ async function fixture(dir: string, version = 7) {
 // Use the previous schema to exercise a real migration and restore with the old CLI.
 async function previousStore(dir: string, drop = 1) {
 	const source = (await Bun.file(join(import.meta.dir, "index.ts")).text())
-		.replaceAll('from "./attempt', `from "${import.meta.dir}/attempt`)
+		.replaceAll('from "./', `from "${import.meta.dir}/`)
 		.replaceAll(
 			'from "../contracts/',
 			`from "${join(import.meta.dir, "../contracts")}/`,
@@ -306,7 +306,8 @@ test("v8 index failure rolls back the whole ledger and keeps v7 rows", async () 
 test("usage completeness migration marks stored Claude subagents and filters existing costs", async () => {
 	const dir = directory();
 	const { path, db } = await fixture(dir);
-	const previous = await previousStore(dir, 3);
+	// Back to v8: drop v9 (usage completeness) and every later migration.
+	const previous = await previousStore(dir, SCHEMA_VERSION - 8);
 	previous.openDatabase(path).close();
 	db.run("UPDATE suggestions SET agent='claude-code' WHERE id IN ('h','r')");
 	db.run(

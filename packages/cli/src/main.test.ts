@@ -127,6 +127,7 @@ const statsReport: StatsReport = {
 	fallback_success: null,
 	control_success: null,
 	learned_vs_control: lvc,
+	bench: [],
 	dispatches: 0,
 	routed_by_mod: 0,
 	swapped: 0,
@@ -159,6 +160,9 @@ function fakeApi(overrides: Partial<SpatzApi> = {}) {
 		},
 		importRollout: async () => {
 			throw new Error("unexpected import");
+		},
+		importEval: async () => {
+			throw new Error("unexpected import-eval");
 		},
 		usage: async () => {
 			throw new Error("unexpected usage");
@@ -829,6 +833,7 @@ describe("stats", () => {
 				control_success: 0.5,
 				coverage_by_source: [],
 				learned_vs_control: lvc,
+				bench: [],
 				dispatches: 0,
 				routed_by_mod: 0,
 				swapped: 0,
@@ -1401,4 +1406,67 @@ describe("pending, signal and coverage", () => {
 		);
 		expect(stdout()).toContain("outcome coverage cli: 100% (4/4)\n");
 	});
+});
+
+test("import-eval forwards paths and --dry-run and prints counts per file", async () => {
+	const seen: unknown[] = [];
+	const result = {
+		dry_run: true,
+		imported: 2,
+		duplicate: 1,
+		rejected: 1,
+		files: [
+			{
+				file: "runs/a/rows.jsonl",
+				imported: 2,
+				duplicate: 1,
+				rejected: [{ line: 4, reason: "invalid effort" }],
+			},
+		],
+	};
+	const { api } = fakeApi({
+		importEval: async (input) => {
+			seen.push(input);
+			return result;
+		},
+	});
+	const { io, stdout } = fakeIO();
+	expect(
+		await main(["import-eval", "runs", "b.jsonl", "--dry-run"], io, api),
+	).toBe(0);
+	expect(seen).toEqual([{ paths: ["runs", "b.jsonl"], dryRun: true }]);
+	expect(stdout()).toBe(
+		[
+			"runs/a/rows.jsonl  imported=2  duplicate=1  rejected=1",
+			"  line 4: invalid effort",
+			"total  imported=2  duplicate=1  rejected=1  (dry-run, nothing stored)",
+		].join("\n"),
+	);
+	const json = fakeIO();
+	await main(["import-eval", "runs", "--json"], json.io, api);
+	expect(JSON.parse(json.stdout())).toEqual(result);
+	expect(seen[1]).toEqual({ paths: ["runs"], dryRun: false });
+	expect(await main(["import-eval"], fakeIO().io, api)).toBe(2);
+});
+
+test("stats text lists bench pairs apart from live numbers", async () => {
+	const { io, stdout } = fakeIO();
+	const { api } = fakeApi({
+		stats: async () => ({
+			...statsReport,
+			bench: [
+				{
+					model: "openai/gpt-6-luna",
+					effort: "low",
+					n: 3,
+					success_rate: 2 / 3,
+					estimated_cost_usd_per_success: 0.045,
+				},
+			],
+		}),
+	});
+	await main(["stats"], io, api);
+	expect(stdout()).toContain(
+		"bench openai/gpt-6-luna:low  n=3  success=67%  est_cost_per_success=$0.0450",
+	);
 });

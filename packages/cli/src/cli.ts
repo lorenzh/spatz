@@ -19,6 +19,7 @@ const code = await main(
 		bindAttempt: async (input) => api().bindAttempt(input),
 		finalizeAttempts: async (input) => api().finalizeAttempts(input),
 		importRollout: async (input) => api().importRollout(input),
+		importEval: async (input) => api().importEval(input),
 		suggest: async (input) => api().suggest(input),
 		usage: async (input) => api().usage(input),
 		link: async (input) => api().link(input),

@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import { difficultySql } from "../contracts/difficulty.ts";
 import type {
 	ArmComparison,
+	BenchPairStats,
 	LearnedVsControl,
 	PairStats,
 	ScopeStats,
@@ -314,6 +315,15 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			FROM agg ORDER BY scope NULLS LAST`)
 				: undefined;
 
+		const bench = db
+			.query<BenchPairStats, { type: string | null }>(
+				`SELECT model, effort, COUNT(*) AS n, AVG(result = 'pass') AS success_rate,
+				CASE WHEN COUNT(estimated_cost_usd) = COUNT(*) THEN SUM(estimated_cost_usd) / NULLIF(SUM(result = 'pass'), 0) END AS estimated_cost_usd_per_success
+				FROM bench_attempts WHERE $type IS NULL OR task_type = $type
+				GROUP BY model, effort ORDER BY model, effort`,
+			)
+			.all({ type: type ?? null });
+
 		return {
 			dispatches: dispatch?.dispatches ?? 0,
 			routed_by_mod: dispatch?.routed_by_mod ?? 0,
@@ -347,6 +357,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			fallback_success: cmp?.fallback_success ?? null,
 			control_success: cmp?.control_success ?? null,
 			learned_vs_control: lvc,
+			bench,
 		};
 	} finally {
 		db.close();

@@ -2,7 +2,7 @@
 title: How spatz picks a model and effort
 description: The decision rule of spatz: cells, the Beta estimate, thresholds, cost order, critical tasks, exploration, the control group and how quality is computed.
 tags: [spatz, recommendation, learning]
-keywords: [bench prior, snapshot, n_prior, n_bench, attempt, retry, chain, outcome, decision rule, strategy, learned, learned-fallback, credible bound, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
+keywords: [bench.use, import-eval, bench prior, snapshot, n_prior, n_bench, attempt, retry, chain, outcome, decision rule, strategy, learned, learned-fallback, credible bound, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
 ---
 
 # How spatz picks a model and effort
@@ -59,6 +59,8 @@ estimate = (1 + successes + a) / (2 + n + w)
 The prior changes the estimate only. `n` stays the count of live first attempts. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use `n` and live `successes` only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies, and the reason names `version_match`.
 
 The prior applies when the snapshot `model_version` equals the live model version (`version_match: exact`) or either one is null (`unknown`). A known different version seeds nothing.
+
+Rows imported with [`spatz import-eval`](cli.md#spatz-import-eval) join this prior only when [`bench.use`](configuration.md#bench-evidence-benchuse) is `true`. They are grouped into the same (model, effort, type, difficulty) cells with the same weights: `rubric` rows count 0.5, because no local judge is validated, and only `pass` is a success. Their `model_version` is compared per row like a snapshot's. Snapshot and imported rows add up in one cell, so their sum still has the weight cap `w = min(2, n_eff)`. Rows that the snapshot also counts are not removed, so they can count twice inside that cap. With `bench.use` off, imported rows only appear in `spatz stats`.
 
 ### Enough data and pooling
 

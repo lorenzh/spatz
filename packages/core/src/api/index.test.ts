@@ -792,6 +792,7 @@ describe("stats", () => {
 			control_success: null,
 			coverage_by_source: [],
 			learned_vs_control: lvc,
+			bench: [],
 			dispatches: 0,
 			routed_by_mod: 0,
 			swapped: 0,
@@ -893,6 +894,7 @@ describe("direct mod attribution", () => {
 						control_success: null,
 						coverage_by_source: [],
 						learned_vs_control: lvc,
+						bench: [],
 						dispatches: 0,
 						routed_by_mod: 0,
 						swapped: 0,
@@ -1639,6 +1641,7 @@ describe("failure diagnostics", () => {
 				control_success: null,
 				coverage_by_source: [],
 				learned_vs_control: lvc,
+				bench: [],
 				dispatches: 0,
 				routed_by_mod: 0,
 				swapped: 0,
@@ -3247,5 +3250,155 @@ describe("automatic outcomes", () => {
 				"Spatz-Suggestion",
 			);
 		});
+	});
+});
+
+describe("importEval", () => {
+	const runId = (n: number) =>
+		`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+	const evalRow = (n: number, over: Record<string, unknown> = {}) => ({
+		schema: "spatz-eval-row/1",
+		run_id: runId(n),
+		bench_version: "1",
+		task_id: "sample/bugfix-1",
+		task_version: 1,
+		task_type: "code.bugfix",
+		difficulty: "easy",
+		criticality: "none",
+		harness: "claude-code",
+		agent_version: "2.1.289",
+		model: "anthropic/claude-opus-5.5",
+		effort: "high",
+		answered_model: "claude-opus-5-5",
+		model_version: null,
+		attempt: 1,
+		result: "pass",
+		check: "tests",
+		judge: null,
+		duration_s: 30,
+		tokens: {
+			input: 6,
+			output: 1095,
+			cache_read: 43895,
+			cache_write: 4490,
+			reasoning: 169,
+		},
+		cost_usd: null,
+		estimated_cost_usd: 0.07,
+		started_at: "2026-10-06T09:00:00.000Z",
+		contributor: "anon-01234567",
+		verified: true,
+		task_hash: "hmac-sha256:aa",
+		...over,
+	});
+	const jsonl = (...rows: unknown[]) =>
+		rows.map((r) => (typeof r === "string" ? r : JSON.stringify(r))).join("\n");
+
+	test("counts imported, duplicate and rejected rows with a reason, and is idempotent", async () => {
+		const s = setup();
+		const file = join(dir, "rows.jsonl");
+		await Bun.write(
+			file,
+			jsonl(
+				evalRow(1),
+				evalRow(2, { result: "fail" }),
+				"",
+				evalRow(1),
+				"{not json",
+				evalRow(3, { effort: "turbo" }),
+			),
+		);
+		expect(await s.api.importEval({ paths: [file], dryRun: false })).toEqual({
+			dry_run: false,
+			imported: 2,
+			duplicate: 1,
+			rejected: 2,
+			files: [
+				{
+					file,
+					imported: 2,
+					duplicate: 1,
+					rejected: [
+						{ line: 5, reason: "invalid JSON" },
+						{ line: 6, reason: "invalid effort" },
+					],
+				},
+			],
+		});
+		expect(
+			await s.api.importEval({ paths: [file], dryRun: false }),
+		).toMatchObject({ imported: 0, duplicate: 3, rejected: 2 });
+	});
+
+	test("reads runs/<id>/rows.jsonl from a runs directory and a run directory", async () => {
+		const s = setup();
+		const a = join(dir, "runs", "2026-10-06-a", "rows.jsonl");
+		const b = join(dir, "runs", "2026-10-07-b", "rows.jsonl");
+		await Bun.write(a, jsonl(evalRow(1), evalRow(2)));
+		await Bun.write(b, jsonl(evalRow(3)));
+		await Bun.write(join(dir, "runs", "README.md"), "not a run");
+		const out = await s.api.importEval({
+			paths: [join(dir, "runs")],
+			dryRun: true,
+		});
+		expect(out.files.map((f) => [f.file, f.imported])).toEqual([
+			[a, 2],
+			[b, 1],
+		]);
+		expect(
+			(
+				await s.api.importEval({
+					paths: [join(dir, "runs", "2026-10-07-b")],
+					dryRun: true,
+				})
+			).imported,
+		).toBe(1);
+		await expect(
+			s.api.importEval({ paths: [join(dir, "missing")], dryRun: true }),
+		).rejects.toThrow("missing");
+	});
+
+	test("a dry run stores nothing", async () => {
+		const s = setup();
+		const file = join(dir, "rows.jsonl");
+		await Bun.write(file, jsonl(evalRow(1)));
+		await s.api.importEval({ paths: [file], dryRun: true });
+		expect(
+			(await s.api.importEval({ paths: [file], dryRun: true })).imported,
+		).toBe(1);
+	});
+
+	const benchFetch = async (url: string) =>
+		notSnapshot(url)
+			? new Response(Bun.file(OPENROUTER_FIXTURE))
+			: new Response("", { status: 404 });
+
+	test("imported bench rows stay out of recommendations by default", async () => {
+		const s = setup({ jev: fakeJev(), fetch: benchFetch });
+		const file = join(dir, "rows.jsonl");
+		await Bun.write(file, jsonl(...[1, 2, 3, 4, 5].map((n) => evalRow(n))));
+		await s.api.importEval({ paths: [file], dryRun: false });
+		const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
+		const top = out.ranking.find(
+			(r) => r.model === "anthropic/claude-opus-5.5",
+		);
+		expect(top?.n_prior).toBeUndefined();
+	});
+
+	test("with bench.use on, bench rows are a weak prior: the estimate moves, n does not", async () => {
+		const s = setup({
+			jev: fakeJev(),
+			fetch: benchFetch,
+			config: config({ benchUse: true }),
+		});
+		const file = join(dir, "rows.jsonl");
+		await Bun.write(file, jsonl(...[1, 2, 3, 4, 5].map((n) => evalRow(n))));
+		await s.api.importEval({ paths: [file], dryRun: false });
+		const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
+		const top = out.ranking.find(
+			(r) => r.model === "anthropic/claude-opus-5.5",
+		);
+		expect(top).toMatchObject({ n: 0, n_prior: 2, n_bench: 5 });
+		expect(top?.estimate).toBeCloseTo(0.75);
 	});
 });

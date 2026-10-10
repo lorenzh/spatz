@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts. `spatz stats` reads the database with bun:sqlite and needs no download.
 tags: [configuration, reference, spatz]
-keywords: [cost, tokens, price_snapshot, price_date, migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, offline, bun:sqlite, timeout, threshold, tuning, SPATZ_DEBUG, SPATZ_SUGGESTION_ID, diagnostics, effort]
+keywords: [bench.use, bench_attempts, import-eval, bench prior, cost, tokens, price_snapshot, price_date, migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, offline, bun:sqlite, timeout, threshold, tuning, SPATZ_DEBUG, SPATZ_SUGGESTION_ID, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -37,8 +37,8 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
 | `~/.spatz/aliases.json` | JSON object | you | Model id mapping. Optional. |
 | `~/.spatz/descriptions.json` | JSON object | you | Model descriptions for Jev. Optional. |
-| `<cwd>/.spatz.json` | JSON object | you | Project models and Jev opt-out. Optional. |
-| `~/.spatz/config.json` | JSON object | you | User default models. Optional. |
+| `<cwd>/.spatz.json` | JSON object | you | Project models, Jev opt-out and `bench.use`. Optional. |
+| `~/.spatz/config.json` | JSON object | you | User default models and `bench.use`. Optional. |
 
 spatz creates `~/.spatz` when it opens the database. If an optional file is missing, has invalid JSON or is not an object, spatz ignores it. In `aliases.json` and `descriptions.json`, spatz ignores each entry whose value is not a string. In `.spatz.json`, spatz also reads `models`.
 
@@ -46,7 +46,7 @@ spatz creates `~/.spatz` when it opens the database. If an optional file is miss
 
 bun:sqlite writes the database in WAL mode with a busy timeout of 5000 ms. So several Claude Code sessions can write at the same time. spatz migrates the schema when it opens the file. `PRAGMA user_version` holds the schema version.
 
-The tables are `suggestions`, `signals`, `usages`, `usage_scopes` and `failures`. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
+The tables are `suggestions`, `signals`, `usages`, `usage_scopes` and `failures`. Schema v12 adds `bench_attempts` for rows from [`spatz import-eval`](cli.md#spatz-import-eval), one per `run_id`. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
 
 To delete all learned data, delete `~/.spatz/spatz.db` and the files `spatz.db-wal` and `spatz.db-shm` next to it.
 Also delete its `spatz.db.bak-v*` backups.
@@ -266,6 +266,18 @@ Run spatz from the project root for this file to apply.
 ```json
 { "jev": false, "models": "claude-sonnet-5-5" }
 ```
+
+### Bench evidence: bench.use
+
+[`spatz import-eval`](cli.md#spatz-import-eval) stores bench rows apart from live outcomes. By default they appear only in `spatz stats`. To let them shape recommendations, set `bench.use` to `true`:
+
+```json
+{ "bench": { "use": true } }
+```
+
+Put it in `~/.spatz/config.json` for all projects, or in `<cwd>/.spatz.json` for one project. The project file wins. A value that is not `true` or `false` is ignored. The default is `false`.
+
+With `bench.use` on, the imported rows join the [bench prior](recommendation.md#bench-prior). They change the estimate, but never `n` or the gates, so live outcomes stay in control.
 
 ## Fixed tuning values
 

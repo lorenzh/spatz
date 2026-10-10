@@ -46,7 +46,13 @@ const strings = (o: Record<string, unknown> | null): Record<string, string> =>
 		),
 	);
 
-/** DEFAULT_TUNING; jevEnabled false when env SPATZ_NO_JEV=1 or <cwd>/.spatz.json has {"jev": false}; aliases/descriptions from ~/.spatz/*.json (missing file -> {}). */
+/** `{"bench": {"use": true|false}}`; undefined when the file does not set it. */
+const benchUse = (o: Record<string, unknown> | null): boolean | undefined => {
+	const bench = o?.bench as Record<string, unknown> | undefined;
+	return typeof bench?.use === "boolean" ? bench.use : undefined;
+};
+
+/** DEFAULT_TUNING; jevEnabled false when env SPATZ_NO_JEV=1 or <cwd>/.spatz.json has {"jev": false}; aliases/descriptions from ~/.spatz/*.json (missing file -> {}); bench.use from .spatz.json, else ~/.spatz/config.json, else false. */
 export async function loadConfig(
 	deps: Pick<CoreDeps, "env" | "homeDir" | "cwd">,
 ): Promise<Config> {
@@ -73,5 +79,6 @@ export async function loadConfig(
 		},
 		aliases: strings(aliases),
 		descriptions: strings(descriptions),
+		benchUse: benchUse(project) ?? benchUse(user) ?? false,
 	};
 }

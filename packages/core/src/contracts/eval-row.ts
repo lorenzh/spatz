@@ -146,45 +146,57 @@ function validUsage(t: unknown, cost: unknown, estimate: unknown): boolean {
 	);
 }
 
-/** The contract row in `value` without unknown fields, in contract order; null when it breaks the contract. */
-export function parseEvalRow(value: unknown): EvalRow | null {
-	if (!isObj(value)) return null;
+/** Why `value` breaks the contract ("invalid <field>"), or null for a valid row. */
+export function evalRowError(value: unknown): string | null {
+	if (!isObj(value)) return "not an object";
 	const v: Obj = {
 		...value,
 		criticality: value.criticality ?? "none",
 		estimated_cost_usd: value.estimated_cost_usd ?? null,
 	};
-	if (
-		v.schema !== EVAL_ROW_SCHEMA ||
-		!matches(UUID, v.run_id) ||
-		!isStr(v.bench_version) ||
-		!isStr(v.task_id) ||
-		!isInt1(v.task_version) ||
-		!oneOf(EVAL_ROW_TASK_TYPES, v.task_type) ||
-		!oneOf(DIFFICULTIES, v.difficulty) ||
-		!oneOf(CRITICALITIES, v.criticality) ||
-		!isStr(v.harness) ||
-		!isStr(v.agent_version) ||
-		!matches(CANONICAL, v.model) ||
-		!oneOf(EFFORTS, v.effort) ||
-		!orNull(isStr)(v.answered_model) ||
-		!orNull(isStr)(v.model_version) ||
-		!isInt1(v.attempt) ||
-		!oneOf(EVAL_ROW_RESULTS, v.result) ||
-		!oneOf(EVAL_ROW_CHECKS, v.check) ||
-		!orNull(isStr)(v.judge) ||
-		// Tests and golden answers have no judge.
-		((v.check === "tests" || v.check === "golden") && v.judge !== null) ||
-		!isNum(v.duration_s) ||
-		!validUsage(v.tokens, v.cost_usd, v.estimated_cost_usd) ||
-		!matches(UTC, v.started_at) ||
-		!isStr(v.contributor) ||
-		typeof v.verified !== "boolean"
-	)
-		return null;
+	const checks: [string, boolean][] = [
+		["schema", v.schema === EVAL_ROW_SCHEMA],
+		["run_id", matches(UUID, v.run_id)],
+		["bench_version", isStr(v.bench_version)],
+		["task_id", isStr(v.task_id)],
+		["task_version", isInt1(v.task_version)],
+		["task_type", oneOf(EVAL_ROW_TASK_TYPES, v.task_type)],
+		["difficulty", oneOf(DIFFICULTIES, v.difficulty)],
+		["criticality", oneOf(CRITICALITIES, v.criticality)],
+		["harness", isStr(v.harness)],
+		["agent_version", isStr(v.agent_version)],
+		["model", matches(CANONICAL, v.model)],
+		["effort", oneOf(EFFORTS, v.effort)],
+		["answered_model", orNull(isStr)(v.answered_model)],
+		["model_version", orNull(isStr)(v.model_version)],
+		["attempt", isInt1(v.attempt)],
+		["result", oneOf(EVAL_ROW_RESULTS, v.result)],
+		["check", oneOf(EVAL_ROW_CHECKS, v.check)],
+		[
+			"judge",
+			orNull(isStr)(v.judge) &&
+				// Tests and golden answers have no judge.
+				!((v.check === "tests" || v.check === "golden") && v.judge !== null),
+		],
+		["duration_s", isNum(v.duration_s)],
+		["tokens", validUsage(v.tokens, v.cost_usd, v.estimated_cost_usd)],
+		["started_at", matches(UTC, v.started_at)],
+		["contributor", isStr(v.contributor)],
+		["verified", typeof v.verified === "boolean"],
+	];
+	const broken = checks.find(([, ok]) => !ok);
+	return broken ? `invalid ${broken[0]}` : null;
+}
+
+/** The contract row in `value` without unknown fields, in contract order; null when it breaks the contract. */
+export function parseEvalRow(value: unknown): EvalRow | null {
+	if (evalRowError(value) !== null) return null;
+	const v = value as Obj;
 	const t = v.tokens as Obj;
 	return {
 		...Object.fromEntries(EVAL_ROW_FIELDS.map((k) => [k, v[k]])),
+		criticality: v.criticality ?? "none",
+		estimated_cost_usd: v.estimated_cost_usd ?? null,
 		tokens: Object.fromEntries(COUNTERS.map((k) => [k, t[k]])),
 	} as unknown as EvalRow;
 }

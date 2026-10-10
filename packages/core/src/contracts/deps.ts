@@ -1,12 +1,15 @@
 // Injection seams. Unit tests pass fakes for all of these; no network, no real home dir.
+import type { PriorCell } from "../catalog/snapshot.ts";
 import type { AttemptStore } from "./attempts.ts";
 import type { DifficultyInput } from "./difficulty.ts";
+import type { EvalRow } from "./eval-row.ts";
 import type {
 	Agent,
 	CellStat,
 	Config,
 	DispatchRecord,
 	Effort,
+	ImportEvalResult,
 	Outcome,
 	ReportResult,
 	RoutingScope,
@@ -127,6 +130,14 @@ export interface Store extends AttemptStore {
 	liveModelVersions(): Record<string, string>;
 	/** Later attempts and --retry-of chain members, grouped by cell and actual pair. Non-test only. */
 	retryStats(taskType: TaskType, successQuality?: number): CellStat[];
+	/** Stores bench rows apart from live attempts, once per run_id; true per new row. dryRun stores nothing. */
+	importEvalRows(
+		rows: { row: EvalRow; task_hash: string | null }[],
+		at: number,
+		dryRun: boolean,
+	): boolean[];
+	/** Bench rows as weak prior cells; rows of another known live model_version seed nothing. */
+	benchPriors(): PriorCell[];
 	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */
 	linkSession(
 		suggestionId: string,
@@ -279,6 +290,11 @@ export interface SpatzApi {
 		file: string;
 		suggestionId: string;
 	}): Promise<{ suggestion_id: string; turns: number }>;
+	/** Stores bench rows (JSON Lines files, or run directories with rows.jsonl) once per run_id; dryRun stores nothing. */
+	importEval(input: {
+		paths: string[];
+		dryRun: boolean;
+	}): Promise<ImportEvalResult>;
 	suggest(input: SuggestInput): Promise<Suggestion>;
 	usage(input: UsageInput): Promise<UsageRecord>;
 	/** Gives a suggestion made before its subagent existed the real agent id and the session. Idempotent. */
