@@ -44,6 +44,20 @@ test("resolveModelVersion takes an undated alias's revision from the one dated h
 		"gpt-6-sol-2026-10-01",
 	];
 	expect(resolveModelVersion("claude-haiku-4-5", harness)).toBe("20251001");
+	// Canonical and aliased forms of the same model find the same revision.
+	expect(resolveModelVersion("anthropic/claude-haiku-4.5", harness)).toBe(
+		"20251001",
+	);
+	expect(
+		resolveModelVersion("haiku", harness, {
+			haiku: "anthropic/claude-haiku-4.5",
+		}),
+	).toBe("20251001");
+	expect(resolveModelVersion("openai/gpt-6-luna", harness)).toBe("2026-09-01");
+	// The same dated id listed by two harnesses is still one revision.
+	expect(
+		resolveModelVersion("claude-haiku-4-5", [...harness, harness[0] as string]),
+	).toBe("20251001");
 	expect(resolveModelVersion("gpt-6-luna", harness)).toBe("2026-09-01");
 	expect(resolveModelVersion("claude-sonnet-4-5-20250929", harness)).toBe(
 		"20250929",

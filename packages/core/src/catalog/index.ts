@@ -62,20 +62,26 @@ export function modelVersion(id: string): string | null {
 }
 
 /**
- * modelVersion, else the revision the harness reports for an undated alias: the date of the one
- * harness model id that is this id plus a date suffix. Several dated revisions stay unknown (null).
+ * modelVersion, else the revision the harness reports for an undated id: the date of the one
+ * dated harness model id whose undated form has the same canonical id (alias, harness or
+ * canonical form). Several dated revisions stay unknown (null).
  */
 export function resolveModelVersion(
 	id: string,
 	harnessIds: string[],
+	aliases: Record<string, string> = {},
 ): string | null {
 	const own = modelVersion(id);
 	if (own) return own;
-	const dated = harnessIds.flatMap((h) => {
-		const v = modelVersion(h);
-		return v && h === `${id}-${v}` ? [v] : [];
-	});
-	return dated.length === 1 ? (dated[0] ?? null) : null;
+	const canonical = toCanonicalId(id, aliases);
+	const dated = new Set(
+		harnessIds.flatMap((h) => {
+			const v = modelVersion(h);
+			const base = v && h.slice(0, -v.length - 1);
+			return base && toCanonicalId(base, aliases) === canonical ? [v] : [];
+		}),
+	);
+	return dated.size === 1 ? ([...dated][0] ?? null) : null;
 }
 
 function priceClass(m: OpenRouterModel | undefined, model: string): string {

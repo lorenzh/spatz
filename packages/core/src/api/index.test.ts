@@ -2788,6 +2788,12 @@ test("startAttempt stores the revision of an undated alias, from the caller or t
 		model: "anthropic/claude-haiku-4.5",
 		model_version: "20251001",
 	});
+	expect(await start("mod-turn:4", "anthropic/claude-haiku-4.5")).toMatchObject(
+		{
+			model: "anthropic/claude-haiku-4.5",
+			model_version: "20251001",
+		},
+	);
 	expect(
 		await start("mod-turn:1", "claude-sonnet-5-5", "20261001"),
 	).toMatchObject({ model_version: "20261001" });

@@ -176,11 +176,12 @@ export function createApi(
 	}
 	/** Model id -> revision: a dated id's own, else the one the harness catalog reports for an undated alias. */
 	async function versionResolver() {
+		const cfg = await getConfig();
 		const catalog = await cachedHarnessCatalog();
 		const ids = Object.values(catalog.harnesses).flatMap((h) =>
 			h.models.map((m) => m.id),
 		);
-		return (id: string) => resolveModelVersion(id, ids);
+		return (id: string) => resolveModelVersion(id, ids, cfg.aliases);
 	}
 	async function availableEfforts() {
 		const cfg = await getConfig();
