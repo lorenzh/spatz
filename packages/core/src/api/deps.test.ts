@@ -27,7 +27,25 @@ describe("loadConfig", () => {
 			tuning: DEFAULT_TUNING,
 			aliases: {},
 			descriptions: {},
+			benchUse: false,
 		});
+	});
+
+	test("bench.use comes from .spatz.json, else ~/.spatz/config.json", async () => {
+		await Bun.write(
+			join(home, ".spatz", "config.json"),
+			JSON.stringify({ bench: { use: true } }),
+		);
+		expect((await loadConfig({ env: {}, homeDir: home, cwd })).benchUse).toBe(
+			true,
+		);
+		await Bun.write(
+			join(cwd, ".spatz.json"),
+			JSON.stringify({ bench: { use: false } }),
+		);
+		expect((await loadConfig({ env: {}, homeDir: home, cwd })).benchUse).toBe(
+			false,
+		);
 	});
 
 	test("SPATZ_FAMILY_POOLING=1 enables family pooling", async () => {

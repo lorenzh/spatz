@@ -3,6 +3,7 @@
 import { parseArgs } from "node:util";
 import type {
 	Agent,
+	ImportEvalResult,
 	Outcome,
 	ReportResult,
 	RoutingScope,
@@ -33,6 +34,7 @@ const USAGE = `usage:
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
   spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--attempt <id>] [--key <turn:index>] [--session <id>] [--agent-id <id>] [--cost-usd <n>] [--json]
   spatz import-rollout <file> --suggestion <id> [--json]
+  spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
   spatz hook <event> [--agent codex]
   spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
   spatz signal pr <url> [--review approve|changes|blocker] [--json]
@@ -111,6 +113,10 @@ function formatStats(r: StatsReport): string {
 		lines.push(
 			`${name}: learned=${opt(a.rate)}  control=${opt(a.control_rate)}  diff=${a.diff === null ? "-" : pct(a.diff)}${a.ci95 ? ` [${pct(a.ci95[0])}, ${pct(a.ci95[1])}]` : ""}  outcomes=${a.outcomes}/${a.decisions}`,
 		);
+	for (const b of r.bench)
+		lines.push(
+			`bench ${b.model}:${b.effort}  n=${b.n}  success=${pct(b.success_rate)}  est_cost_per_success=${usd(b.estimated_cost_usd_per_success)}`,
+		);
 	lines.push(
 		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
 	);
@@ -121,6 +127,20 @@ function formatStats(r: StatsReport): string {
 		);
 	}
 	return [...lines, ...diagnostics].join("\n");
+}
+
+function formatImportEval(r: ImportEvalResult): string {
+	const counts = (
+		o: { imported: number; duplicate: number },
+		rejected: number,
+	) => `imported=${o.imported}  duplicate=${o.duplicate}  rejected=${rejected}`;
+	return [
+		...r.files.flatMap((f) => [
+			`${f.file}  ${counts(f, f.rejected.length)}`,
+			...f.rejected.map((x) => `  line ${x.line}: ${x.reason}`),
+		]),
+		`total  ${counts(r, r.rejected)}${r.dry_run ? "  (dry-run, nothing stored)" : ""}`,
+	].join("\n");
 }
 
 const usd = (x: number | null) => (x === null ? "-" : `$${x.toFixed(4)}`);
@@ -265,6 +285,13 @@ export async function main(
 					text: () =>
 						`rollout imported: ${result.suggestion_id}  turns: ${result.turns}`,
 				};
+			};
+		} else if (cmd === "import-eval") {
+			if (!rest.length) throw new UsageError("missing <rows.jsonl | runs-dir>");
+			const input = { paths: rest, dryRun: v["dry-run"] ?? false };
+			run = async () => {
+				const result = await api.importEval(input);
+				return { result, text: () => formatImportEval(result) };
 			};
 		} else if (cmd === "usage") {
 			if (v.source !== "claude-code-mod")

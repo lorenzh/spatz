@@ -970,3 +970,67 @@ test("a chain with an attempt lacking usage evidence is excluded from spend", as
 	expect(p?.cost_usd_per_success).toBeNull();
 	expect(p?.cost_incomplete_share).toBe(1);
 });
+
+test("bench rows show in their own section and leave live stats unchanged", async () => {
+	sug("s1");
+	report("s1", "m/a", "low", "pass");
+	const before = await runStats({ dbPath, successQuality: 0.8 });
+	const row = (n: number, over: Record<string, unknown> = {}) => ({
+		row: {
+			schema: "spatz-eval-row/1",
+			run_id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+			bench_version: "1",
+			task_id: "t",
+			task_version: 1,
+			task_type: "code.bugfix",
+			difficulty: "easy",
+			criticality: "none",
+			harness: "codex",
+			agent_version: "1",
+			model: "openai/gpt-6-luna",
+			effort: "low",
+			answered_model: null,
+			model_version: null,
+			attempt: 1,
+			result: "pass",
+			check: "tests",
+			judge: null,
+			duration_s: 1,
+			tokens: {
+				input: 1,
+				output: 1,
+				cache_read: 0,
+				cache_write: 0,
+				reasoning: 0,
+			},
+			cost_usd: null,
+			estimated_cost_usd: 0.03,
+			started_at: "2026-10-06T09:00:00.000Z",
+			contributor: "anon",
+			verified: true,
+			...over,
+		} as never,
+		task_hash: null,
+	});
+	store.importEvalRows(
+		[row(1), row(2, { result: "fail" }), row(3, { task_type: "review" })],
+		1,
+		false,
+	);
+	const { bench, ...after } = await runStats({ dbPath, successQuality: 0.8 });
+	const { bench: none, ...live } = before;
+	expect(none).toEqual([]);
+	expect(after).toEqual(live);
+	expect(bench).toEqual([
+		{
+			model: "openai/gpt-6-luna",
+			effort: "low",
+			n: 3,
+			success_rate: 2 / 3,
+			estimated_cost_usd_per_success: 0.045,
+		},
+	]);
+	expect(
+		(await runStats({ dbPath, successQuality: 0.8, type: "review" })).bench,
+	).toMatchObject([{ n: 1, success_rate: 1 }]);
+});

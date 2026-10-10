@@ -1,5 +1,6 @@
 // api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
 	formatHarnessModels,
@@ -22,6 +23,11 @@ import { loadSnapshot, priorCells } from "../catalog/snapshot.ts";
 import { classify } from "../classify/index.ts";
 import type { AttemptEvent } from "../contracts/attempts.ts";
 import type { CoreDeps, SpatzApi, Store } from "../contracts/deps.ts";
+import {
+	type EvalRow,
+	evalRowError,
+	parseEvalRow,
+} from "../contracts/eval-row.ts";
 import type {
 	AgentToolResponse,
 	BashToolInput,
@@ -94,6 +100,47 @@ async function ghPr(url: string): Promise<PrInfo> {
 			(c) => c.conclusion || c.state || c.status || "PENDING",
 		),
 	};
+}
+
+/** A JSON Lines file, a run directory with rows.jsonl, or a directory of runs (runs/<id>/rows.jsonl). */
+function evalFiles(path: string): string[] {
+	if (!statSync(path).isDirectory()) return [path];
+	const own = join(path, "rows.jsonl");
+	if (existsSync(own)) return [own];
+	const files = readdirSync(path)
+		.sort()
+		.map((run) => join(path, run, "rows.jsonl"))
+		.filter((file) => existsSync(file));
+	if (!files.length) throw new Error(`no rows.jsonl in ${path}`);
+	return files;
+}
+
+/** Valid rows with their optional task_hash, and the rejected lines with a reason. */
+async function readEvalFile(file: string) {
+	const rows: { row: EvalRow; task_hash: string | null }[] = [];
+	const rejected: { line: number; reason: string }[] = [];
+	(await Bun.file(file).text()).split("\n").forEach((text, i) => {
+		if (!text.trim()) return;
+		let value: unknown;
+		try {
+			value = JSON.parse(text);
+		} catch {
+			rejected.push({ line: i + 1, reason: "invalid JSON" });
+			return;
+		}
+		const reason = evalRowError(value);
+		if (reason) {
+			rejected.push({ line: i + 1, reason });
+			return;
+		}
+		// task_hash is not part of spatz-eval-row/1; keep it when the bench sends one.
+		const hash = (value as { task_hash?: unknown }).task_hash;
+		rows.push({
+			row: parseEvalRow(value) as EvalRow,
+			task_hash: typeof hash === "string" && hash ? hash : null,
+		});
+	});
+	return { file, rows, rejected };
 }
 
 /** Missing, unreadable or malformed transcripts count as an empty parse. */
@@ -655,6 +702,42 @@ export function createApi(
 			});
 		},
 
+		async importEval({ paths, dryRun }) {
+			const parsed = await Promise.all(
+				paths.flatMap(evalFiles).map(readEvalFile),
+			);
+			return withStore((store) => {
+				// One transaction over all files: a run_id in two files counts once.
+				const added = store.importEvalRows(
+					parsed.flatMap((p) => p.rows),
+					deps.clock.now(),
+					dryRun,
+				);
+				let at = 0;
+				const files = parsed.map(({ file, rows, rejected }) => {
+					const imported = added
+						.slice(at, at + rows.length)
+						.filter(Boolean).length;
+					at += rows.length;
+					return {
+						file,
+						imported,
+						duplicate: rows.length - imported,
+						rejected,
+					};
+				});
+				const sum = (n: (f: (typeof files)[number]) => number) =>
+					files.reduce((total, f) => total + n(f), 0);
+				return {
+					dry_run: dryRun,
+					imported: sum((f) => f.imported),
+					duplicate: sum((f) => f.duplicate),
+					rejected: sum((f) => f.rejected.length),
+					files,
+				};
+			});
+		},
+
 		async suggest({
 			task,
 			models,
@@ -768,9 +851,13 @@ export function createApi(
 			);
 			return withStore((store) => {
 				const versions = store.liveModelVersions();
-				const priors = snapshots.flatMap((s) =>
-					s ? priorCells(s, versions[s.model] ?? null) : [],
-				);
+				const priors = [
+					...snapshots.flatMap((s) =>
+						s ? priorCells(s, versions[s.model] ?? null) : [],
+					),
+					// Imported bench rows join the same capped prior only when bench.use is on.
+					...(cfg.benchUse ? store.benchPriors() : []),
+				];
 				const d = recommend(
 					{
 						classification: c,

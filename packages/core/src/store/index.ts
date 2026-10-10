@@ -20,6 +20,7 @@ import {
 } from "../contracts/types.ts";
 import { ATTEMPT_SCHEMA, USAGE_COMPLETENESS_SCHEMA } from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
+import { BENCH_SCHEMA, benchStore } from "./bench.ts";
 
 // No column holds task text (spec "Storage", "Privacy").
 const SCHEMA_V1 = `
@@ -241,6 +242,7 @@ const MIGRATIONS = [
 	USAGE_COMPLETENESS_SCHEMA,
 	SCHEMA_V10,
 	SCHEMA_V11,
+	BENCH_SCHEMA,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -379,6 +381,7 @@ export function openStore(
 	const ledger = attemptStore(db, () => store, noneOnly);
 	const store: Store = {
 		...ledger,
+		...benchStore(db, () => store.liveModelVersions()),
 		upsertDispatch(r) {
 			db.query(`INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ($session_id, $agent_id, $tool_use_id,
 				$requested_model, $requested_agent_type, $answered_model, $suggestion_id)

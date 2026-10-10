@@ -481,6 +481,17 @@ export interface ScopeStats {
 	cache_read_share: number;
 }
 
+/** Imported bench rows per pair; never part of the live numbers. */
+export interface BenchPairStats {
+	model: string;
+	effort: Effort;
+	n: number;
+	/** Share of rows with result pass. */
+	success_rate: number;
+	/** Sum of the list-price estimates / passes; null without a pass or with a row lacking an estimate. */
+	estimated_cost_usd_per_success: number | null;
+}
+
 export interface StatsReport {
 	/** Global dispatch counts, excluding linked dry-run suggestions. */
 	dispatches: number;
@@ -502,6 +513,8 @@ export interface StatsReport {
 	fallback_success: number | null;
 	control_success: number | null;
 	learned_vs_control: LearnedVsControl;
+	/** Imported bench rows (spatz import-eval), filtered by --type; apart from every live number above. */
+	bench: BenchPairStats[];
 }
 
 /** First-attempt success of an arm against control, weighted per (task_type, difficulty) cell by the arm's outcomes. */
@@ -536,6 +549,25 @@ export interface LearnedVsControl {
 	}[];
 }
 
+// ---------- Bench import (spatz import-eval) ----------
+
+export interface ImportEvalFile {
+	file: string;
+	imported: number;
+	/** run_id already stored or seen earlier in this import. */
+	duplicate: number;
+	/** 1-based line numbers of rows that break spatz-eval-row/1. */
+	rejected: { line: number; reason: string }[];
+}
+
+export interface ImportEvalResult {
+	dry_run: boolean;
+	imported: number;
+	duplicate: number;
+	rejected: number;
+	files: ImportEvalFile[];
+}
+
 // ---------- Config ----------
 
 export interface Config {
@@ -548,4 +580,6 @@ export interface Config {
 	aliases: Record<string, string>;
 	/** Description file ~/.spatz/descriptions.json: canonical id -> short description for Jev. */
 	descriptions: Record<string, string>;
+	/** `bench.use`: imported bench rows join the weak prior of recommendations. Default false. */
+	benchUse?: boolean;
 }

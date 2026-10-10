@@ -2,7 +2,7 @@
 title: Bench eval row format (spatz-eval-row/1)
 description: The versioned JSON Lines format in which a benchmark writes one row per run for spatz to import, with its field rules, null token semantics, the JSON Schema file and the TypeScript parser.
 tags: [spatz, benchmark, contract, data]
-keywords: [eval row, spatz-eval-row, EvalRow, parseEvalRow, EVAL_ROW_SCHEMA, json schema, jsonl, bench, check, rubric, judge, tokens, cost_usd, estimated_cost_usd, list price, official-prices.json, price-check, null cost, task_type, versioning]
+keywords: [import-eval, bench_attempts, bench.use, task_hash, eval row, spatz-eval-row, EvalRow, parseEvalRow, EVAL_ROW_SCHEMA, json schema, jsonl, bench, check, rubric, judge, tokens, cost_usd, estimated_cost_usd, list price, official-prices.json, price-check, null cost, task_type, versioning]
 ---
 
 # Bench eval row format
@@ -87,7 +87,9 @@ estimated_cost_usd = input × input price
 
 ## Import
 
-spatz stores each row as one attempt with `source = eval`. Eval attempts never enter live stats or the live comparison of learned and control choices.
+[`spatz import-eval`](cli.md#spatz-import-eval) reads JSON Lines files or run directories (`runs/<id>/rows.jsonl`). It stores each valid row once per `run_id` in the table `bench_attempts`, apart from live attempts. A second import changes nothing. `--dry-run` reports the counts and stores nothing. The command also keeps the extra field `task_hash` when a row has one.
+
+Bench rows never enter live outcomes or the comparison of learned and control choices. `spatz stats` lists them in their own `bench` lines. They change recommendations only as a weak prior, and only when you set [`bench.use`](configuration.md#bench-evidence-benchuse).
 
 ## Examples
 

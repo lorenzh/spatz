@@ -9,6 +9,7 @@ import {
 	EVAL_ROW_RESULTS,
 	EVAL_ROW_SCHEMA,
 	EVAL_ROW_TASK_TYPES,
+	evalRowError,
 	parseEvalRow,
 	TASK_TYPES,
 } from "../index.ts";
@@ -186,6 +187,23 @@ test.each([
 	["a missing field", { ...row, verified: undefined }],
 ])("parseEvalRow rejects %s", (_, value) => {
 	expect(parseEvalRow(value)).toBeNull();
+	expect(evalRowError(value)).not.toBeNull();
+});
+
+test.each([
+	["not an object", [], "not an object"],
+	["another schema", { ...row, schema: "spatz-eval-row/2" }, "schema"],
+	["an unknown effort", { ...row, effort: "turbo" }, "effort"],
+	["a judge on a tests row", { ...row, judge: "x" }, "judge"],
+	["no usage but a cost", { ...noUsage, cost_usd: 0.1 }, "tokens"],
+])("evalRowError names the broken field for %s", (_, value, field) => {
+	expect(evalRowError(value)).toBe(
+		field === "not an object" ? field : `invalid ${field}`,
+	);
+});
+
+test("evalRowError is null for a valid row", () => {
+	expect(evalRowError(row)).toBeNull();
 });
 
 test("the published JSON Schema lists the same fields and values as the parser", () => {
