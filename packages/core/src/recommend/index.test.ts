@@ -291,9 +291,19 @@ describe("learned choice", () => {
 		expect(pick(crit)).toMatchObject({ model: c3.model, effort: c3.effort });
 	});
 
-	test("legacy outcomes still inform the estimate of a live-qualified pair", () => {
+	test("critical bound uses live evidence only, not combined history", () => {
+		// 10 live passes + 30 legacy passes: live 5 % bound 0.762 < 0.8, combined 0.930 would pass.
+		const mixed = stat(c0, 40, 40, "easy", "code.bugfix", 40, 10, 10);
+		const crit = recommend(ctx(LEARNED, { criticality: "security" }), CATALOG, [
+			mixed,
+		]);
+		expect(pick(crit)).toMatchObject({ model: c3.model, effort: c3.effort });
+	});
+
+	test("legacy failures lower the estimate of a pair that live evidence qualifies", () => {
+		// 5 live passes qualify c0 on live evidence alone; 5 legacy failures bring it to 5/10 < 0.8.
 		const d = recommend(ctx(LEARNED), CATALOG, [
-			stat(c0, 10, 2, "easy", "code.bugfix", 2, 5, 2), // live 5, but legacy failures pull it to 3/12
+			stat(c0, 10, 5, "easy", "code.bugfix", 5, 5, 5),
 			stat(c1, 5, 5),
 		]);
 		expect(pick(d)).toMatchObject({ model: c1.model, effort: c1.effort });
