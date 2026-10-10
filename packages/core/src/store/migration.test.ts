@@ -404,7 +404,9 @@ test("usage completeness migration marks stored Claude subagents and filters exi
 	).toEqual({ cost_usd: null });
 });
 
-test("a v5 backup restores intact and the current CLI refuses a downgrade", async () => {
+// Proves the backup bytes and the current store only. No older CLI runs here:
+// that needs an install of a released tag, which is not offline in bun test.
+test("a v5 backup keeps its rows and the current store refuses a newer schema", async () => {
 	const dir = directory();
 	const { path, db } = await fixture(dir, 5);
 	const before = snapshot(db);
