@@ -52,7 +52,21 @@ const benchUse = (o: Record<string, unknown> | null): boolean | undefined => {
 	return typeof bench?.use === "boolean" ? bench.use : undefined;
 };
 
-/** DEFAULT_TUNING; jevEnabled false when env SPATZ_NO_JEV=1 or <cwd>/.spatz.json has {"jev": false}; aliases/descriptions from ~/.spatz/*.json (missing file -> {}); bench.use from .spatz.json, else ~/.spatz/config.json, else false. */
+/** `{"bench": {"snapshot": true|false}}`; undefined when the file does not set it. */
+const benchSnapshot = (
+	o: Record<string, unknown> | null,
+): boolean | undefined => {
+	const bench = o?.bench as Record<string, unknown> | undefined;
+	return typeof bench?.snapshot === "boolean" ? bench.snapshot : undefined;
+};
+
+/** `{"bench": {"prior_weight": <number >= 0>}}`; undefined when the file does not set a valid one. */
+const priorWeight = (o: Record<string, unknown> | null): number | undefined => {
+	const w = (o?.bench as Record<string, unknown> | undefined)?.prior_weight;
+	return typeof w === "number" && Number.isFinite(w) && w >= 0 ? w : undefined;
+};
+
+/** DEFAULT_TUNING; jevEnabled false when env SPATZ_NO_JEV=1 or <cwd>/.spatz.json has {"jev": false}; aliases/descriptions from ~/.spatz/*.json (missing file -> {}); bench.use, bench.snapshot and bench.prior_weight from .spatz.json, else ~/.spatz/config.json, else false, true and 6. */
 export async function loadConfig(
 	deps: Pick<CoreDeps, "env" | "homeDir" | "cwd">,
 ): Promise<Config> {
@@ -76,9 +90,12 @@ export async function loadConfig(
 		tuning: {
 			...DEFAULT_TUNING,
 			familyPooling: deps.env.SPATZ_FAMILY_POOLING === "1",
+			priorWeight:
+				priorWeight(project) ?? priorWeight(user) ?? DEFAULT_TUNING.priorWeight,
 		},
 		aliases: strings(aliases),
 		descriptions: strings(descriptions),
 		benchUse: benchUse(project) ?? benchUse(user) ?? false,
+		benchSnapshot: benchSnapshot(project) ?? benchSnapshot(user) ?? true,
 	};
 }

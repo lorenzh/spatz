@@ -2,7 +2,7 @@
 title: Releasing spatz
 description: The release strategy (main, nightly, release branches and candidates) and how to publish CLI and Claude Code plugin archives and npm packages, and control nightly builds and daily harness catalog updates.
 tags: [spatz, cli, releases]
-keywords: [migration, backup, rollback, downgrade, release, release branch, release candidate, rc, cherry-pick, strategy, nightly, catalog, harness, workflow, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
+keywords: [migration, backup, rollback, downgrade, release, release branch, release candidate, rc, cherry-pick, strategy, nightly, catalog, harness, bench snapshot, bench-snapshot.json, workflow, tag, semver, publish, checksum, binary, archive, download, npm, install, trusted publishing, plugin, marketplace, zip]
 ---
 
 # Releasing spatz
@@ -41,7 +41,10 @@ Nightly builds therefore carry the last released version plus the date, for exam
    git pull --ff-only
    git switch -c release/0.2
    bun scripts/release-version.ts v0.2.0-rc.1
+   bun scripts/bench-snapshot.ts
    ```
+
+   `bun scripts/bench-snapshot.ts` refreshes `catalog/bench-snapshot.json`, the [bench snapshot](#bundled-bench-snapshot) bundled into the build.
 
    Run the gates in [CONTRIBUTING.md](CONTRIBUTING.md), commit the bump and push the branch. Protect `release/*` like `main`: changes only through pull requests.
 2. Tag the first candidate on the release branch:
@@ -77,6 +80,7 @@ Nightly builds therefore carry the last released version plus the date, for exam
 - [ ] `npm i -g @spatz/cli@next` installs and `spatz --version` prints the candidate.
 - [ ] The plugins from `release/<minor>` load. Claude Code: `/spatz status` answers (mod). Codex: the hooks appear in `/hooks` and a shell command creates no error.
 - [ ] Docs describe every user-visible change of the release.
+- [ ] `catalog/bench-snapshot.json` comes from `bun scripts/bench-snapshot.ts` on the release branch.
 - [ ] npm shows the final version (`latest` for the newest minor), and only then is the release branch merged back into `main`.
 
 ### Migration checklist for breaking releases
@@ -141,6 +145,12 @@ Use your host's OS and architecture in the archive name. The build script suppor
 The smoke test checks the checksum, version, dry-run suggestion, and statistics outside the checkout.
 It sets dead HTTP proxies.
 See [README.md](README.md#releases) for download and installation instructions.
+
+## Bundled bench snapshot
+
+Each build bundles `catalog/bench-snapshot.json`, the offline fallback of the [bench prior](docs/recommendation.md#bench-prior). spatz uses it when it has no good download of the latest `spatz-measurements` release in its cache.
+`bun scripts/bench-snapshot.ts` downloads the latest release, checks its SHA-256 and the schema `spatz-snapshot/1`, and writes the file byte for byte. It writes nothing when a check fails.
+Run it when you cut a release branch (step 1) and commit the result with the version bump. Do not edit the file by hand; biome skips it so its bytes stay those of the release.
 
 ## Daily harness catalog
 

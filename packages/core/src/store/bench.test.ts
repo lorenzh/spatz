@@ -207,8 +207,42 @@ test("benchPriors weighs rubric rows 0.5 and counts passes as successes", () => 
 				s_eff: 1.5,
 				n_bench: 3,
 				version_match: "unknown",
+				source: "imported bench rows",
 			},
 		]);
+	});
+});
+
+test("benchRuns lists the measurement runs of imported rows; a re-import fills a missing one", () => {
+	withStore((store) => {
+		expect(store.benchRuns()).toEqual(new Set());
+		store.importEvalRows(
+			[
+				{ row: row({ run_id: id(1) }), task_hash: null },
+				{
+					row: row({ run_id: id(2) }),
+					task_hash: null,
+					source_run: "aaaaaaaaaaaa",
+				},
+			],
+			1000,
+			false,
+		);
+		expect(store.benchRuns()).toEqual(new Set(["aaaaaaaaaaaa"]));
+		// A dry run changes nothing; a real re-import fills the gap but still counts as duplicate.
+		const again = [
+			{
+				row: row({ run_id: id(1) }),
+				task_hash: null,
+				source_run: "bbbbbbbbbbbb",
+			},
+		];
+		expect(store.importEvalRows(again, 2000, true)).toEqual([false]);
+		expect(store.benchRuns()).toEqual(new Set(["aaaaaaaaaaaa"]));
+		expect(store.importEvalRows(again, 2000, false)).toEqual([false]);
+		expect(store.benchRuns()).toEqual(
+			new Set(["aaaaaaaaaaaa", "bbbbbbbbbbbb"]),
+		);
 	});
 });
 

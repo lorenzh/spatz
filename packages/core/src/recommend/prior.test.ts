@@ -39,6 +39,7 @@ const prior = (
 	s_eff,
 	n_bench: n_eff,
 	version_match: "exact",
+	source: "release snapshot 3ce2237 of 2026-10-10 (0 d old)",
 	...over,
 });
 const live = (c: Candidate, n: number, successes: number): CellStat => ({
@@ -55,6 +56,7 @@ function run(
 	priors: PriorCell[] | undefined,
 	over: Partial<StrategyContext["classification"]> = {},
 	random = 0.5,
+	tuning = DEFAULT_TUNING,
 ) {
 	return recommend(
 		{
@@ -70,7 +72,7 @@ function run(
 				...over,
 			},
 			random,
-			tuning: DEFAULT_TUNING,
+			tuning,
 			priors,
 		},
 		CATALOG,
@@ -93,10 +95,44 @@ test("no snapshot: ranking and reason are unchanged", () => {
 
 test("cold start: the prior moves the estimate, n stays 0, n_prior and n_bench show", () => {
 	const d = run([], [prior(cheap, 3, 3), prior(dear, 3, 0)]);
-	// w = 2, a = 0 -> (1 + 0) / (2 + 2)
-	expect(entry(d, dear)).toMatchObject({ n: 0, n_prior: 2, n_bench: 3 });
-	expect(entry(d, dear)?.estimate).toBeCloseTo(0.25);
+	// w = 3, a = 0 -> (1 + 0) / (2 + 3)
+	expect(entry(d, dear)).toMatchObject({ n: 0, n_prior: 3, n_bench: 3 });
+	expect(entry(d, dear)?.estimate).toBeCloseTo(0.2);
 	expect(d.reason).toContain("version_match: exact");
+	expect(d.reason).toContain(
+		"source: release snapshot 3ce2237 of 2026-10-10 (0 d old)",
+	);
+});
+
+test("the prior is worth at most priorWeight pseudo-observations", () => {
+	const big = [prior(dear, 50, 50)];
+	expect(DEFAULT_TUNING.priorWeight).toBe(6);
+	const d = run([], big);
+	// w = 6, a = 6 -> (1 + 6) / (2 + 6)
+	expect(entry(d, dear)).toMatchObject({ n: 0, n_prior: 6, n_bench: 50 });
+	expect(entry(d, dear)?.estimate).toBeCloseTo(7 / 8);
+	const two = run([], big, {}, 0.5, { ...DEFAULT_TUNING, priorWeight: 2 });
+	expect(entry(two, dear)?.estimate).toBeCloseTo(0.75);
+	const off = run([], big, {}, 0.5, { ...DEFAULT_TUNING, priorWeight: 0 });
+	expect(off).toEqual(run([], undefined));
+	// Live data dominates quickly: 20 live failures pull the estimate under 0.3.
+	expect(entry(run([live(dear, 20, 0)], big), dear)?.estimate).toBeLessThan(
+		0.3,
+	);
+});
+
+test("bench rows and the snapshot share one cap and both sources show", () => {
+	const d = run(
+		[],
+		[
+			prior(dear, 4, 4),
+			prior(dear, 4, 4, "easy", { source: "imported bench rows" }),
+		],
+	);
+	expect(entry(d, dear)).toMatchObject({ n_prior: 6, n_bench: 8 });
+	expect(d.reason).toContain(
+		"source: release snapshot 3ce2237 of 2026-10-10 (0 d old), imported bench rows",
+	);
 });
 
 test("bench cells with n = 1 and n = 2 weigh 1 and 2", () => {
@@ -114,9 +150,9 @@ test("pooled level sums n_eff and s_eff of harder difficulties", () => {
 		prior(cheap, 1, 1, "medium"),
 		prior(cheap, 1.5, 0.5, "hard"),
 	]);
-	// pooled easy+medium+hard: n_eff 2.5 -> w 2, a = 2 * 1.5 / 2.5 = 1.2; live 5/5
-	expect(entry(d, cheap)).toMatchObject({ n: 5, n_prior: 2, n_bench: 2.5 });
-	expect(entry(d, cheap)?.estimate).toBeCloseTo((1 + 5 + 1.2) / (2 + 5 + 2));
+	// pooled easy+medium+hard: n_eff 2.5 -> w 2.5, a = 1.5; live 5/5
+	expect(entry(d, cheap)).toMatchObject({ n: 5, n_prior: 2.5, n_bench: 2.5 });
+	expect(entry(d, cheap)?.estimate).toBeCloseTo((1 + 5 + 1.5) / (2 + 5 + 2.5));
 	expect(d.reason).toContain("easy+medium+hard level");
 });
 

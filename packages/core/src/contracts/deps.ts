@@ -130,14 +130,20 @@ export interface Store extends AttemptStore {
 	liveModelVersions(): Record<string, string>;
 	/** Later attempts and --retry-of chain members, grouped by cell and actual pair. Non-test only. */
 	retryStats(taskType: TaskType, successQuality?: number): CellStat[];
-	/** Stores bench rows apart from live attempts, once per run_id; true per new row. dryRun stores nothing. */
+	/** Stores bench rows apart from live attempts, once per run_id; true per new row. dryRun stores nothing. source_run fills a row's missing measurement run even when the row is a duplicate. */
 	importEvalRows(
-		rows: { row: EvalRow; task_hash: string | null }[],
+		rows: {
+			row: EvalRow;
+			task_hash: string | null;
+			source_run?: string | null;
+		}[],
 		at: number,
 		dryRun: boolean,
 	): boolean[];
 	/** Bench rows as weak prior cells; rows of another known live model_version seed nothing. */
 	benchPriors(): PriorCell[];
+	/** Measurement run ids (snapshot run ids) of imported bench rows. */
+	benchRuns(): Set<string>;
 	/** Link session_id/prompt_id to the suggestion and touch it (never backwards). Idempotent and order-safe: in creation order, each suggestion of the session and agent is closed at the created_at of the next one. Returns the ids whose closed_at moved earlier. */
 	linkSession(
 		suggestionId: string,

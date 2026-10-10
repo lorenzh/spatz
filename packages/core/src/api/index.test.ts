@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BUNDLED_SNAPSHOT, SNAPSHOT_URL } from "../catalog/snapshot.ts";
 import type {
 	CoreDeps,
 	JevClient,
@@ -82,11 +84,13 @@ const WRITES = [
 	"upsertUsage",
 ];
 
+// The release snapshot is off here so its bundled copy does not shift other tests' estimates.
 const config = (over: Partial<Config> = {}): Config => ({
 	jevEnabled: true,
 	tuning: DEFAULT_TUNING,
 	aliases: {},
 	descriptions: {},
+	benchSnapshot: false,
 	...over,
 });
 
@@ -1378,36 +1382,123 @@ test("harness catalog is used only at preset precedence", async () => {
 	);
 });
 
-const notSnapshot = (url: string) =>
-	!/\/catalog\/[^/]+\/[^/]+\.json$/.test(url);
+const notSnapshot = (url: string) => !url.startsWith(SNAPSHOT_URL);
 
-test("a bench snapshot changes the estimate and shows n_prior and n_bench, not n", async () => {
-	const snapshot = {
-		schema: "spatz-bench-snapshot/1",
-		model: "anthropic/claude-opus-5.5",
-		model_version: null,
-		efforts: {
-			high: { "code.bugfix": { easy: { n: 5, successes: 5 } } },
+const SNAPSHOT_COMMIT = "3ce2237f116cff82f3ea13ff0a9f3e5e0fa46ce9";
+/** A release snapshot with one cell for opus high on easy bugfixes. */
+const releaseSnapshot = (runs = ["aaaaaaaaaaaa"]) =>
+	JSON.stringify({
+		schema: "spatz-snapshot/1",
+		generated_at: new Date(T0 - 2 * 24 * 60 * 60 * 1000).toISOString(),
+		source: {
+			commit: SNAPSHOT_COMMIT,
+			repository: "lorenzh/spatz-measurements",
 		},
-	};
+		cells: [
+			{
+				model: "anthropic/claude-opus-5.5",
+				model_version: null,
+				effort: "high",
+				task_type: "code.bugfix",
+				difficulty: "easy",
+				n: 5,
+				pass: 5,
+				partial: 0,
+				fail: 0,
+				runs,
+			},
+		],
+	});
+const snapshotFetch =
+	(text = releaseSnapshot()) =>
+	async (url: string) =>
+		url === SNAPSHOT_URL
+			? new Response(text)
+			: url === `${SNAPSHOT_URL}.sha256`
+				? new Response(
+						`${createHash("sha256").update(text).digest("hex")}  snapshot.json\n`,
+					)
+				: new Response(Bun.file(OPENROUTER_FIXTURE));
+
+test("the release snapshot changes the estimate, shows n_prior and n_bench, not n, and names its source", async () => {
+	const s = setup({
+		jev: fakeJev(),
+		fetch: snapshotFetch(),
+		config: config({ benchSnapshot: true }),
+	});
+	const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
+	const top = out.ranking.find((r) => r.model === "anthropic/claude-opus-5.5");
+	// w = min(6, 5) = 5, a = 5 -> (1 + 5) / (2 + 5)
+	expect(top).toMatchObject({ n: 0, n_prior: 5, n_bench: 5 });
+	expect(top?.estimate).toBeCloseTo(6 / 7);
+	expect(await Bun.file(join(dir, ".spatz/bench-snapshot.json")).exists()).toBe(
+		true,
+	);
+	const out2 = await s.api.suggest({
+		...suggestInput(),
+		dryRun: true,
+		models: "claude-opus-5-5:high",
+	});
+	expect(out2.reason).toContain("source: release snapshot 3ce2237 of ");
+	expect(out2.reason).toContain("(2 d old)");
+});
+
+test("bench.snapshot false skips the download and the prior", async () => {
+	const s = setup({ jev: fakeJev(), fetch: snapshotFetch() });
+	const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
+	expect(s.fetched.some((url) => !notSnapshot(url))).toBe(false);
+	expect(out.ranking.every((r) => r.n_prior === undefined)).toBe(true);
+});
+
+test("a failed download falls back to the bundled snapshot", async () => {
 	const s = setup({
 		jev: fakeJev(),
 		fetch: async (url) =>
-			url.endsWith("/catalog/anthropic/claude-opus-5.5.json")
-				? Response.json(snapshot)
-				: notSnapshot(url)
-					? new Response(Bun.file(OPENROUTER_FIXTURE))
-					: new Response("", { status: 404 }),
+			notSnapshot(url)
+				? new Response(Bun.file(OPENROUTER_FIXTURE))
+				: new Response("", { status: 503 }),
+		config: config({ benchSnapshot: true }),
 	});
-	const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
-	const top = out.ranking.find((r) => r.model === snapshot.model);
-	expect(top).toMatchObject({ n: 0, n_prior: 2, n_bench: 5 });
-	expect(top?.estimate).toBeCloseTo(0.75);
-	expect(
-		await Bun.file(
-			join(dir, ".spatz/catalog/anthropic/claude-opus-5.5.json"),
-		).exists(),
-	).toBe(true);
+	const out = await s.api.suggest({
+		...suggestInput(),
+		dryRun: true,
+		models: "claude-opus-5-5:high",
+	});
+	expect(out.reason).toContain(
+		`source: bundled snapshot ${BUNDLED_SNAPSHOT.commit.slice(0, 7)}`,
+	);
+});
+
+test("stats show the snapshot source and age without a download, or null when off", async () => {
+	// The report itself comes from the db; only the snapshot field is under test.
+	const statsOf = (deps: CoreDeps) =>
+		createApi(deps, {
+			runStats: async () =>
+				({ failures: { parse: 0, hook: 0, launcher: 0 } }) as StatsReport,
+		}).stats({});
+	const on = setup({
+		fetch: snapshotFetch(),
+		config: config({ benchSnapshot: true }),
+	});
+	expect((await statsOf(on.deps)).snapshot).toEqual({
+		source: "bundled",
+		commit: BUNDLED_SNAPSHOT.commit,
+		generated_at: BUNDLED_SNAPSHOT.generated_at,
+		age_days: expect.any(Number),
+		fetched_at: null,
+		cells: BUNDLED_SNAPSHOT.cells.length,
+		prior_weight: 6,
+	});
+	expect(on.fetched).toEqual([]);
+	await on.api.suggest({ ...suggestInput(), dryRun: true });
+	expect((await statsOf(on.deps)).snapshot).toMatchObject({
+		source: "release",
+		commit: SNAPSHOT_COMMIT,
+		age_days: 2,
+		fetched_at: new Date(T0).toISOString(),
+		cells: 1,
+	});
+	expect((await statsOf(setup().deps)).snapshot).toBeNull();
 });
 
 test("SPATZ_NO_NETWORK skips both catalogs and Jev, including injected config", async () => {
@@ -3398,7 +3489,43 @@ describe("importEval", () => {
 		const top = out.ranking.find(
 			(r) => r.model === "anthropic/claude-opus-5.5",
 		);
-		expect(top).toMatchObject({ n: 0, n_prior: 2, n_bench: 5 });
-		expect(top?.estimate).toBeCloseTo(0.75);
+		expect(top).toMatchObject({ n: 0, n_prior: 5, n_bench: 5 });
+		expect(top?.estimate).toBeCloseTo(6 / 7);
+	});
+
+	test("with bench.use on, imported runs replace their snapshot cells; other runs add up under one cap", async () => {
+		const rows = [1, 2, 3, 4, 5].map((n) => evalRow(n));
+		const run = createHash("sha256")
+			.update(
+				rows
+					.map((r) => r.run_id)
+					.sort()
+					.join("\n"),
+			)
+			.digest("hex")
+			.slice(0, 12);
+		const opus = async (runs: string[]) => {
+			rmSync(join(dir, ".spatz"), { recursive: true, force: true });
+			const s = setup({
+				jev: fakeJev(),
+				fetch: snapshotFetch(releaseSnapshot(runs)),
+				dbPath: join(dir, `bench-${runs[0]}.db`),
+				openStore,
+				config: config({ benchUse: true, benchSnapshot: true }),
+			});
+			const file = join(dir, "rows.jsonl");
+			await Bun.write(file, jsonl(...rows));
+			await s.api.importEval({ paths: [file], dryRun: false });
+			const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
+			return out.ranking.find((r) => r.model === "anthropic/claude-opus-5.5");
+		};
+		// Same run: only the 5 imported rows count.
+		expect(await opus([run])).toMatchObject({ n: 0, n_prior: 5, n_bench: 5 });
+		// Another run: 5 snapshot + 5 imported rows, capped at 6.
+		expect(await opus(["bbbbbbbbbbbb"])).toMatchObject({
+			n: 0,
+			n_prior: 6,
+			n_bench: 10,
+		});
 	});
 });

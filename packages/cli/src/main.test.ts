@@ -1470,3 +1470,28 @@ test("stats text lists bench pairs apart from live numbers", async () => {
 		"bench openai/gpt-6-luna:low  n=3  success=67%  est_cost_per_success=$0.0450",
 	);
 });
+
+test("stats text shows the bench snapshot source and age, or that it is off", async () => {
+	const text = async (snapshot: StatsReport["snapshot"]) => {
+		const { io, stdout } = fakeIO();
+		const { api } = fakeApi({
+			stats: async () => ({ ...statsReport, snapshot }),
+		});
+		await main(["stats"], io, api);
+		return stdout();
+	};
+	expect(
+		await text({
+			source: "release",
+			commit: "3ce2237f116cff82f3ea13ff0a9f3e5e0fa46ce9",
+			generated_at: "2026-10-10T06:10:11.000Z",
+			age_days: 2,
+			fetched_at: "2026-10-12T00:00:00.000Z",
+			cells: 540,
+			prior_weight: 6,
+		}),
+	).toContain(
+		"snapshot: release 3ce2237 of 2026-10-10 (2 d old)  cells=540  prior_weight=6",
+	);
+	expect(await text(null)).toContain("snapshot: off");
+});

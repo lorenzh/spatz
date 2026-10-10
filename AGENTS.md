@@ -31,6 +31,7 @@
 - Plugin skill copies and `packages/*/bin/spatz`: edit `skills/routing/SKILL.md` and `scripts/plugin-assets.ts`, then regenerate.
 - Versions in manifests and marketplaces: only via `bun scripts/release-version.ts`, only in release PRs.
 - `catalog/harness-models.json`: produced by `scripts/harness-catalog.ts` and the daily workflow.
+- `catalog/bench-snapshot.json`: produced by `bun scripts/bench-snapshot.ts` at release time.
 
 ## Key Conventions
 - Schema changes: add one `MIGRATIONS` entry per schema version in `packages/core/src/store/index.ts`, as an array of single SQL statements (`bun:sqlite` `run()` skips errors in multi-statement strings).
