@@ -9,7 +9,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDatabase, SCHEMA_VERSION } from "./index.ts";
+import type { TaskType } from "../contracts/types.ts";
+import { runStats } from "../report/index.ts";
+import { openDatabase, openStore, SCHEMA_VERSION } from "./index.ts";
 
 const dirs: string[] = [];
 const handles: Database[] = [];
@@ -61,6 +63,19 @@ const tables = [
 	"failures",
 	"outcomes",
 ];
+// Every table and view (outcomes included), so a new table is compared without a list update.
+const snapshot = (db: Database) =>
+	Object.fromEntries(
+		db
+			.query<{ name: string }, []>(
+				"SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name",
+			)
+			.all()
+			.map(({ name }) => [
+				name,
+				db.query(`SELECT * FROM "${name}" ORDER BY 1,2,3`).all(),
+			]),
+	);
 const rows = (db: Database) =>
 	tables.map((table) => db.query(`SELECT * FROM ${table}`).all());
 
@@ -392,8 +407,15 @@ test("usage completeness migration marks stored Claude subagents and filters exi
 test("a v5 backup restores intact and the current CLI refuses a downgrade", async () => {
 	const dir = directory();
 	const { path, db } = await fixture(dir, 5);
-	const before = db.query("SELECT * FROM suggestions").all();
+	const before = snapshot(db);
+	for (const [name, rows] of Object.entries(before))
+		expect({ name, populated: rows.length > 0 }).toEqual({
+			name,
+			populated: true,
+		});
 	db.close();
+	const originalPath = join(dir, "original.db");
+	copyFileSync(path, originalPath);
 	openDatabase(path).close();
 	const restoredPath = join(dir, "restored.db");
 	copyFileSync(`${path}.bak-v5`, restoredPath);
@@ -402,7 +424,21 @@ test("a v5 backup restores intact and the current CLI refuses a downgrade", asyn
 	expect(restored.query("PRAGMA user_version").get()).toEqual({
 		user_version: 5,
 	});
-	expect(restored.query("SELECT * FROM suggestions").all()).toEqual(before);
+	expect(snapshot(restored)).toEqual(before);
+	restored.close();
+	// Learning stats and token totals of the restored backup match the original data.
+	const stats = async (file: string) => {
+		const store = openStore(file);
+		const cells = ["review", "code.bugfix", "other"].flatMap((t) =>
+			store.cellStats(t as TaskType),
+		);
+		expect(cells.length).toBeGreaterThan(0);
+		return {
+			cells,
+			report: await runStats({ dbPath: file, successQuality: 0.8 }),
+		};
+	};
+	expect(await stats(restoredPath)).toEqual(await stats(originalPath));
 	const newer = openDatabase(path);
 	newer.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
 	newer.close();
