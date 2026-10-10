@@ -734,7 +734,8 @@ export function attemptStore(
 							throw new Error("start replay ownership conflict");
 						if (!compatible(a, input))
 							throw new Error("start replay pair conflict");
-						return a;
+						fill(a, input);
+						return get(a.id) ?? a;
 					}
 					a = latest(input.suggestion_id);
 					if (
@@ -773,6 +774,7 @@ export function attemptStore(
 							input,
 						);
 					if (!a) throw new Error("missing started attempt");
+					fill(a, input);
 					if (input.owns_usage)
 						db.query("UPDATE attempts SET owns_usage=1 WHERE id=?").run(a.id);
 					for (const [kind, id] of [
