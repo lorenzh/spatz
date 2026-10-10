@@ -40,7 +40,7 @@ test("frozen previous-schema outcomes, learning and statistics survive migration
 				const cells = store
 					.cellStats(type)
 					// The baseline predates binary success counts.
-					.map(({ successes: _, ...c }) => c)
+					.map(({ successes: _, n_live: _n, successes_live: _s, ...c }) => c)
 					.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 				expect(baseline.learning[type]).toEqual(cells);
 			}

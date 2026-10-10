@@ -61,6 +61,9 @@ interface Est {
 	n: number;
 	estimate: number;
 	successes: number;
+	/** Live first attempts and their successes; the gates use only these. */
+	nLive: number;
+	successesLive: number;
 	/** Prior weight w = min(2, n_eff); 0 without a prior. */
 	nPrior: number;
 	/** Raw bench runs behind the prior. */
@@ -81,7 +84,10 @@ function level(
 	sameType: (t: TaskType) => boolean = (t) =>
 		t === ctx.classification.task_type,
 ): Level {
-	const sums = new Map<string, { n: number; sum: number }>();
+	const sums = new Map<
+		string,
+		{ n: number; sum: number; nLive: number; sumLive: number }
+	>();
 	const bench = new Map<
 		string,
 		{ n: number; s: number; raw: number; match: "exact" | "unknown" }
@@ -91,9 +97,11 @@ function level(
 		if (!sameType(s.task_type)) continue;
 		if (!difficulties.includes(normalizeDifficulty(s.difficulty))) continue;
 		const k = keyOf(s);
-		const cur = sums.get(k) ?? { n: 0, sum: 0 };
+		const cur = sums.get(k) ?? { n: 0, sum: 0, nLive: 0, sumLive: 0 };
 		cur.n += s.n;
 		cur.sum += s.successes;
+		cur.nLive += s.n_live;
+		cur.sumLive += s.successes_live;
 		sums.set(k, cur);
 	}
 	for (const p of ctx.priors ?? []) {
@@ -114,7 +122,7 @@ function level(
 		bench.set(k, cur);
 	}
 	return (c) => {
-		const s = sums.get(keyOf(c)) ?? { n: 0, sum: 0 };
+		const s = sums.get(keyOf(c)) ?? { n: 0, sum: 0, nLive: 0, sumLive: 0 };
 		const b = bench.get(keyOf(c));
 		const w = b ? Math.min(2, b.n) : 0;
 		const a = b && b.n > 0 ? (w * b.s) / b.n : 0;
@@ -122,6 +130,8 @@ function level(
 			n: s.n,
 			estimate: estimate(s.sum, s.n, a, w),
 			successes: s.sum,
+			nLive: s.nLive,
+			successesLive: s.sumLive,
 			nPrior: w,
 			nBench: b?.raw ?? 0,
 			versionMatch: w > 0 ? (b?.match ?? null) : null,
@@ -163,18 +173,19 @@ function decision(
 
 const label = (c: Candidate) => `${c.model} (${c.effort})`;
 
-/** Steps 3 and 4 on one level; null when no catalog candidate has n >= minN. */
+/** Steps 3 and 4 on one level; null when no catalog candidate has live n >= minN. */
 function pickOnLevel(catalog: Catalog, at: Level, t: Tuning): number | null {
 	const ests = catalog.map(at);
-	let best = ests.findIndex((e) => e.n >= t.minN);
+	let best = ests.findIndex((e) => e.nLive >= t.minN);
 	if (best < 0) return null;
 	const cheapest = ests.findIndex(
-		(e) => e.n >= t.minN && e.estimate >= t.minEstimate,
+		(e) => e.nLive >= t.minN && e.estimate >= t.minEstimate,
 	);
 	if (cheapest >= 0) return cheapest;
 	ests.forEach((e, i) => {
 		// only pairs with n >= minN; tie -> more expensive
-		if (e.n >= t.minN && e.estimate >= (ests[best] as Est).estimate) best = i;
+		if (e.nLive >= t.minN && e.estimate >= (ests[best] as Est).estimate)
+			best = i;
 	});
 	return best;
 }
@@ -203,7 +214,8 @@ export function learned(
 		if (i === null) continue;
 		const c = catalog[i] as Candidate;
 		const qualified =
-			at(c).n >= ctx.tuning.minN && at(c).estimate >= ctx.tuning.minEstimate;
+			at(c).nLive >= ctx.tuning.minN &&
+			at(c).estimate >= ctx.tuning.minEstimate;
 		const why = qualified
 			? "is the cheapest pair that meets the learned limits"
 			: "has the highest estimate because no pair meets the learned limits";
@@ -283,8 +295,8 @@ function critical(
 		const e = at(c);
 		return (
 			j < catalog.length - 1 &&
-			e.n >= t.criticalMinN &&
-			lowerBound(e.successes, e.n) >= t.criticalMinEstimate
+			e.nLive >= t.criticalMinN &&
+			lowerBound(e.successesLive, e.nLive) >= t.criticalMinEstimate
 		);
 	});
 	if (i >= 0)

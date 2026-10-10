@@ -212,6 +212,10 @@ export interface CellStat {
 	sum_quality: number;
 	/** Outcomes with quality >= successQuality; learning uses these, not sum_quality. */
 	successes: number;
+	/** Live first attempts only (no legacy outcomes); the learning gates count these. */
+	n_live: number;
+	/** Successes among the live first attempts. */
+	successes_live: number;
 }
 
 // ---------- Suggestion (spec "Output") ----------

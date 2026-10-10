@@ -347,9 +347,9 @@ export function openStore(
 		db
 			.query<CellStat, (string | number)[]>(
 				`WITH history AS (
-					SELECT suggestion_id,quality,model,effort,model_version FROM attempt_outcomes
+					SELECT suggestion_id,quality,model,effort,model_version,1 AS live FROM attempt_outcomes
 					WHERE ${retries ? "ordinal>1 OR attempt_id<>root_id" : "ordinal=1 AND attempt_id=root_id"}
-					${retries ? "" : "UNION ALL SELECT suggestion_id,quality,model,effort,NULL FROM legacy_outcomes"}
+					${retries ? "" : "UNION ALL SELECT suggestion_id,quality,model,effort,NULL,0 FROM legacy_outcomes"}
 				), live AS (
 					-- The newest known version per model; older known versions seed nothing, null matches any.
 					SELECT model, model_version FROM (
@@ -362,12 +362,12 @@ export function openStore(
 					FROM history h LEFT JOIN live l ON l.model = h.model
 					WHERE h.model_version IS NULL OR l.model_version IS NULL OR h.model_version = l.model_version
 				)
-				SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality, SUM(o.quality >= ?) AS successes
+				SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty, o.model, o.known_effort AS effort, COUNT(*) AS n, SUM(o.quality) AS sum_quality, SUM(o.quality >= ?) AS successes, SUM(o.live) AS n_live, SUM(o.live AND o.quality >= ?) AS successes_live
 				FROM suggestions s JOIN normalized o ON o.suggestion_id = s.id
 				WHERE s.task_type = ? AND s.is_test = 0 AND o.quality IS NOT NULL AND o.model IS NOT NULL AND o.known_effort IS NOT NULL
 				GROUP BY s.task_type, ${difficultySql("s.difficulty")}, o.model, o.known_effort`,
 			)
-			.all(...noneOnlyModels, successQuality, taskType);
+			.all(...noneOnlyModels, successQuality, successQuality, taskType);
 	// Legacy agents share the main sequence until they have an explicit link.
 	const windowAgent = (session: string, agent: string | null) =>
 		agent !== null &&

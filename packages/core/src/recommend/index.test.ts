@@ -67,6 +67,8 @@ function stat(
 	difficulty: Difficulty = "easy",
 	task_type: CellStat["task_type"] = "code.bugfix",
 	successes = sum,
+	n_live = n,
+	successes_live = successes,
 ): CellStat {
 	return {
 		task_type,
@@ -76,6 +78,8 @@ function stat(
 		n,
 		sum_quality: sum,
 		successes,
+		n_live,
+		successes_live,
 	};
 }
 const pick = (d: Decision) => d.ranking[0];
@@ -276,6 +280,25 @@ describe("random draw", () => {
 });
 
 describe("learned choice", () => {
+	test("legacy-only history cannot qualify a pair", () => {
+		const legacyOnly = stat(c0, 30, 30, "easy", "code.bugfix", 30, 0, 0);
+		const d = recommend(ctx(LEARNED), CATALOG, [legacyOnly]);
+		expect(d.strategy).not.toBe("learned");
+		expect(d.strategy).not.toBe("learned-fallback");
+		const crit = recommend(ctx(LEARNED, { criticality: "security" }), CATALOG, [
+			legacyOnly,
+		]);
+		expect(pick(crit)).toMatchObject({ model: c3.model, effort: c3.effort });
+	});
+
+	test("legacy outcomes still inform the estimate of a live-qualified pair", () => {
+		const d = recommend(ctx(LEARNED), CATALOG, [
+			stat(c0, 10, 2, "easy", "code.bugfix", 2, 5, 2), // live 5, but legacy failures pull it to 3/12
+			stat(c1, 5, 5),
+		]);
+		expect(pick(d)).toMatchObject({ model: c1.model, effort: c1.effort });
+	});
+
 	test("cheapest pair with n >= 5 and estimate >= 0.8 wins", () => {
 		const history = [
 			stat(c0, 5, 2), // 3/7, too low
