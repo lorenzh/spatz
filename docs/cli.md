@@ -475,7 +475,7 @@ This command shows how well each pair worked, per task type. It reads the databa
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.test`, `code.explain`, `investigation`, `review`, `spec`, `planning`, `ops`, `design.ui`, `design.visual`, `design.3d`, `writing`, `research`, `data`, `other`. Another value gives exit code 2. |
-| `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. |
+| `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. Also filters the per-attempt cost. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 
 Text output ends with one `outcome coverage <source>` line per source (`claude-code-mod`, `claude-code`, `codex`, `cli`). Coverage is the share of suggestions with an outcome or an explicit `unknown`. A source below 80 % shows a warning. JSON has the same data as `coverage_by_source`.
