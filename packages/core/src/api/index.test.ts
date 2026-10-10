@@ -1409,10 +1409,11 @@ const releaseSnapshot = (runs = ["aaaaaaaaaaaa"]) =>
 			},
 		],
 	});
+/** Serves the snapshot, its checksum and OpenRouter; records every url in `urls`. */
 const snapshotFetch =
-	(text = releaseSnapshot()) =>
+	(text = releaseSnapshot(), urls: string[] = []) =>
 	async (url: string) =>
-		url === SNAPSHOT_URL
+		urls.push(url) && url === SNAPSHOT_URL
 			? new Response(text)
 			: url === `${SNAPSHOT_URL}.sha256`
 				? new Response(
@@ -1444,9 +1445,11 @@ test("the release snapshot changes the estimate, shows n_prior and n_bench, not 
 });
 
 test("bench.snapshot false skips the download and the prior", async () => {
-	const s = setup({ jev: fakeJev(), fetch: snapshotFetch() });
+	const urls: string[] = [];
+	const s = setup({ jev: fakeJev(), fetch: snapshotFetch(undefined, urls) });
 	const out = await s.api.suggest({ ...suggestInput(), dryRun: true });
-	expect(s.fetched.some((url) => !notSnapshot(url))).toBe(false);
+	expect(urls.length).toBeGreaterThan(0);
+	expect(urls.some((url) => !notSnapshot(url))).toBe(false);
 	expect(out.ranking.every((r) => r.n_prior === undefined)).toBe(true);
 });
 
@@ -1476,8 +1479,9 @@ test("stats show the snapshot source and age without a download, or null when of
 			runStats: async () =>
 				({ failures: { parse: 0, hook: 0, launcher: 0 } }) as StatsReport,
 		}).stats({});
+	const urls: string[] = [];
 	const on = setup({
-		fetch: snapshotFetch(),
+		fetch: snapshotFetch(undefined, urls),
 		config: config({ benchSnapshot: true }),
 	});
 	expect((await statsOf(on.deps)).snapshot).toEqual({
@@ -1489,8 +1493,9 @@ test("stats show the snapshot source and age without a download, or null when of
 		cells: BUNDLED_SNAPSHOT.cells.length,
 		prior_weight: 6,
 	});
-	expect(on.fetched).toEqual([]);
+	expect(urls).toEqual([]);
 	await on.api.suggest({ ...suggestInput(), dryRun: true });
+	expect(urls.filter((url) => !notSnapshot(url))).toHaveLength(2);
 	expect((await statsOf(on.deps)).snapshot).toMatchObject({
 		source: "release",
 		commit: SNAPSHOT_COMMIT,

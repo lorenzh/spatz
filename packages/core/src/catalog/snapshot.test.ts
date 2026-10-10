@@ -213,3 +213,18 @@ test("fetchSnapshot throws on a mismatch so the refresh script never writes a ba
 	expect(ok.text).toBe(JSON.stringify(raw()));
 	expect(ok.snapshot.commit).toBe("3ce2237f116cff82f3ea13ff0a9f3e5e0fa46ce9");
 });
+
+test("a failed download aborts the other request at once", async () => {
+	let aborted = false;
+	const fetch: FetchFn = async (url, init) => {
+		if (url === SNAPSHOT_URL) return new Response("", { status: 503 });
+		return new Promise<Response>((_, reject) =>
+			init?.signal?.addEventListener("abort", () => {
+				aborted = true;
+				reject(new Error("aborted"));
+			}),
+		);
+	};
+	expect(await load(fetch)).toBe(BUNDLED_SNAPSHOT);
+	expect(aborted).toBe(true);
+});

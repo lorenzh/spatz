@@ -382,7 +382,7 @@ Each argument is one of these:
 - A run directory that contains `rows.jsonl`.
 - A directory of run directories, as in the measurements layout `runs/<id>/rows.jsonl`. spatz reads the run directories in name order and ignores entries without `rows.jsonl`.
 
-spatz checks each row with `parseEvalRow`. A valid row is stored once per `run_id` in its own table, apart from live attempts. A second import of the same row changes nothing. Each row also gets the run id of its file: the first 12 hex digits of the SHA-256 of the file's sorted row `run_id`s, which is the run folder id in the measurements layout. With `bench.use` on, it keeps the [bench snapshot](recommendation.md#bench-prior) from counting the same run twice. A second import fills a missing run id. spatz also stores `bench_version`, the list-price estimate `estimated_cost_usd` and, when the row has one, the extra field `task_hash`.
+spatz checks each row with `parseEvalRow`. A valid row is stored once per `run_id` in its own table, apart from live attempts. A second import of the same row changes nothing. Each row also gets the run id of its file: the first 12 hex digits of the SHA-256 of the file's sorted row `run_id`s, which is the run folder id in the measurements layout. With `bench.use` on, it keeps the [bench snapshot](recommendation.md#bench-prior) from counting the same run twice. A later import of a larger file, such as the whole run folder, replaces a missing or partial run id; a smaller file never does. spatz also stores `bench_version`, the list-price estimate `estimated_cost_usd` and, when the row has one, the extra field `task_hash`.
 
 Cost per row:
 

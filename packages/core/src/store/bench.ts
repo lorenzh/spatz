@@ -38,17 +38,27 @@ export function benchStore(
 				$result,$check,$judge,$duration_s,$input,$output,$cache_read,$cache_write,$reasoning,$tokens_complete,
 				$cost_usd,$cost_source,$estimated_cost_usd,$started_at,$contributor,$verified,$source_run)`,
 			);
-			// Rows imported before v13 learn their run on the next import; they stay duplicates.
+			// A stored row takes the run id of a larger file: rows imported before v13 or as part of a
+			// split run learn the id of the whole run on its next import. They stay duplicates.
 			const fill = db.query(
-				"UPDATE bench_attempts SET source_run = $source_run WHERE run_id = $run_id AND source_run IS NULL",
+				`UPDATE bench_attempts SET source_run = $source_run WHERE run_id = $run_id AND source_run IS NOT $source_run
+				AND (source_run IS NULL OR (SELECT COUNT(*) FROM bench_attempts b WHERE b.source_run = bench_attempts.source_run) < $size)`,
 			);
+			const sizes = new Map<string, number>();
+			for (const { source_run } of rows)
+				if (source_run) sizes.set(source_run, (sizes.get(source_run) ?? 0) + 1);
 			let added: boolean[] = [];
 			const rollback = new Error("dry run");
 			try {
 				db.transaction(() => {
 					added = rows.map(({ row: r, task_hash, source_run = null }) => {
 						const t = r.tokens;
-						if (source_run) fill.run({ source_run, run_id: r.run_id });
+						if (source_run)
+							fill.run({
+								source_run,
+								run_id: r.run_id,
+								size: sizes.get(source_run) ?? 0,
+							});
 						// The harness bill first, else the bench's list-price estimate; never priced without usage.
 						const cost = r.cost_usd ?? r.estimated_cost_usd;
 						return (

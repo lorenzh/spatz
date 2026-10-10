@@ -2,6 +2,7 @@
 // One GitHub release asset of spatz-measurements, verified by its .sha256, cached for a day.
 // Without a good download: the last good cache, else the copy bundled at release time.
 import { createHash } from "node:crypto";
+import { rename, rm } from "node:fs/promises";
 import bundled from "../../../../catalog/bench-snapshot.json";
 import type { FetchFn } from "../contracts/deps.ts";
 import {
@@ -238,17 +239,23 @@ export async function loadSnapshot(
 		return fallback;
 	} finally {
 		clearTimeout(timer);
+		// Ends the other request when one failed early.
+		abort.abort();
 	}
+	// Write a sibling and rename it, so a failed write never destroys the last good cache.
+	const temporary = `${cachePath}.${crypto.randomUUID()}.tmp`;
 	try {
 		await Bun.write(
-			cachePath,
+			temporary,
 			JSON.stringify({
 				fetched_at: now,
 				snapshot: JSON.parse(fetched.text),
 			} satisfies CacheFile),
 		);
+		await rename(temporary, cachePath);
 	} catch {
 		// A failed cache write only costs a refetch.
+		await rm(temporary, { force: true }).catch(() => {});
 	}
 	return { ...fetched.snapshot, source: "release", fetched_at: now };
 }

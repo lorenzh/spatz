@@ -246,6 +246,35 @@ test("benchRuns lists the measurement runs of imported rows; a re-import fills a
 	});
 });
 
+test("a run imported in parts gets the id of the whole run when the full file is imported later, not the reverse", () => {
+	withStore((store) => {
+		const part = (n: number, run: string) => ({
+			row: row({ run_id: id(n) }),
+			task_hash: null,
+			source_run: run,
+		});
+		store.importEvalRows([part(1, "aaaaaaaaaaa1")], 1000, false);
+		store.importEvalRows([part(2, "aaaaaaaaaaa2")], 1000, false);
+		expect(store.benchRuns()).toEqual(
+			new Set(["aaaaaaaaaaa1", "aaaaaaaaaaa2"]),
+		);
+		const whole = [
+			part(1, "ffffffffffff"),
+			part(2, "ffffffffffff"),
+			part(3, "ffffffffffff"),
+		];
+		expect(store.importEvalRows(whole, 2000, false)).toEqual([
+			false,
+			false,
+			true,
+		]);
+		expect(store.benchRuns()).toEqual(new Set(["ffffffffffff"]));
+		// A smaller file afterwards does not take the rows back.
+		store.importEvalRows([part(1, "aaaaaaaaaaa1")], 3000, false);
+		expect(store.benchRuns()).toEqual(new Set(["ffffffffffff"]));
+	});
+});
+
 const suggestion = (sid: string): SuggestionRecord => ({
 	id: sid,
 	created_at: 1000,

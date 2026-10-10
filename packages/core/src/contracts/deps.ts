@@ -130,7 +130,7 @@ export interface Store extends AttemptStore {
 	liveModelVersions(): Record<string, string>;
 	/** Later attempts and --retry-of chain members, grouped by cell and actual pair. Non-test only. */
 	retryStats(taskType: TaskType, successQuality?: number): CellStat[];
-	/** Stores bench rows apart from live attempts, once per run_id; true per new row. dryRun stores nothing. source_run fills a row's missing measurement run even when the row is a duplicate. */
+	/** Stores bench rows apart from live attempts, once per run_id; true per new row. dryRun stores nothing. source_run sets a stored row's measurement run when it is missing or the new file is larger, even for a duplicate. */
 	importEvalRows(
 		rows: {
 			row: EvalRow;
