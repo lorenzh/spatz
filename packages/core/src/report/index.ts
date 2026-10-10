@@ -257,11 +257,13 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		);
 		// Learned picks (strategy learned, no exploration) vs the control group, per cell (task_type, difficulty)
 		// with both groups, weighted by the cell's count of these outcomes. Exploration, jev-choice and rules are no learned pick.
-		// learned-fallback picks get their own row against control, never dropped.
+		// learned-fallback picks get their own row against control, never dropped. Each comparison has its own
+		// control baseline over its own cells and weights: control_success for learned, fallback_control_success for fallback.
 		const [cmp] = rows<{
 			learned_success: number | null;
 			fallback_success: number | null;
 			control_success: number | null;
+			fallback_control_success: number | null;
 		}>(
 			`, cmp AS (
 				SELECT task_type, difficulty, success, control = 1 AS is_control, strategy FROM o
@@ -277,7 +279,8 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			)
 			SELECT SUM(w * l) / SUM(w) FILTER (WHERE l IS NOT NULL) AS learned_success,
 				SUM(wf * f) / SUM(wf) FILTER (WHERE f IS NOT NULL) AS fallback_success,
-				SUM(w * k) FILTER (WHERE l IS NOT NULL) / SUM(w) FILTER (WHERE l IS NOT NULL) AS control_success FROM cells`,
+				SUM(w * k) FILTER (WHERE l IS NOT NULL) / SUM(w) FILTER (WHERE l IS NOT NULL) AS control_success,
+				SUM(wf * k) FILTER (WHERE f IS NOT NULL) / SUM(wf) FILTER (WHERE f IS NOT NULL) AS fallback_control_success FROM cells`,
 		);
 
 		const scopes =
@@ -356,6 +359,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			learned_success: cmp?.learned_success ?? null,
 			fallback_success: cmp?.fallback_success ?? null,
 			control_success: cmp?.control_success ?? null,
+			fallback_control_success: cmp?.fallback_control_success ?? null,
 			learned_vs_control: lvc,
 			bench,
 		};

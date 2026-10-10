@@ -118,7 +118,7 @@ function formatStats(r: StatsReport): string {
 			`bench ${b.model}:${b.effort}  n=${b.n}  success=${pct(b.success_rate)}  est_cost_per_success=${usd(b.estimated_cost_usd_per_success)}`,
 		);
 	lines.push(
-		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
+		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}  fallback_control_success: ${opt(r.fallback_control_success)}`,
 	);
 	for (const c of r.coverage_by_source) {
 		const share = c.n ? c.covered / c.n : 1;

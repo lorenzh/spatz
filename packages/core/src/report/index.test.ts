@@ -283,6 +283,7 @@ test("empty db: no types, coverage 0, no comparison", async () => {
 		learned_success: null,
 		fallback_success: null,
 		control_success: null,
+		fallback_control_success: null,
 		coverage_by_source: [],
 		dispatches: 0,
 		routed_by_mod: 0,
@@ -507,6 +508,45 @@ test("learned-fallback picks get their own row, compared against control in the 
 	expect(r.learned_success).toBe(1);
 	expect(r.fallback_success).toBe(0.5);
 	expect(r.control_success).toBe(1);
+	expect(r.fallback_control_success).toBe(1);
+});
+
+test("fallback comparison gets its own control baseline over its cells", async () => {
+	sug("f1", { strategy: "learned-fallback" });
+	report("f1", "m/a", "low", "fail");
+	sug("k1", { control: true });
+	report("k1", "m/b", "high", "pass");
+	const r = await stats();
+	expect(r.fallback_success).toBe(0);
+	expect(r.fallback_control_success).toBe(1);
+	expect(r.learned_success).toBeNull();
+	expect(r.control_success).toBeNull();
+});
+
+test("fallback control baseline is weighted over fallback cells only, not a global control average", async () => {
+	// easy: 1 fallback pass; 2 controls, one pass: control rate 0.5, weight 3
+	sug("e1", { strategy: "learned-fallback", difficulty: "easy" });
+	report("e1", "m/a", "low", "pass");
+	sug("ek1", { difficulty: "easy", control: true });
+	report("ek1", "m/b", "high", "pass");
+	sug("ek2", { difficulty: "easy", control: true });
+	report("ek2", "m/b", "high", "fail");
+	// hard: 3 fallback fails; 1 control pass: control rate 1, weight 4
+	for (const id of ["h1", "h2", "h3"]) {
+		sug(id, { strategy: "learned-fallback", difficulty: "hard" });
+		report(id, "m/a", "low", "fail");
+	}
+	sug("hk1", { difficulty: "hard", control: true });
+	report("hk1", "m/b", "high", "pass");
+	// medium: control only, fails; no fallback, so it must not enter the baseline
+	sug("mk1", { difficulty: "medium", control: true });
+	report("mk1", "m/b", "high", "fail");
+	const r = await stats();
+	// weighted over fallback cells: (3 * 0.5 + 4 * 1) / (3 + 4) = 11 / 14
+	// equal weights would give 0.75, a global control average 0.5, including medium 0.6875
+	expect(r.fallback_control_success).toBeCloseTo(11 / 14);
+	expect(r.learned_success).toBeNull();
+	expect(r.control_success).toBeNull();
 });
 
 test("success is quality >= 0.8; pairs and adoption distinguish effort", async () => {

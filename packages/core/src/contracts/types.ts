@@ -511,7 +511,10 @@ export interface StatsReport {
 	learned_success: number | null;
 	/** Success rate of learned-fallback picks (best estimate, no pair met the limits) vs control in the same cells. null without data. */
 	fallback_success: number | null;
+	/** Control success in the cells and weights of learned_success. null without data. */
 	control_success: number | null;
+	/** Control success in the cells and weights of fallback_success. null without data. */
+	fallback_control_success: number | null;
 	learned_vs_control: LearnedVsControl;
 	/** Imported bench rows (spatz import-eval), filtered by --type; apart from every live number above. */
 	bench: BenchPairStats[];

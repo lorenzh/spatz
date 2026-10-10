@@ -143,7 +143,8 @@ The control group gets the most expensive candidate in 10 % of the normal sugges
 |---|---|
 | `learned_success` | Success rate of learned picks: strategy `learned` and not explored. |
 | `fallback_success` | Success rate of best-estimate picks: strategy `learned-fallback` and not explored. Compared with control in the same cells. |
-| `control_success` | Success rate of the control group. |
+| `control_success` | Success rate of the control group in the cells of `learned_success`. |
+| `fallback_control_success` | Success rate of the control group in the cells of `fallback_success`. |
 | `learned_vs_control` | Intent-to-treat comparison: `itt` (every root decision of strategy `learned` or `learned-fallback`, explored and retried ones included; retry children are not decisions), `qualified` and `fallback` (not explored), each with `decisions`, `outcomes`, `coverage` (outcomes per decision), `rate`, `control_rate`, `diff` and a bootstrap 95 % interval `ci95` of `diff`. `cells` shows the mix of outcomes per task type and difficulty. |
 | `cost_usd_per_success`, `tokens_per_success` | Per pair: spend of completed chains rooted at the pair, divided by their successes. `null` without a success. Orchestration spend is listed apart as `orchestration_cost_usd`. Chains with incomplete cost evidence (an unpriced or lower-bound usage, or an attempt without usage) count in `n` but not in the spend; `cost_incomplete_share` shows their share. |
 | `cost_usd_per_attempt` | Per pair: mean cost of one attempt. |
@@ -152,7 +153,7 @@ The control group gets the most expensive candidate in 10 % of the normal sugges
 | `success` | Per pair: share of outcomes with quality `≥ 0.8`. |
 
 spatz compares first-attempt quality once per root for `learned_success` and `control_success`.
-It groups these root decisions per cell. It uses only cells that have both groups. It weights each cell by its number of outcomes in both groups. If no cell has both groups, both fields are empty (`-` in text output, `null` in JSON).
+It groups these root decisions per cell. It uses only cells that have both groups. It weights each cell by its number of outcomes in both groups. `fallback_success` and `fallback_control_success` use the same rule for fallback picks. Each pair of fields has its own cells, so compare a rate only with its own control baseline. If no cell has both groups, both fields of the pair are empty (`-` in text output, `null` in JSON).
 
 If `learned_success` is about as high as `control_success`, the cheaper picks are good enough. If it is clearly lower, the learned picks lose quality. Small `n` gives noisy rates.
 
