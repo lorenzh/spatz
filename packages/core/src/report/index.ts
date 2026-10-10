@@ -178,7 +178,10 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				FROM ch GROUP BY task_type, model, effort
 			), ap AS (
 				SELECT s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, AVG(u.cost_usd) AS per_attempt
-				FROM s JOIN attempt_usage u ON u.suggestion_id = s.id GROUP BY s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END
+				FROM s JOIN attempt_usage u ON u.suggestion_id = s.id
+				LEFT JOIN attempts a ON a.id = u.attempt_id
+				WHERE ($mv IS NULL OR a.model_version = $mv)
+				GROUP BY s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END
 			)
 			SELECT o.task_type, o.model, o.effort, COUNT(*) AS n, AVG(o.success) AS success_rate,
 				CASE WHEN cs.wins > 0 THEN cs.spend / cs.wins END AS cost_usd_per_success,

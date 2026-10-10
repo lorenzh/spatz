@@ -351,6 +351,35 @@ test("legacy null-effort none-only pairs keep chain and attempt cost", async () 
 	]);
 });
 
+test("per-attempt cost counts only attempts of the selected model version", async () => {
+	for (const [id, version, cost] of [
+		["av1", "20250101", 0.1],
+		["av2", "20260101", 0.5],
+	] as const) {
+		sug(id);
+		usage(id, "m/a", "low", [1, 1]);
+		store.reportAttempt({
+			suggestion_id: id,
+			model: "m/a",
+			effort: "low",
+			result: "pass",
+			at: 2,
+			model_version: version,
+		});
+		const db = new Database(dbPath);
+		db.run(
+			`UPDATE attempt_events SET cost_usd = ${cost}, cost_source = 'priced' WHERE suggestion_id = '${id}' AND kind = 'usage'`,
+		);
+		db.close();
+	}
+	const perAttempt = async (modelVersion?: string) =>
+		(await runStats({ dbPath, successQuality: 0.8, modelVersion })).by_type[0]
+			?.pairs[0]?.cost_usd_per_attempt;
+	expect(await perAttempt("20250101")).toBeCloseTo(0.1, 12);
+	expect(await perAttempt("20260101")).toBeCloseTo(0.5, 12);
+	expect(await perAttempt()).toBeCloseTo(0.3, 12);
+});
+
 test("stats filters by model_version and keeps old versions visible under their own", async () => {
 	for (const [id, version, result] of [
 		["v1", "20250101", "pass"],
