@@ -319,6 +319,38 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 	]);
 });
 
+test("legacy null-effort none-only pairs keep chain and attempt cost", async () => {
+	const model = "anthropic/claude-haiku-4.5";
+	sug("nn", { top: [model, "none"] });
+	usage("nn", model, null, [10, 10]);
+	store.reportAttempt({
+		suggestion_id: "nn",
+		model,
+		effort: null as unknown as Effort,
+		result: "pass",
+		at: 1,
+	});
+	const db = new Database(dbPath);
+	db.run(
+		"UPDATE attempt_events SET cost_usd = 0.4, cost_source = 'priced' WHERE suggestion_id = 'nn' AND kind = 'usage'",
+	);
+	db.close();
+	const r = await runStats({
+		dbPath,
+		successQuality: 0.8,
+		noneOnlyModels: [model],
+	});
+	expect(r.by_type[0]?.pairs).toMatchObject([
+		{
+			model,
+			effort: "none",
+			n: 1,
+			cost_usd_per_success: 0.4,
+			cost_usd_per_attempt: 0.4,
+		},
+	]);
+});
+
 test("stats filters by model_version and keeps old versions visible under their own", async () => {
 	for (const [id, version, result] of [
 		["v1", "20250101", "pass"],
