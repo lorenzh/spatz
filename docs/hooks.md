@@ -423,4 +423,6 @@ Hooks cannot close a suggestion that is not linked to a session and agent. Use `
 
 ### Harness-neutral events
 
-All hook logic works on one event contract in `packages/core/src/events`: `session_start`, `turn_start`, `tool_run` (command and exit code), `subagent_start`, `subagent_end` and `session_end`. Each harness has a thin adapter that maps its native payload to this contract. The adapter declares what the harness cannot provide: Codex has no subagent events and its tool payload has no exit code (`exit_code` is `null`).
+All hook recording works on one event contract in `packages/core/src/events`: `session_start`, `turn_start`, `tool_run` (command, exit code and output), `agent_dispatch` (the subagent a main agent started, with the requested and answered model), `subagent_start`, `subagent_end` and `session_end`. Each harness has a thin adapter that maps its native payload to this contract. Suggestion linking, test and build signals, dispatch observations, usage and closing without evidence read only these events, never a native payload. The adapter declares what the harness cannot provide: Codex has no subagent or dispatch events, and its tool payload has no exit code (`exit_code` is `null`). A Claude Code command that never reached its program (an interrupt, a missing directory or binary) also has `exit_code` `null`, so it gives no signal.
+
+Usage still comes from each harness's own record: the Claude Code transcript or the Codex rollout that the event names.

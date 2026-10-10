@@ -1,18 +1,7 @@
 // signals: pure interpretation of hook inputs (no IO, no persistence).
 // Spec: "Hooks and signals" (Hooks, Signals, Attribution, Hook rules).
-import type {
-	BashToolInput,
-	HookInput,
-	PostToolUseFailureInput,
-	PostToolUseInput,
-} from "../contracts/hooks.ts";
-import {
-	EFFORTS,
-	type Effort,
-	type ReportResult,
-	SIGNAL_WEIGHTS,
-	type SignalRecord,
-} from "../contracts/types.ts";
+import type { HookInput } from "../contracts/hooks.ts";
+import { EFFORTS, type Effort, type ReportResult } from "../contracts/types.ts";
 
 export type CommandKind = "test" | "build" | "spatz-suggest" | null;
 
@@ -58,10 +47,6 @@ const unquote = (command: string) =>
 
 // Runs that only list or print help never execute the tests.
 const NO_RUN = /\s(?:--collect-only|--co|--help|-h|--version)(?:\s|$)/;
-// Failure text of a run that never reached the runner (bad cd, missing or non-executable binary).
-const NOT_RUN =
-	/No such file or directory|[Pp]ermission denied|command not found/;
-
 // Setup that may precede the test/build in an && chain without producing the exit status of interest.
 const SETUP = /^(?:cd|pushd|export)(?:\s|$)/;
 
@@ -100,34 +85,6 @@ const SUGGESTION_ID =
 /** Finds the suggestion id in spatz output: text line "suggestion_id: <uuid>" or JSON "suggestion_id": "<uuid>". */
 export function extractSuggestionId(stdout: string): string | null {
 	return SUGGESTION_ID.exec(stdout)?.[1] ?? null;
-}
-
-/** Bash test/build -> signal: PostToolUse value 1, PostToolUseFailure value 0; weight from SIGNAL_WEIGHTS. null for other commands/tools. */
-export function signalFromBashEvent(
-	input: PostToolUseInput | PostToolUseFailureInput,
-	suggestionId: string,
-	at: number,
-): SignalRecord | null {
-	if (input.tool_name !== "Bash") return null;
-	const command = (input.tool_input as BashToolInput | null)?.command;
-	if (typeof command !== "string") return null;
-	const kind = detectCommandKind(command);
-	if (kind !== "test" && kind !== "build") return null;
-	const failed = input.hook_event_name === "PostToolUseFailure";
-	if (
-		failed &&
-		((input as PostToolUseFailureInput).is_interrupt ||
-			NOT_RUN.test((input as PostToolUseFailureInput).error))
-	)
-		return null;
-	return {
-		suggestion_id: suggestionId,
-		kind,
-		value: failed ? 0 : 1,
-		weight: SIGNAL_WEIGHTS[kind],
-		source: input.hook_event_name,
-		observed_at: at,
-	};
 }
 
 /** effort.level -> Effort, or null when missing or not one of EFFORTS. */

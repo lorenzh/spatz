@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type {
-	HookInput,
-	PostToolUseFailureInput,
-	PostToolUseInput,
-} from "../contracts/hooks.ts";
+import type { HookInput, PostToolUseInput } from "../contracts/hooks.ts";
 import fixtures from "./fixtures/hook-inputs.json";
 import {
 	detectCommandKind,
@@ -13,7 +9,6 @@ import {
 	type PrInfo,
 	parseHookInput,
 	resultFromPr,
-	signalFromBashEvent,
 	suggestionFromPr,
 } from "./index.ts";
 import { parseCodexRollout } from "./transcript.ts";
@@ -301,76 +296,6 @@ const ok = (command: string, tool_name = "Bash"): PostToolUseInput => ({
 	tool_input: { command },
 	tool_response: { stdout: "", stderr: "", interrupted: false },
 });
-const fail = (command: string): PostToolUseFailureInput => ({
-	...base,
-	hook_event_name: "PostToolUseFailure",
-	tool_name: "Bash",
-	tool_input: { command },
-	error: "Exit code 1",
-});
-
-describe("signalFromBashEvent", () => {
-	test("failures that never reached the runner give no signal", () => {
-		const f = (error: string, is_interrupt = false) => ({
-			...fail("cd /missing && bun test"),
-			error,
-			is_interrupt,
-		});
-		for (const e of [
-			f("Exit code 1\ncd: /missing: No such file or directory"),
-			f("Exit code 126\nbash: permission denied"),
-			f("Exit code 127\nbun: command not found"),
-			f("Exit code 130", true),
-		])
-			expect(signalFromBashEvent(e, "sid", 1)).toBeNull();
-		expect(
-			signalFromBashEvent(fail("cd pkg && bun test"), "sid", 1)?.value,
-		).toBe(0);
-	});
-	test("PostToolUse bun test -> test 1", () => {
-		expect(signalFromBashEvent(ok("bun test"), "sid", 123)).toMatchObject({
-			suggestion_id: "sid",
-			kind: "test",
-			value: 1,
-			weight: 1.0,
-			source: "PostToolUse",
-			observed_at: 123,
-		});
-	});
-	test("PostToolUseFailure tsc -> build 0", () => {
-		expect(signalFromBashEvent(fail("tsc"), "sid", 5)).toMatchObject({
-			suggestion_id: "sid",
-			kind: "build",
-			value: 0,
-			weight: 0.8,
-			source: "PostToolUseFailure",
-			observed_at: 5,
-		});
-	});
-	test("non-Bash tool, non-test command, spatz call -> null", () => {
-		expect(signalFromBashEvent(ok("bun test", "Agent"), "sid", 1)).toBeNull();
-		expect(signalFromBashEvent(ok("echo ok"), "sid", 1)).toBeNull();
-		expect(
-			signalFromBashEvent(ok('spatz "x" --models m'), "sid", 1),
-		).toBeNull();
-		expect(
-			signalFromBashEvent({ ...ok(""), tool_input: null }, "sid", 1),
-		).toBeNull();
-	});
-	test("fixture events: echo ok and false give no signal", () => {
-		for (const [i, f] of inputs.entries()) {
-			if (f.input.tool_name !== "Bash") continue;
-			expect(
-				signalFromBashEvent(
-					parsed(i) as PostToolUseInput | PostToolUseFailureInput,
-					"sid",
-					1,
-				),
-			).toBeNull();
-		}
-	});
-});
-
 describe("effortFromHook", () => {
 	test("effort.level low -> low", () => {
 		expect(effortFromHook({ ...ok("x"), effort: { level: "low" } })).toBe(
