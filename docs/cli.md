@@ -247,13 +247,14 @@ The mod uses these commands to register execution identity. The routing skill do
 
 ```sh
 spatz attempt start <suggestion_id> --key <turnId:index> --model <m> \
-  [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--owns-usage] [--json]
+  [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--model-version <v>] [--owns-usage] [--json]
 spatz attempt bind <attempt_id> --call <tool_use_id> --session <id> [--agent-id <id>]
 spatz attempt finalize --session <id> [--agent-id <id>]
 ```
 
 `start` registers a segment before execution. A repeated start key returns the same attempt.
 Unknown effort stays null. `--owns-usage` marks mod usage ownership for this context.
+`--model-version` stores the model revision the caller knows. Without it, start takes the date of a dated `--model`, or the revision the harness catalog lists for an undated alias. Otherwise the version stays null.
 `bind` connects a hook/mod tool-call ID to the active attempt.
 `finalize` closes observed execution without inventing a successful verdict.
 The main session omits `--agent-id`. Each subagent supplies its own ID.

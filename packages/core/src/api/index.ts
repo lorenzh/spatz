@@ -11,6 +11,7 @@ import {
 	buildCatalog,
 	modelVersion,
 	parseModelsArg,
+	resolveModelVersion,
 	toCanonicalId,
 } from "../catalog/index.ts";
 import { loadOpenRouterModels } from "../catalog/openrouter.ts";
@@ -173,6 +174,14 @@ export function createApi(
 			ttlMs: cfg.tuning.openRouterCacheMs,
 		});
 	}
+	/** Model id -> revision: a dated id's own, else the one the harness catalog reports for an undated alias. */
+	async function versionResolver() {
+		const catalog = await cachedHarnessCatalog();
+		const ids = Object.values(catalog.harnesses).flatMap((h) =>
+			h.models.map((m) => m.id),
+		);
+		return (id: string) => resolveModelVersion(id, ids);
+	}
 	async function availableEfforts() {
 		const cfg = await getConfig();
 		const catalog = await cachedHarnessCatalog();
@@ -312,6 +321,7 @@ export function createApi(
 		const context = contextOf(event);
 		const sub = !!event.agent_id;
 		const ended = event.type === "session_end" || event.type === "subagent_end";
+		const versionOf = await versionResolver();
 		const messages =
 			(await readTranscript(event.transcript_path ?? "", (text) =>
 				sub
@@ -331,7 +341,7 @@ export function createApi(
 					occurred_at: Number.isFinite(message.at) ? message.at : null,
 					received_at: now,
 					model: toCanonicalId(message.model, cfg.aliases),
-					model_version: modelVersion(message.model),
+					model_version: versionOf(message.model),
 					effort,
 					revision: 0,
 				};
@@ -392,7 +402,7 @@ export function createApi(
 						message && Number.isFinite(message.at) ? message.at : null,
 					received_at: now,
 					model: message ? toCanonicalId(message.model, cfg.aliases) : null,
-					model_version: message ? modelVersion(message.model) : null,
+					model_version: message ? versionOf(message.model) : null,
 					effort,
 					kind: signal.kind,
 					value: signal.value,
@@ -430,6 +440,7 @@ export function createApi(
 		suggestionId: string | null,
 		turnId: string,
 		rollout: CodexRollout,
+		versionOf: (id: string) => string | null,
 		sessionId?: string,
 	) {
 		const now = deps.clock.now();
@@ -448,7 +459,7 @@ export function createApi(
 					suggestion_id: suggestionId,
 					key: `dispatch:${context.session_key}:${segment.key}`,
 					model: toCanonicalId(segment.model, cfg.aliases),
-					model_version: modelVersion(segment.model),
+					model_version: versionOf(segment.model),
 					effort: EFFORTS.find((e) => e === segment.effort) ?? null,
 					at:
 						segment.at ?? store.getSuggestion(suggestionId)?.created_at ?? now,
@@ -488,7 +499,7 @@ export function createApi(
 				occurred_at: call.at,
 				received_at: now,
 				model: toCanonicalId(call.model, cfg.aliases),
-				model_version: modelVersion(call.model),
+				model_version: versionOf(call.model),
 				effort: EFFORTS.find((e) => e === call.effort) ?? null,
 				kind,
 				value: call.exit_code === 0 ? 1 : 0,
@@ -508,7 +519,7 @@ export function createApi(
 				model: rollout.mixed_pair
 					? null
 					: toCanonicalId(rollout.model, cfg.aliases),
-				model_version: rollout.mixed_pair ? null : modelVersion(rollout.model),
+				model_version: rollout.mixed_pair ? null : versionOf(rollout.model),
 				effort: rollout.mixed_pair
 					? null
 					: (EFFORTS.find((e) => e === rollout.effort) ?? null),
@@ -530,6 +541,7 @@ export function createApi(
 
 	async function onCodexEvent(event: HarnessEvent, cfg: Config) {
 		const suggestionId = deps.env.SPATZ_SUGGESTION_ID;
+		const versionOf = await versionResolver();
 		return withStore(async (store) => {
 			if (suggestionId !== undefined && !store.getSuggestion(suggestionId))
 				throw new Error(`unknown suggestion_id ${suggestionId}`);
@@ -565,6 +577,7 @@ export function createApi(
 				suggestionId ?? null,
 				turnId,
 				rollout,
+				versionOf,
 				event.session_id,
 			);
 			close();
@@ -580,8 +593,12 @@ export function createApi(
 				!(EFFORTS as readonly string[]).includes(input.effort)
 			)
 				throw new Error("invalid effort");
+			if (input.modelVersion !== undefined && !input.modelVersion.trim())
+				throw new Error("invalid model version");
 			if (input.effort === "none") await validateNone([input.model]);
 			const cfg = await getConfig();
+			const model_version =
+				input.modelVersion ?? (await versionResolver())(input.model);
 			return withStore((store) =>
 				store.startAttempt({
 					harness: "claude-code",
@@ -590,6 +607,7 @@ export function createApi(
 					suggestion_id: input.suggestionId,
 					key: input.key,
 					model: toCanonicalId(input.model, cfg.aliases),
+					model_version,
 					effort: (input.effort as Effort) ?? null,
 					at: deps.clock.now(),
 					turn_id: input.turn,
@@ -625,6 +643,7 @@ export function createApi(
 		},
 		async importRollout({ file, suggestionId }) {
 			const cfg = await getConfig();
+			const versionOf = await versionResolver();
 			return withStore(async (store) => {
 				if (!store.getSuggestion(suggestionId))
 					throw new Error(`unknown suggestion_id ${suggestionId}`);
@@ -632,7 +651,7 @@ export function createApi(
 				if (!turns.size)
 					throw new Error("Codex rollout has no matching turn context");
 				for (const [turnId, rollout] of turns)
-					recordCodexTurn(store, cfg, suggestionId, turnId, rollout);
+					recordCodexTurn(store, cfg, suggestionId, turnId, rollout, versionOf);
 				return { suggestion_id: suggestionId, turns: turns.size };
 			});
 		},

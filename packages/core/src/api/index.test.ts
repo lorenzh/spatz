@@ -2765,6 +2765,40 @@ test.each(["low", "high"] as const)(
 	},
 );
 
+test("startAttempt stores the revision of an undated alias, from the caller or the harness catalog", async () => {
+	const dbPath = join(dir, "alias-version.db");
+	const s = setup({ dbPath, openStore });
+	const { suggestion_id } = await s.api.suggest({
+		...suggestInput(),
+		session: SESSION,
+		turn: "mod-turn",
+		source: "claude-code-mod",
+	});
+	const start = (key: string, model: string, modelVersion?: string) =>
+		s.api.startAttempt({
+			suggestionId: suggestion_id,
+			key,
+			model,
+			session: SESSION,
+			turn: "mod-turn",
+			...(modelVersion && { modelVersion }),
+		});
+	// The bundled Claude Code catalog lists only claude-haiku-4-5-20251001 for this alias.
+	expect(await start("mod-turn:0", "claude-haiku-4-5")).toMatchObject({
+		model: "anthropic/claude-haiku-4.5",
+		model_version: "20251001",
+	});
+	expect(
+		await start("mod-turn:1", "claude-sonnet-5-5", "20261001"),
+	).toMatchObject({ model_version: "20261001" });
+	expect(await start("mod-turn:2", "claude-opus-5-5")).toMatchObject({
+		model_version: null,
+	});
+	await expect(start("mod-turn:3", "claude-opus-5-5", " ")).rejects.toThrow(
+		"invalid model version",
+	);
+});
+
 test("mod low 100/high 200 steps own usage and bind hook tools despite different prompt and turn IDs", async () => {
 	const dbPath = join(dir, "mod-steps.db");
 	const s = setup({ dbPath, openStore });
