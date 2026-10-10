@@ -21,7 +21,9 @@ For each candidate in a cell, spatz computes an estimate of the success rate:
 estimate = (1 + successes) / (2 + n)
 ```
 
-`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `successes` counts the outcomes with quality `≥ 0.8` (`successQuality`). A partial result is no success. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each first-attempt outcome moves the estimate towards the observed success rate. Only live first attempts count in `n`.
+`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `successes` counts the outcomes with quality `≥ 0.8` (`successQuality`). A partial result is no success. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each outcome moves the estimate towards the observed success rate.
+
+Learning gates use a separate count of live first attempts. Frozen legacy outcomes can inform the estimate but cannot qualify a pair or meet the critical minimum.
 
 Only some outcomes count:
 
@@ -56,7 +58,7 @@ For each (effort, type, difficulty) cell the bench counts are weighted by verifi
 estimate = (1 + successes + a) / (2 + n + w)
 ```
 
-The prior changes the estimate only. `n` stays the count of live first attempts. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use `n` and live `successes` only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies, and the reason names `version_match`.
+The prior changes the estimate only. `n` is the count of scored first attempts plus frozen legacy and eval outcomes. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use live first-attempt counts and successes only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies, and the reason names `version_match`.
 
 The prior applies when the snapshot `model_version` equals the live model version (`version_match: exact`) or either one is null (`unknown`). A known different version seeds nothing.
 
@@ -64,7 +66,7 @@ Rows imported with [`spatz import-eval`](cli.md#spatz-import-eval) join this pri
 
 ### Enough data and pooling
 
-A cell has enough data when at least one candidate of the catalog has `n ≥ 5` in it.
+A cell has enough data when at least one candidate of the catalog has at least five live first attempts in it.
 
 If the cell has too little data, spatz pools the outcomes of the same task type over the same and harder difficulty levels:
 
@@ -82,13 +84,13 @@ With `SPATZ_FAMILY_POOLING=1`, a level that still has too little data pools next
 
 spatz applies the first rule that matches. The values are the start values in `DEFAULT_TUNING` (`packages/core/src/contracts/types.ts`).
 
-1. **Critical task.** If the criticality is not `none`, spatz uses the critical rule. A cheaper candidate wins only with `n ≥ 10` in this cell and a 5 % lower credible bound `≥ 0.9`. The bound is the 5 % quantile of Beta(1 + successes, 1 + n − successes). With only passes, a candidate needs 28 outcomes. spatz takes the cheapest such candidate (strategy `learned`). Otherwise it recommends the most expensive candidate (strategy `strongest`). There is no pooling, no control and no exploration for critical tasks.
+1. **Critical task.** If the criticality is not `none`, spatz uses the critical rule. A cheaper candidate wins only with at least 10 live first attempts in this cell and a 5 % lower credible bound `≥ 0.9`. The bound is the 5 % quantile of Beta(1 + live successes, 1 + live first attempts − live successes). With only passes, a candidate needs 28 outcomes. spatz takes the cheapest such candidate (strategy `learned`). Otherwise it recommends the most expensive candidate (strategy `strongest`). There is no pooling, no control and no exploration for critical tasks.
 2. **Random draw.** spatz draws one number `u` in [0, 1) per suggestion.
    - If `u < 0.1`, the suggestion is in the control group. spatz recommends the most expensive candidate (strategy `strongest`, `control: true`).
    - If `0.1 ≤ u < 0.2`, spatz explores after steps 3 to 7. See [Exploration](#exploration).
    - If `u ≥ 0.2`, spatz continues with step 3.
-3. **Learned choice in the cell.** If the cell has enough data, spatz takes the cheapest candidate with `n ≥ 5` and estimate `≥ 0.8` (strategy `learned`).
-4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate among the candidates with `n ≥ 5`. Candidates with fewer outcomes cannot win this step. On a tie, the more expensive candidate wins (strategy `learned-fallback`). This strategy marks a pick that met no limit.
+3. **Learned choice in the cell.** If the cell has enough data, spatz takes the cheapest candidate with at least five live first attempts and estimate `≥ 0.8` (strategy `learned`).
+4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate among the candidates with at least five live first attempts. Candidates with fewer live first attempts cannot win this step. On a tie, the more expensive candidate wins (strategy `learned-fallback`). This strategy marks a pick that met no limit.
 5. **Pooled level.** If the cell has too little data, spatz repeats steps 3 and 4 on the pooled levels.
 6. **Jev choice.** If the pooled levels also have too little data, spatz takes the best candidate of Jev (strategy `jev-choice`).
 7. **Rules.** If Jev was not involved, or its answer is not in the catalog, spatz recommends the most expensive candidate (strategy `rules`).
@@ -234,7 +236,7 @@ The cell (`code.bugfix`, `easy`) has this history:
 
 1. The criticality is `none`. The critical rule does not apply.
 2. `u = 0.5` is not below 0.2. No control, no exploration.
-3. The cell has enough data: `sonnet:medium` and `opus:high` have `n ≥ 5`. Both have an estimate `≥ 0.8`. `sonnet:medium` is cheaper, so it wins.
+3. The cell has enough data: `sonnet:medium` and `opus:high` each have at least five live first attempts. Both have an estimate `≥ 0.8`. `sonnet:medium` is cheaper, so it wins.
 
 The ranking is `sonnet:medium`, `sonnet:high`, `opus:low`.
 
