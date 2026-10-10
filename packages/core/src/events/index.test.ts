@@ -1,5 +1,10 @@
-import { expect, test } from "bun:test";
-import type { CodexHookInput, HookInput } from "../contracts/hooks.ts";
+import { describe, expect, test } from "bun:test";
+import type {
+	CodexHookInput,
+	HookInput,
+	PostToolUseFailureInput,
+	PostToolUseInput,
+} from "../contracts/hooks.ts";
 import codex from "../signals/fixtures/codex-hook-inputs.json";
 import claude from "../signals/fixtures/hook-inputs.json";
 import { openStore } from "../store/index.ts";
@@ -8,7 +13,10 @@ import {
 	closeOnEnd,
 	fromClaudeHook,
 	fromCodexHook,
+	type HarnessEvent,
 	type HarnessEventType,
+	signalFromToolRun,
+	suggestionFromToolRun,
 } from "./index.ts";
 
 const claudeInputs = (claude as { input: HookInput }[]).map((c) => c.input);
@@ -32,6 +40,254 @@ test("Claude adapter maps every recorded payload and only declared event types",
 		"session_end",
 	] as const)
 		expect(types.has(t)).toBe(true);
+});
+
+const ID = "0b9f4c7e-5d2a-4e8b-9c3f-1a2b3c4d5e6f";
+const hook = { session_id: "s", transcript_path: "/t.jsonl", cwd: "/w" };
+const ok = (command: string, stdout = ""): PostToolUseInput => ({
+	...hook,
+	hook_event_name: "PostToolUse",
+	tool_name: "Bash",
+	tool_use_id: "t1",
+	tool_input: { command },
+	tool_response: { stdout, stderr: "", interrupted: false },
+});
+const fail = (
+	command: string,
+	error = "Exit code 1",
+	is_interrupt = false,
+): PostToolUseFailureInput => ({
+	...hook,
+	hook_event_name: "PostToolUseFailure",
+	tool_name: "Bash",
+	tool_use_id: "t1",
+	tool_input: { command },
+	error,
+	is_interrupt,
+});
+const claudeEvent = (input: HookInput) => {
+	const event = fromClaudeHook(input);
+	if (!event) throw new Error("no event");
+	return event;
+};
+
+describe("Claude adapter: one test per event kind", () => {
+	test("session_start, turn_start, subagent_start carry the session identity", () => {
+		expect(
+			claudeEvent({ ...hook, hook_event_name: "SessionStart", source: "x" }),
+		).toEqual({
+			harness: "claude-code",
+			type: "session_start",
+			session_id: "s",
+			source: "SessionStart",
+			transcript_path: "/t.jsonl",
+			cwd: "/w",
+		});
+		expect(
+			claudeEvent({
+				...hook,
+				hook_event_name: "UserPromptSubmit",
+				prompt: "work",
+				prompt_id: "p1",
+			}),
+		).toMatchObject({ type: "turn_start", turn_id: "p1" });
+		expect(
+			claudeEvent({
+				...hook,
+				hook_event_name: "SubagentStart",
+				agent_id: "a1",
+				agent_type: "x",
+			}),
+		).toMatchObject({ type: "subagent_start", agent_id: "a1" });
+	});
+	test("tool_run carries call id, stdout and a valid effort only", () => {
+		expect(
+			claudeEvent({
+				...ok("bun test", "out"),
+				prompt_id: "p1",
+				effort: { level: "high" },
+			}),
+		).toMatchObject({
+			type: "tool_run",
+			call_id: "t1",
+			command: "bun test",
+			exit_code: 0,
+			output: "out",
+			turn_id: "p1",
+			effort: "high",
+		});
+		expect(
+			claudeEvent({ ...ok("x"), effort: { level: "turbo" } }).effort,
+		).toBeUndefined();
+		expect(fromClaudeHook({ ...ok("x"), tool_name: "Read" })).toBeNull();
+		expect(fromClaudeHook({ ...ok("x"), tool_input: null })).toBeNull();
+	});
+	test("agent_dispatch carries the child agent and the requested and answered models", () => {
+		const agent = (tool_response: unknown): PostToolUseInput => ({
+			...hook,
+			hook_event_name: "PostToolUse",
+			tool_name: "Agent",
+			tool_use_id: "t2",
+			tool_input: { model: "sonnet", subagent_type: "gp-x" },
+			tool_response,
+		});
+		expect(
+			claudeEvent(agent({ agentId: "a1", resolvedModel: "claude-sonnet-5-5" })),
+		).toMatchObject({
+			type: "agent_dispatch",
+			call_id: "t2",
+			child_agent_id: "a1",
+			requested_model: "sonnet",
+			requested_agent_type: "gp-x",
+			answered_model: "claude-sonnet-5-5",
+			cwd: "/w",
+		});
+		expect(claudeEvent(agent(null))).not.toHaveProperty("child_agent_id");
+	});
+	test("subagent_end reads the subagent transcript; session_end the main one", () => {
+		expect(
+			claudeEvent({
+				...hook,
+				hook_event_name: "SubagentStop",
+				agent_id: "a1",
+				agent_type: "x",
+				stop_hook_active: false,
+				agent_transcript_path: "/sub.jsonl",
+			}),
+		).toMatchObject({
+			type: "subagent_end",
+			agent_id: "a1",
+			transcript_path: "/sub.jsonl",
+			source: "SubagentStop",
+		});
+		expect(
+			claudeEvent({
+				...hook,
+				hook_event_name: "Stop",
+				stop_hook_active: false,
+			}),
+		).toMatchObject({ type: "session_end", transcript_path: "/t.jsonl" });
+	});
+	test("handbacks are no events", () => {
+		expect(fromClaudeHook({ ...ok("x"), tool_name: "SubagentHandback" })).toBe(
+			null,
+		);
+		expect(
+			fromClaudeHook({
+				...hook,
+				hook_event_name: "UserPromptSubmit",
+				prompt: "<agent-message from=w>done",
+			}),
+		).toBeNull();
+	});
+});
+
+describe("Codex adapter: one test per event kind", () => {
+	const codex = (input: Partial<CodexHookInput>) =>
+		fromCodexHook({
+			session_id: "c",
+			transcript_path: "/r.jsonl",
+			hook_event_name: "Stop",
+			turn_id: "turn1",
+			...input,
+		});
+	test("session_start, turn_start and session_end carry the turn and rollout", () => {
+		expect(codex({ hook_event_name: "SessionStart" })).toMatchObject({
+			harness: "codex",
+			type: "session_start",
+		});
+		expect(codex({ hook_event_name: "UserPromptSubmit" })).toMatchObject({
+			type: "turn_start",
+			turn_id: "turn1",
+		});
+		expect(codex({})).toMatchObject({
+			type: "session_end",
+			turn_id: "turn1",
+			transcript_path: "/r.jsonl",
+			source: "codex:Stop",
+		});
+	});
+	test("tool_run has the output text and no exit code", () => {
+		expect(
+			codex({
+				hook_event_name: "PostToolUse",
+				tool_name: "Bash",
+				tool_use_id: "call1",
+				tool_input: { command: "spatz x" },
+				tool_response: `suggestion_id: ${ID}`,
+			}),
+		).toMatchObject({
+			type: "tool_run",
+			call_id: "call1",
+			exit_code: null,
+			output: `suggestion_id: ${ID}`,
+		});
+		expect(
+			codex({ hook_event_name: "PostToolUse", tool_name: "apply_patch" }),
+		).toBeNull();
+	});
+});
+
+describe("signalFromToolRun", () => {
+	const signal = (input: HookInput) => signalFromToolRun(claudeEvent(input));
+	test("failures that never reached the runner have no exit code and give no signal", () => {
+		for (const input of [
+			fail(
+				"cd /missing && bun test",
+				"Exit code 1\ncd: /missing: No such file or directory",
+			),
+			fail("bun test", "Exit code 126\nbash: permission denied"),
+			fail("bun test", "Exit code 127\nbun: command not found"),
+			fail("bun test", "Exit code 130", true),
+		]) {
+			expect(claudeEvent(input)).toMatchObject({ exit_code: null });
+			expect(signal(input)).toBeNull();
+		}
+		expect(signal(fail("cd pkg && bun test"))?.value).toBe(0);
+	});
+	test("test pass -> test 1; build failure -> build 0", () => {
+		expect(signal(ok("bun test"))).toEqual({
+			kind: "test",
+			value: 1,
+			weight: 1,
+		});
+		expect(signal(fail("tsc"))).toEqual({
+			kind: "build",
+			value: 0,
+			weight: 0.8,
+		});
+	});
+	test("non-test command, spatz call, unknown exit code -> null", () => {
+		expect(signal(ok("echo ok"))).toBeNull();
+		expect(signal(ok('spatz "x" --models m'))).toBeNull();
+		const codexRun = fromCodexHook({
+			session_id: "c",
+			transcript_path: "",
+			hook_event_name: "PostToolUse",
+			tool_name: "Bash",
+			tool_input: { command: "bun test" },
+		}) as HarnessEvent;
+		expect(signalFromToolRun(codexRun)).toBeNull();
+	});
+	test("recorded fixture commands give no signal", () => {
+		for (const input of claudeInputs) {
+			const event = fromClaudeHook(input);
+			if (event?.type === "tool_run")
+				expect(signalFromToolRun(event)).toBeNull();
+		}
+	});
+});
+
+test("suggestionFromToolRun reads the id of a spatz run unless it failed", () => {
+	expect(
+		suggestionFromToolRun(
+			claudeEvent(ok('spatz "fix it"', `suggestion_id: ${ID}`)),
+		),
+	).toBe(ID);
+	expect(
+		suggestionFromToolRun(claudeEvent(ok("echo", `suggestion_id: ${ID}`))),
+	).toBe(null);
+	expect(suggestionFromToolRun(claudeEvent(fail('spatz "fix it"')))).toBeNull();
 });
 
 test("Claude failure events carry the exit code; success carries 0", () => {
