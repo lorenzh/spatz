@@ -123,7 +123,7 @@ function formatStats(r: StatsReport): string {
 			`snapshot: ${r.snapshot.source} ${r.snapshot.commit.slice(0, 7)} of ${r.snapshot.generated_at.slice(0, 10)} (${r.snapshot.age_days} d old)  cells=${r.snapshot.cells}  prior_weight=${r.snapshot.prior_weight}`,
 		);
 	lines.push(
-		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
+		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}  fallback_control_success: ${opt(r.fallback_control_success)}`,
 	);
 	for (const c of r.coverage_by_source) {
 		const share = c.n ? c.covered / c.n : 1;

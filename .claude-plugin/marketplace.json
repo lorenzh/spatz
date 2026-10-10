@@ -6,13 +6,13 @@
 		{
 			"name": "spatz-mod",
 			"source": "./packages/claude-mod",
-			"version": "0.1.6",
+			"version": "0.2.0",
 			"description": "Recommend and apply model and effort in Claude Code."
 		},
 		{
 			"name": "spatz",
 			"source": "./packages/claude-hooks",
-			"version": "0.1.6",
+			"version": "0.2.0",
 			"description": "Record test and build outcomes and token usage with the spatz CLI."
 		}
 	]

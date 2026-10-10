@@ -126,6 +126,7 @@ const statsReport: StatsReport = {
 	learned_success: 0.7,
 	fallback_success: null,
 	control_success: null,
+	fallback_control_success: null,
 	learned_vs_control: lvc,
 	bench: [],
 	dispatches: 0,
@@ -814,7 +815,7 @@ describe("stats", () => {
 				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-  incomplete=2 (excluded from cost; token totals may be lower bounds)",
 				"  openai/gpt-6-sol:medium  n=3  success=67%  cost_per_success=-  tokens_per_success=-  cost_per_attempt=-",
 				"  anthropic/claude-opus-5.5:-  n=1  success=100%  cost_per_success=-  tokens_per_success=-  cost_per_attempt=-",
-				"itt: learned=-  control=-  diff=-  outcomes=0/0\nqualified: learned=-  control=-  diff=-  outcomes=0/0\nfallback: learned=-  control=-  diff=-  outcomes=0/0\ncoverage: 80%  learned_success: 70%  fallback_success: -  control_success: -",
+				"itt: learned=-  control=-  diff=-  outcomes=0/0\nqualified: learned=-  control=-  diff=-  outcomes=0/0\nfallback: learned=-  control=-  diff=-  outcomes=0/0\ncoverage: 80%  learned_success: 70%  fallback_success: -  control_success: -  fallback_control_success: -",
 				"dispatches: 0  routed_by_mod: 0  swapped: 0",
 				"fallbacks: -",
 				"failures: parse=0  hook=0  launcher=0",
@@ -831,6 +832,7 @@ describe("stats", () => {
 				learned_success: null,
 				fallback_success: null,
 				control_success: 0.5,
+				fallback_control_success: null,
 				coverage_by_source: [],
 				learned_vs_control: lvc,
 				bench: [],
@@ -843,7 +845,7 @@ describe("stats", () => {
 		});
 		await main(["stats"], io, api);
 		expect(stdout()).toBe(
-			"itt: learned=-  control=-  diff=-  outcomes=0/0\nqualified: learned=-  control=-  diff=-  outcomes=0/0\nfallback: learned=-  control=-  diff=-  outcomes=0/0\ncoverage: 0%  learned_success: -  fallback_success: -  control_success: 50%\ndispatches: 0  routed_by_mod: 0  swapped: 0\nfallbacks: -\nfailures: parse=0  hook=0  launcher=0",
+			"itt: learned=-  control=-  diff=-  outcomes=0/0\nqualified: learned=-  control=-  diff=-  outcomes=0/0\nfallback: learned=-  control=-  diff=-  outcomes=0/0\ncoverage: 0%  learned_success: -  fallback_success: -  control_success: 50%  fallback_control_success: -\ndispatches: 0  routed_by_mod: 0  swapped: 0\nfallbacks: -\nfailures: parse=0  hook=0  launcher=0",
 		);
 	});
 
