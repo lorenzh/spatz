@@ -174,6 +174,10 @@ export interface Store extends AttemptStore {
 	pending(olderThanMs: number, now: number): PendingSuggestion[];
 	/** First attempt pair, else the top ranked pair; null without either. */
 	pairOf(suggestionId: string): { model: string; effort: Effort } | null;
+	/** Attempt the first PR signal credited; later signals stay bound to it. */
+	signalAttempt(
+		suggestionId: string,
+	): { attempt_id: string; model: string | null; effort: Effort | null } | null;
 	/** Close the database handle. */
 	dispose(): void;
 }

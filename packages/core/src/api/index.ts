@@ -1150,8 +1150,8 @@ export function createApi(
 				const pair = store.pairOf(id);
 				if (!store.getSuggestion(id) || !pair)
 					throw new Error(`unknown suggestion_id ${id}`);
-				// The latest attempt produced the PR; a repeated signal revises its report.
-				const latest = store.outcome(id);
+				// The first signal credits the latest attempt; later signals stay bound to it.
+				const latest = store.signalAttempt(id) ?? store.outcome(id);
 				store.reportAttempt({
 					suggestion_id: id,
 					model: latest?.model ?? pair.model,
