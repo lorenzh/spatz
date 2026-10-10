@@ -1078,12 +1078,16 @@ export function attemptStore(
 						throw new Error("report attempt ownership/pair conflict");
 					const report = a
 						? db
-								.query<{ value: number; revision: number }, [string]>(
-									"SELECT value,revision FROM latest_attempt_events WHERE attempt_id=? AND kind='report'",
+								.query<
+									{ value: number; revision: number; source: string },
+									[string]
+								>(
+									"SELECT value,revision,source FROM latest_attempt_events WHERE attempt_id=? AND kind='report'",
 								)
 								.get(a.id)
 						: null;
-					if (input.correct && !report)
+					const correct = input.correct || (input.revise && !!report);
+					if (correct && !report)
 						throw new Error("--correct requires a prior report");
 					if (
 						input.confirm &&
@@ -1093,14 +1097,16 @@ export function attemptStore(
 						throw new Error(
 							"--confirm cannot change a prior verdict; use --correct",
 						);
+					const source = input.revise ? "signal" : "report";
+					// An identical verdict is a no-op; a signal still marks its attempt once.
 					if (
-						!input.correct &&
 						a &&
 						report &&
-						report.value === REPORT_VALUES[input.result]
+						report.value === REPORT_VALUES[input.result] &&
+						(input.revise ? report.source === source : !correct)
 					)
 						return outcome(a);
-					if (!a || (report && !input.correct))
+					if (!a || (report && !correct))
 						a = add(
 							input.suggestion_id,
 							`report:${crypto.randomUUID()}`,
@@ -1127,11 +1133,11 @@ export function attemptStore(
 						{
 							...c,
 							event_id: `report:${a.id}`,
-							revision: input.correct && report ? report.revision + 1 : 0,
+							revision: correct && report ? report.revision + 1 : 0,
 							attempt_id: a.id,
 							suggestion_id: input.suggestion_id,
 							kind: "report",
-							source: "report",
+							source,
 							rounds: input.rounds,
 							note: input.note,
 							turn_id: input.turn_id,

@@ -76,6 +76,8 @@ export interface AttemptReport {
 	model_version?: string | null;
 	attempt_id?: string;
 	correct?: boolean;
+	/** PR signal: correct a prior report, else record the first one; an identical repeat is a no-op. */
+	revise?: boolean;
 	confirm?: boolean;
 	rounds?: number;
 	note?: string;

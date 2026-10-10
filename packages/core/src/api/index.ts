@@ -1150,13 +1150,17 @@ export function createApi(
 				const pair = store.pairOf(id);
 				if (!store.getSuggestion(id) || !pair)
 					throw new Error(`unknown suggestion_id ${id}`);
+				// The first signal credits the latest attempt; later signals stay bound to it.
+				const latest = store.signalAttempt(id) ?? store.outcome(id);
 				store.reportAttempt({
 					suggestion_id: id,
-					model: pair.model,
+					model: latest?.model ?? pair.model,
 					model_version: null,
-					effort: pair.effort,
+					effort: latest?.effort ?? pair.effort,
 					result,
 					at: deps.clock.now(),
+					attempt_id: latest?.attempt_id ?? undefined,
+					revise: true,
 				});
 				return { suggestion_id: id, result };
 			});
