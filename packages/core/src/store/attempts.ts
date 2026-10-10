@@ -1083,7 +1083,8 @@ export function attemptStore(
 								)
 								.get(a.id)
 						: null;
-					if (input.correct && !report)
+					const correct = input.correct || (input.revise && !!report);
+					if (correct && !report)
 						throw new Error("--correct requires a prior report");
 					if (
 						input.confirm &&
@@ -1094,13 +1095,13 @@ export function attemptStore(
 							"--confirm cannot change a prior verdict; use --correct",
 						);
 					if (
-						!input.correct &&
+						!correct &&
 						a &&
 						report &&
 						report.value === REPORT_VALUES[input.result]
 					)
 						return outcome(a);
-					if (!a || (report && !input.correct))
+					if (!a || (report && !correct))
 						a = add(
 							input.suggestion_id,
 							`report:${crypto.randomUUID()}`,
@@ -1127,7 +1128,7 @@ export function attemptStore(
 						{
 							...c,
 							event_id: `report:${a.id}`,
-							revision: input.correct && report ? report.revision + 1 : 0,
+							revision: correct && report ? report.revision + 1 : 0,
 							attempt_id: a.id,
 							suggestion_id: input.suggestion_id,
 							kind: "report",

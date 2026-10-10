@@ -76,6 +76,8 @@ export interface AttemptReport {
 	model_version?: string | null;
 	attempt_id?: string;
 	correct?: boolean;
+	/** Correct a prior report, else record the first one. */
+	revise?: boolean;
 	confirm?: boolean;
 	rounds?: number;
 	note?: string;
