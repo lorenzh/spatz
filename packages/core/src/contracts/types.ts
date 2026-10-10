@@ -437,7 +437,10 @@ export interface SuggestionRecord {
 export interface PairStats {
 	model: string;
 	effort: Effort | null;
+	/** Attempt outcomes of this pair. */
 	n: number;
+	/** Completed root chains rooted at this pair. */
+	n_chains: number;
 	/** Share of outcomes with quality >= 0.8. */
 	success_rate: number;
 	/** Chain spend (attempts only) of completed chains rooted at this pair with known cost / their successes. null without a success or cost. */

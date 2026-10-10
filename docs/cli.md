@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [import-eval, bench, eval row, run_id, dry-run, pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [import-eval, bench, eval row, run_id, dry-run, pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, n_chains, chains, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -614,6 +614,8 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | First-attempt success rate of learned root decisions in cells with both learned and control outcomes, weighted by their counts. |
 | `learned_vs_control` | object | `itt`, `qualified`, `fallback` (each `decisions`, `outcomes`, `coverage`, `rate`, `control_rate`, `diff`, `ci95`), `control` and `cells`. See [recommendation.md](recommendation.md). |
+| `by_type[].pairs[].n` | number | Attempt outcomes of the pair. |
+| `by_type[].pairs[].n_chains` | number | Completed root chains rooted at the pair. A retried chain counts once here and once per attempt in `n`. |
 | `by_type[].pairs[]` cost fields | numbers or null | `cost_usd_per_success`, `tokens_per_success`, `cost_usd_per_attempt`, `orchestration_cost_usd`, `cost_incomplete_share`. |
 | `fallback_success` | number or null | The same for `learned-fallback` root decisions (best estimate, no pair met the limits). |
 | `control_success` | number or null | Success rate of the control group in the cells and weights of `learned_success`. |
