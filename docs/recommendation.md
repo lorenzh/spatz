@@ -2,7 +2,7 @@
 title: How spatz picks a model and effort
 description: The decision rule of spatz: cells, the Beta estimate, thresholds, cost order, critical tasks, exploration, the control group and how quality is computed.
 tags: [spatz, recommendation, learning]
-keywords: [bench.use, import-eval, bench prior, snapshot, n_prior, n_bench, attempt, retry, chain, outcome, decision rule, strategy, learned, learned-fallback, credible bound, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
+keywords: [bench.use, bench.snapshot, bench.prior_weight, spatz-snapshot/1, spatz-measurements, release, import-eval, bench prior, snapshot, n_prior, n_bench, attempt, retry, chain, outcome, decision rule, strategy, learned, learned-fallback, credible bound, jev-choice, rules, strongest, estimate, beta, threshold, exploration, control group, cost order, quality, success, stats, scope, turn, agent, session]
 ---
 
 # How spatz picks a model and effort
@@ -48,19 +48,36 @@ The old outcomes stay in the database. `spatz stats --model-version <v>` shows t
 
 ### Bench prior
 
-spatz can use a bench snapshot as a weak prior. A snapshot is one file per model, `catalog/<provider>/<model>.json` in the spatz repository (schema `spatz-bench-snapshot/1`). spatz fetches it from `main` for the current candidates, caches it for 24 hours in `~/.spatz/catalog/<provider>/<model>.json` (3 s timeout), and needs no CLI release. A 404 means no prior. A stale cache is used when the refresh fails. `SPATZ_NO_NETWORK=1` reads the cache only. Without a snapshot nothing changes.
+spatz uses benchmark results as a capped prior. It needs no import and writes nothing into your database.
 
-For each (effort, type, difficulty) cell the bench counts are weighted by verifier kind: `tests`, `golden` and `human` count 1. `rubric` counts 1 when its judge is `validated` in the file, else 0.5. This gives `n_eff` and `s_eff` (`partials` are no successes). Pooled levels sum `n_eff` and `s_eff` like live rows. The prior weight is `w = min(2, n_eff)` and `a = w * s_eff / n_eff`:
+**Source.** Every merge to `main` in the public repository [lorenzh/spatz-measurements](https://github.com/lorenzh/spatz-measurements) publishes one aggregated snapshot as a GitHub Release (schema `spatz-snapshot/1`). spatz downloads `releases/latest/download/snapshot.json` and its `snapshot.json.sha256`:
+
+- spatz checks the SHA-256 and the schema. It rejects a file that fails either check.
+- It caches the file in `~/.spatz/bench-snapshot.json` and downloads again after 24 hours at the earliest (3 s timeout).
+- A failed download, checksum or schema check keeps the last good cache.
+- Without a good cache, spatz uses the copy bundled with the build. A release refreshes that copy.
+- `SPATZ_NO_NETWORK=1` reads the cache or the bundled copy and never downloads.
+- spatz uploads nothing.
+
+**Cells.** The snapshot counts `pass`, `partial` and `fail` per (model, model version, effort, task type, difficulty). It leaves out the bench version `prototype`. A cell gives `n_eff = n` and `s_eff = pass` (`partial` is no success). Pooled levels sum `n_eff` and `s_eff` like live rows.
+
+**Weight.** The prior is worth at most `k` pseudo-observations, `k = 6` by default ([`bench.prior_weight`](configuration.md#bench-evidence-bench-settings)). With `w = min(k, n_eff)` and `a = w * s_eff / n_eff`:
 
 ```
 estimate = (1 + successes + a) / (2 + n + w)
 ```
 
-The prior changes the estimate only. `n` stays the count of live first attempts. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use `n` and live `successes` only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies, and the reason names `version_match`.
+Live outcomes dominate quickly. A cell with a perfect bench record starts at 7/8. After 20 live failures the estimate is 7/28 = 0.25.
 
-The prior applies when the snapshot `model_version` equals the live model version (`version_match: exact`) or either one is null (`unknown`). A known different version seeds nothing.
+The prior changes the estimate only. `n` stays the count of live first attempts. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use `n` and live `successes` only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies. The reason names `version_match` and the source, for example `source: release snapshot 3ce2237 of 2026-10-10 (2 d old)`. `spatz stats` shows the snapshot in use (see [cli.md](cli.md#spatz-stats)).
 
-Rows imported with [`spatz import-eval`](cli.md#spatz-import-eval) join this prior only when [`bench.use`](configuration.md#bench-evidence-benchuse) is `true`. They are grouped into the same (model, effort, type, difficulty) cells with the same weights: `rubric` rows count 0.5, because no local judge is validated, and only `pass` is a success. Their `model_version` is compared per row like a snapshot's. Snapshot and imported rows add up in one cell, so their sum still has the weight cap `w = min(2, n_eff)`. Rows that the snapshot also counts are not removed, so they can count twice inside that cap. With `bench.use` off, imported rows only appear in `spatz stats`.
+**Version.** A cell applies when its `model_version` equals the live model version (`version_match: exact`) or either one is null (`unknown`). A known different version seeds nothing.
+
+**Off.** Set [`bench.snapshot`](configuration.md#bench-evidence-bench-settings) to `false` to turn the snapshot prior off. `bench.prior_weight: 0` turns off every bench prior.
+
+**Imported rows.** Rows imported with [`spatz import-eval`](cli.md#spatz-import-eval) join this prior only when [`bench.use`](configuration.md#bench-evidence-bench-settings) is `true`. They use the same cells. `rubric` rows count 0.5, because no local judge is validated, and only `pass` is a success. Their `model_version` is compared per row. Snapshot cells and imported rows add up in one cell under the same cap `k`. With `bench.use` off, imported rows only appear in `spatz stats`.
+
+**No double counting.** With `bench.use` on, spatz prefers the imported rows. Each imported file gets the run id of its measurement run: the first 12 hex digits of the SHA-256 of its sorted row `run_id`s, the id that names the run folder. A snapshot cell that includes such a run is left out, and the imported rows supply that evidence. A cell that mixes an imported run with other runs is left out as a whole, so import all runs (`spatz import-eval runs/`) to keep their evidence. Rows imported before schema v13 have no run id; import the same files again to add it.
 
 ### Enough data and pooling
 

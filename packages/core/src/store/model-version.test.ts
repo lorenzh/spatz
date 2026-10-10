@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { modelVersion } from "../catalog/index.ts";
+import { priorCells } from "../catalog/snapshot.ts";
 import type { SuggestionRecord } from "../contracts/types.ts";
 import { openStore } from "./index.ts";
 
@@ -109,6 +110,55 @@ test("a report under a new revision with the same verdict is not a replay", () =
 		expect(r(1100, null).attempt_id).toBe(first.attempt_id);
 		expect(r(1200, "20250101").attempt_id).toBe(first.attempt_id);
 		expect(r(2000, "20260101").attempt_id).not.toBe(first.attempt_id);
+	} finally {
+		store.dispose();
+	}
+});
+
+test("the snapshot prior follows the live version through the store (SPZ-161)", () => {
+	const store = openStore(":memory:");
+	const cell = (model_version: string | null) => ({
+		model: "m/a",
+		model_version,
+		effort: "low",
+		task_type: "code.bugfix",
+		difficulty: "medium",
+		n: 4,
+		pass: 4,
+		runs: ["aaaaaaaaaaaa"],
+	});
+	const snapshot = {
+		commit: "3ce2237f116cff82f3ea13ff0a9f3e5e0fa46ce9",
+		generated_at: "2026-10-10T00:00:00.000Z",
+		cells: [cell("20250101"), cell(null)],
+		source: "release" as const,
+		fetched_at: 0,
+	};
+	const matches = () =>
+		priorCells(snapshot, store.liveModelVersions(), new Set(), 0).map(
+			(p) => p.version_match,
+		);
+	const report = (id: string, at: number, version: string, isTest = false) => {
+		store.insertSuggestion({ ...suggestion(id, at), is_test: isTest });
+		store.reportAttempt({
+			suggestion_id: id,
+			model: "m/a",
+			effort: "low",
+			result: "pass",
+			at,
+			model_version: version,
+		});
+	};
+	try {
+		// No live version yet: both cells match as unknown.
+		expect(matches()).toEqual(["unknown", "unknown"]);
+		report("a", 1000, "20250101");
+		expect(matches()).toEqual(["exact", "unknown"]);
+		report("b", 2000, "20260101");
+		// Version A's cell drops out; the null cell still matches.
+		expect(matches()).toEqual(["unknown"]);
+		report("dry", 3000, "20250101", true);
+		expect(matches()).toEqual(["unknown"]);
 	} finally {
 		store.dispose();
 	}

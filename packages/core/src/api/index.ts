@@ -1,5 +1,6 @@
 // api: use cases suggest, usage, report, handleHook, stats. Orchestrates the modules; the CLI calls only this.
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -19,7 +20,11 @@ import {
 	labelModelsError,
 	resolveModels,
 } from "../catalog/presets.ts";
-import { loadSnapshot, priorCells } from "../catalog/snapshot.ts";
+import {
+	loadSnapshot,
+	priorCells,
+	snapshotAgeDays,
+} from "../catalog/snapshot.ts";
 import { classify } from "../classify/index.ts";
 import type { AttemptEvent } from "../contracts/attempts.ts";
 import type { CoreDeps, SpatzApi, Store } from "../contracts/deps.ts";
@@ -140,7 +145,21 @@ async function readEvalFile(file: string) {
 			task_hash: typeof hash === "string" && hash ? hash : null,
 		});
 	});
-	return { file, rows, rejected };
+	// A run folder's id: the first 12 hex digits of the SHA-256 of its sorted row run_ids. The snapshot lists runs by it.
+	const source_run = createHash("sha256")
+		.update(
+			rows
+				.map((r) => r.row.run_id)
+				.sort()
+				.join("\n"),
+		)
+		.digest("hex")
+		.slice(0, 12);
+	return {
+		file,
+		rows: rows.map((r) => ({ ...r, source_run })),
+		rejected,
+	};
 }
 
 /** Missing, unreadable or malformed transcripts count as an empty parse. */
@@ -160,6 +179,7 @@ export function createApi(
 	internals: ApiInternals = {},
 ): SpatzApi {
 	let config: Promise<Config> | undefined;
+	const snapshotCachePath = join(deps.homeDir, ".spatz", "bench-snapshot.json");
 	const getConfig = () =>
 		(config ??= deps.config ? Promise.resolve(deps.config) : loadConfig(deps));
 	const debugHook = (message: string) => {
@@ -812,7 +832,7 @@ export function createApi(
 				ttlMs: cfg.tuning.openRouterCacheMs,
 				timeoutMs: cfg.tuning.openRouterTimeoutMs,
 			};
-			const [harnessCatalog, openRouter] = await Promise.all([
+			const [harnessCatalog, openRouter, snapshot] = await Promise.all([
 				resolved.source.startsWith("preset:")
 					? loadHarnessCatalog({
 							...options,
@@ -823,6 +843,9 @@ export function createApi(
 					...options,
 					cachePath: deps.openRouterCachePath,
 				}),
+				cfg.benchSnapshot === false
+					? null
+					: loadSnapshot({ ...options, cachePath: snapshotCachePath }),
 			]);
 			if (harnessCatalog) {
 				const harness = resolved.source.slice("preset:".length) as Harness;
@@ -834,14 +857,6 @@ export function createApi(
 			const catalog = buildCatalog(requested, openRouter, cfg);
 			if (catalog.length === 0)
 				throw new Error("--models: no usable candidate");
-			const snapshots = await Promise.all(
-				[...new Set(catalog.map((c) => c.model))].map((model) =>
-					loadSnapshot(model, {
-						...options,
-						cacheDir: join(deps.homeDir, ".spatz", "catalog"),
-					}),
-				),
-			);
 			// The task text goes to classify (and maybe Jev) only; it is never stored.
 			const c = await classify(
 				task,
@@ -850,11 +865,16 @@ export function createApi(
 				cfg,
 			);
 			return withStore((store) => {
-				const versions = store.liveModelVersions();
 				const priors = [
-					...snapshots.flatMap((s) =>
-						s ? priorCells(s, versions[s.model] ?? null) : [],
-					),
+					// With bench.use on, imported rows replace the snapshot cells of their runs.
+					...(snapshot
+						? priorCells(
+								snapshot,
+								store.liveModelVersions(),
+								cfg.benchUse ? store.benchRuns() : new Set(),
+								deps.clock.now(),
+							)
+						: []),
 					// Imported bench rows join the same capped prior only when bench.use is on.
 					...(cfg.benchUse ? store.benchPriors() : []),
 				];
@@ -1189,6 +1209,27 @@ export function createApi(
 			report.failures.launcher = launcher
 				.split("\n")
 				.filter((line) => line === "1").length;
+			if (cfg.benchSnapshot === false) report.snapshot = null;
+			else {
+				// What the next suggestion uses, read without a network request.
+				const s = await loadSnapshot({
+					fetch: deps.fetch,
+					env: { ...deps.env, SPATZ_NO_NETWORK: "1" },
+					clock: deps.clock,
+					ttlMs: cfg.tuning.openRouterCacheMs,
+					cachePath: snapshotCachePath,
+				});
+				report.snapshot = {
+					source: s.source,
+					commit: s.commit,
+					generated_at: s.generated_at,
+					age_days: snapshotAgeDays(s, deps.clock.now()),
+					fetched_at:
+						s.fetched_at === null ? null : new Date(s.fetched_at).toISOString(),
+					cells: s.cells.length,
+					prior_weight: cfg.tuning.priorWeight,
+				};
+			}
 			return report;
 		},
 	};

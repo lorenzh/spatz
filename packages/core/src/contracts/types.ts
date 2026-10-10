@@ -103,6 +103,8 @@ export interface Tuning {
 	successQuality: number;
 	/** Thin cells pool over the same family at the same level after the type levels. Default false until the offline replay shows no harm; env SPATZ_FAMILY_POOLING=1. */
 	familyPooling: boolean;
+	/** The bench prior of a cell is worth at most this many pseudo-observations: w = min(priorWeight, n_eff). Default 6; config bench.prior_weight. */
+	priorWeight: number;
 }
 
 export const DEFAULT_TUNING: Tuning = {
@@ -119,6 +121,7 @@ export const DEFAULT_TUNING: Tuning = {
 	openRouterTimeoutMs: 3000,
 	successQuality: 0.8,
 	familyPooling: false,
+	priorWeight: 6,
 };
 
 // ---------- Candidates and catalog (spec "Candidates and metadata") ----------
@@ -515,6 +518,22 @@ export interface StatsReport {
 	learned_vs_control: LearnedVsControl;
 	/** Imported bench rows (spatz import-eval), filtered by --type; apart from every live number above. */
 	bench: BenchPairStats[];
+	/** The bench snapshot the next suggestion uses as prior; null when bench.snapshot is false. Set by the api, not the report. */
+	snapshot?: SnapshotStatus | null;
+}
+
+export interface SnapshotStatus {
+	/** release: downloaded from spatz-measurements (cached); bundled: the copy shipped with this build. */
+	source: "release" | "bundled";
+	/** Source commit in spatz-measurements. */
+	commit: string;
+	generated_at: string;
+	/** Whole days since generated_at. */
+	age_days: number;
+	/** When the release was downloaded, ISO 8601; null for the bundled copy. */
+	fetched_at: string | null;
+	cells: number;
+	prior_weight: number;
 }
 
 /** First-attempt success of an arm against control, weighted per (task_type, difficulty) cell by the arm's outcomes. */
@@ -582,4 +601,6 @@ export interface Config {
 	descriptions: Record<string, string>;
 	/** `bench.use`: imported bench rows join the weak prior of recommendations. Default false. */
 	benchUse?: boolean;
+	/** `bench.snapshot`: false turns the release snapshot prior off. Default on. */
+	benchSnapshot?: boolean;
 }

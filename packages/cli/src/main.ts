@@ -117,6 +117,11 @@ function formatStats(r: StatsReport): string {
 		lines.push(
 			`bench ${b.model}:${b.effort}  n=${b.n}  success=${pct(b.success_rate)}  est_cost_per_success=${usd(b.estimated_cost_usd_per_success)}`,
 		);
+	if (r.snapshot === null) lines.push("snapshot: off");
+	else if (r.snapshot)
+		lines.push(
+			`snapshot: ${r.snapshot.source} ${r.snapshot.commit.slice(0, 7)} of ${r.snapshot.generated_at.slice(0, 10)} (${r.snapshot.age_days} d old)  cells=${r.snapshot.cells}  prior_weight=${r.snapshot.prior_weight}`,
+		);
 	lines.push(
 		`coverage: ${pct(r.coverage)}  learned_success: ${opt(r.learned_success)}  fallback_success: ${opt(r.fallback_success)}  control_success: ${opt(r.control_success)}`,
 	);

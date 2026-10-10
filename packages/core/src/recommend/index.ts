@@ -22,7 +22,7 @@ export interface StrategyContext {
 	/** One uniform draw in [0, 1) per suggestion. */
 	random: number;
 	tuning: Tuning;
-	/** Weighted bench evidence (weak prior). Changes the estimate only, never n; absent = no prior. */
+	/** Weighted bench evidence (capped prior). Changes the estimate only, never n; absent = no prior. */
 	priors?: PriorCell[];
 }
 
@@ -61,11 +61,13 @@ interface Est {
 	n: number;
 	estimate: number;
 	successes: number;
-	/** Prior weight w = min(2, n_eff); 0 without a prior. */
+	/** Prior weight w = min(priorWeight, n_eff); 0 without a prior. */
 	nPrior: number;
 	/** Raw bench runs behind the prior. */
 	nBench: number;
 	versionMatch: "exact" | "unknown" | null;
+	/** Sources of the prior, in order of appearance. */
+	sources: string[];
 }
 /** Estimate and n per catalog candidate on one level. */
 type Level = (c: Candidate) => Est;
@@ -84,7 +86,13 @@ function level(
 	const sums = new Map<string, { n: number; sum: number }>();
 	const bench = new Map<
 		string,
-		{ n: number; s: number; raw: number; match: "exact" | "unknown" }
+		{
+			n: number;
+			s: number;
+			raw: number;
+			match: "exact" | "unknown";
+			sources: Set<string>;
+		}
 	>();
 	// sum counts successes; quality-mean learning overrated partial-heavy pairs.
 	for (const s of history) {
@@ -106,17 +114,19 @@ function level(
 			s: 0,
 			raw: 0,
 			match: p.version_match,
+			sources: new Set<string>(),
 		};
 		cur.n += p.n_eff;
 		cur.s += p.s_eff;
 		cur.raw += p.n_bench;
+		cur.sources.add(p.source);
 		if (p.version_match === "unknown") cur.match = "unknown";
 		bench.set(k, cur);
 	}
 	return (c) => {
 		const s = sums.get(keyOf(c)) ?? { n: 0, sum: 0 };
 		const b = bench.get(keyOf(c));
-		const w = b ? Math.min(2, b.n) : 0;
+		const w = b ? Math.min(ctx.tuning.priorWeight, b.n) : 0;
 		const a = b && b.n > 0 ? (w * b.s) / b.n : 0;
 		return {
 			n: s.n,
@@ -125,6 +135,7 @@ function level(
 			nPrior: w,
 			nBench: b?.raw ?? 0,
 			versionMatch: w > 0 ? (b?.match ?? null) : null,
+			sources: w > 0 && b ? [...b.sources] : [],
 		};
 	};
 }
@@ -154,7 +165,7 @@ function decision(
 			};
 		}),
 		reason: top.versionMatch
-			? `${reason} Bench prior on the estimate (version_match: ${top.versionMatch}).`
+			? `${reason} Bench prior on the estimate (version_match: ${top.versionMatch}; source: ${top.sources.join(", ")}).`
 			: reason,
 		explored: flags.explored ?? false,
 		control: flags.control ?? false,

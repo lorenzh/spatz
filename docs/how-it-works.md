@@ -2,7 +2,7 @@
 title: How spatz works
 description: The terms, core modules, suggestion flow, Jev classification and SQLite data model of spatz.
 tags: [spatz, architecture, classification, data-model]
-keywords: [attempt, retry, binding, recovery chain, chain, cost, tokens, price_snapshot, tokens_schema, fallback, failures, launcher, diagnostics, concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
+keywords: [bench snapshot, spatz-snapshot/1, spatz-measurements, attempt, retry, binding, recovery chain, chain, cost, tokens, price_snapshot, tokens_schema, fallback, failures, launcher, diagnostics, concepts, design, modules, jev, typesafe, taxonomy, difficulty, criticality, sqlite, schema, migration, outcome, signal, usage, flow, scope, turn, agent, session]
 ---
 
 # How spatz works
@@ -64,7 +64,7 @@ flowchart LR
 1. The agent runs `spatz "<task>" --models <list>` through its Bash tool.
 2. `catalog` builds the candidates and sorts them by cost.
 3. `classify` sends the task text to Jev, or uses the keyword rules.
-4. `recommend` reads the learned history of the task type and picks a candidate.
+4. `recommend` reads the learned history of the task type and picks a candidate. The [bench snapshot](recommendation.md#bench-prior) adds a capped prior to the estimate. spatz downloads it at most once a day from a public GitHub release, or uses its cache or the bundled copy. It sends nothing there.
 5. `store` saves the suggestion without the task text. The CLI prints the suggestion. The first output line is `suggestion_id: <id>`.
 6. The Claude Code `PostToolUse` hook sees the `spatz` call. It reads the suggestion id from the output and links the suggestion to the session and prompt.
 7. Later hook events bind signals and usage to their originating attempt using source identity or a trustworthy source-time window.
@@ -271,6 +271,10 @@ Before the first migration write, a separate read-only connection creates a back
 | 7 | Dispatch observations keyed by session and agent. |
 | 8 | Attempt ledger and shared event binding. Existing suggestions become closed legacy rows. |
 | 9 | Mark stored Claude subagent transcript estimates incomplete and refresh cost views. No new columns. |
+| 10 | Outcomes keyed by model version. |
+| 11 | Table `unknown_outcomes` for suggestions whose agent ended without evidence. |
+| 12 | Table `bench_attempts` for rows from `spatz import-eval`. |
+| 13 | Column `bench_attempts.source_run`: the measurement run of an imported row, to match the bench snapshot. |
 
 `SCHEMA_V3` is the third entry in `MIGRATIONS`.
 `SCHEMA_VERSION` stays equal to `MIGRATIONS.length`.

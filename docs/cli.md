@@ -382,7 +382,7 @@ Each argument is one of these:
 - A run directory that contains `rows.jsonl`.
 - A directory of run directories, as in the measurements layout `runs/<id>/rows.jsonl`. spatz reads the run directories in name order and ignores entries without `rows.jsonl`.
 
-spatz checks each row with `parseEvalRow`. A valid row is stored once per `run_id` in its own table, apart from live attempts. A second import of the same row changes nothing. spatz also stores `bench_version`, the list-price estimate `estimated_cost_usd` and, when the row has one, the extra field `task_hash`.
+spatz checks each row with `parseEvalRow`. A valid row is stored once per `run_id` in its own table, apart from live attempts. A second import of the same row changes nothing. Each row also gets the run id of its file: the first 12 hex digits of the SHA-256 of the file's sorted row `run_id`s, which is the run folder id in the measurements layout. With `bench.use` on, it keeps the [bench snapshot](recommendation.md#bench-prior) from counting the same run twice. A second import fills a missing run id. spatz also stores `bench_version`, the list-price estimate `estimated_cost_usd` and, when the row has one, the extra field `task_hash`.
 
 Cost per row:
 
@@ -394,7 +394,7 @@ Cost per row:
 
 A null `cache_read` or `cache_write` is stored as null and sets `tokens_complete = 0`.
 
-Bench rows never enter live outcomes, the learned and control comparison or coverage. They change recommendations only when you set [`bench.use`](configuration.md#bench-evidence-benchuse). `spatz stats` lists them in their own lines.
+Bench rows never enter live outcomes, the learned and control comparison or coverage. They change recommendations only when you set [`bench.use`](configuration.md#bench-evidence-bench-settings). `spatz stats` lists them in their own lines.
 
 | Flag | Effect |
 | --- | --- |
@@ -533,6 +533,7 @@ It needs no network access. spatz creates an empty database if none exists. Laun
 <task_type>  n=<count>  adoption=<pct>  input_tokens=<count>  output_tokens=<count>  cache_read_tokens=<count>  cache_creation_tokens=<count>  cost_usd=<amount or ->  incomplete=<count>
   <model>:<effort>  n=<count>  success=<pct>
 bench <model>:<effort>  n=<count>  success=<pct>  est_cost_per_success=<amount or ->
+snapshot: <release|bundled> <commit> of <date> (<days> d old)  cells=<count>  prior_weight=<k>
 coverage: <pct>  learned_success: <pct or ->  fallback_success: <pct or ->  control_success: <pct or ->
 dispatches: <count>  routed_by_mod: <count>  swapped: <count>
 fallbacks: <reason>=<count>  ...
@@ -541,6 +542,7 @@ failures: parse=<count>  hook=<count>  launcher=<count>
 
 There is one block per task type, with one indented line per used pair. `-` means "no data".
 Each `bench` line is one pair of imported bench rows (see [import-eval](#spatz-import-eval)). `--type` filters them. Bench rows never enter the other lines.
+The `snapshot` line names the [bench snapshot](recommendation.md#bench-prior) that the next suggestion uses: `release` (downloaded and cached) or `bundled` (the copy shipped with this build), its source commit, date and age. It shows `snapshot: off` when `bench.snapshot` is `false`. Stats never download it. JSON has the same data as `snapshot` (`null` when off), with `generated_at` and `fetched_at`.
 The dispatch, fallback and failure lines also appear with `--by scope`.
 
 ### Dispatch counts

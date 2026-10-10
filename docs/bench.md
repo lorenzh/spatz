@@ -89,7 +89,7 @@ estimated_cost_usd = input × input price
 
 [`spatz import-eval`](cli.md#spatz-import-eval) reads JSON Lines files or run directories (`runs/<id>/rows.jsonl`). It stores each valid row once per `run_id` in the table `bench_attempts`, apart from live attempts. A second import changes nothing. `--dry-run` reports the counts and stores nothing. The command also keeps the extra field `task_hash` when a row has one.
 
-Bench rows never enter live outcomes or the comparison of learned and control choices. `spatz stats` lists them in their own `bench` lines. They change recommendations only as a weak prior, and only when you set [`bench.use`](configuration.md#bench-evidence-benchuse).
+Bench rows never enter live outcomes or the comparison of learned and control choices. `spatz stats` lists them in their own `bench` lines. They change recommendations only as a capped prior, and only when you set [`bench.use`](configuration.md#bench-evidence-bench-settings). Without an import, spatz gets the same evidence in aggregated form from the [bench snapshot](recommendation.md#bench-prior), a release of [spatz-measurements](https://github.com/lorenzh/spatz-measurements).
 
 ## Examples
 

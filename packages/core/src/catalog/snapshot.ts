@@ -1,6 +1,9 @@
-// catalog/snapshot: bench snapshot files (spatz-bench-snapshot/1) as a weak prior. Fetch, cache, parse, effective counts.
-// Spec: issue "Use the bench snapshot as a prior" (Snapshot format, Fetch and delivery).
-import { join } from "node:path";
+// catalog/snapshot: the bench snapshot (spatz-snapshot/1) as a capped prior.
+// One GitHub release asset of spatz-measurements, verified by its .sha256, cached for a day.
+// Without a good download: the last good cache, else the copy bundled at release time.
+import { createHash } from "node:crypto";
+import bundled from "../../../../catalog/bench-snapshot.json";
+import type { FetchFn } from "../contracts/deps.ts";
 import {
 	DEFAULT_TUNING,
 	DIFFICULTIES,
@@ -9,26 +12,32 @@ import {
 } from "../contracts/types.ts";
 import type { LoadModelsOptions } from "./openrouter.ts";
 
-export const SNAPSHOT_BASE_URL =
-	"https://raw.githubusercontent.com/lorenzh/spatz/main/catalog";
-const MAX_BYTES = 256 * 1024;
+export const SNAPSHOT_URL =
+	"https://github.com/lorenzh/spatz-measurements/releases/latest/download/snapshot.json";
+const MAX_BYTES = 4 * 1024 * 1024;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-interface CheckCounts {
-	n: number;
-	successes: number;
-	judge?: string;
-}
-interface Cell {
-	n: number;
-	successes: number;
-	by_check?: Record<string, CheckCounts>;
-}
-export interface Snapshot {
+export interface SnapshotCell {
 	model: string;
 	model_version: string | null;
-	judges: Record<string, { validated: boolean }>;
-	/** effort -> task type -> difficulty -> cell. */
-	efforts: Record<string, Record<string, Record<string, Cell>>>;
+	effort: string;
+	task_type: string;
+	difficulty: string;
+	n: number;
+	pass: number;
+	/** Run ids (12 hex digits) of the measurement runs behind the cell. */
+	runs: string[];
+}
+export interface Snapshot {
+	/** Source commit in spatz-measurements. */
+	commit: string;
+	generated_at: string;
+	cells: SnapshotCell[];
+}
+export interface LoadedSnapshot extends Snapshot {
+	source: "release" | "bundled";
+	/** When the release was downloaded; null for the bundled copy. */
+	fetched_at: number | null;
 }
 
 /** Bench evidence for one (model, effort, type, difficulty), already weighted. */
@@ -43,162 +52,176 @@ export interface PriorCell {
 	/** Raw bench runs. */
 	n_bench: number;
 	version_match: "exact" | "unknown";
+	/** Where the evidence comes from, for the reason. */
+	source: string;
 }
 
 const object = (v: unknown): v is Record<string, unknown> =>
 	v !== null && typeof v === "object" && !Array.isArray(v);
 const count = (v: unknown): v is number =>
 	typeof v === "number" && Number.isInteger(v) && v >= 0;
-const safeId = (s: string) => /^[a-z0-9][a-z0-9._-]*$/.test(s);
+const MODEL_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
+const RUN_ID = /^[0-9a-f]{12}$/;
 
-function parseCell(v: unknown): Cell | null {
-	if (!object(v) || !count(v.n) || !count(v.successes) || v.successes > v.n)
-		return null;
-	const cell: Cell = { n: v.n, successes: v.successes };
-	if (v.by_check !== undefined) {
-		if (!object(v.by_check)) return null;
-		cell.by_check = {};
-		for (const [kind, c] of Object.entries(v.by_check)) {
-			if (!object(c) || !count(c.n) || !count(c.successes) || c.successes > c.n)
-				return null;
-			cell.by_check[kind] = {
-				n: c.n,
-				successes: c.successes,
-				...(typeof c.judge === "string" && { judge: c.judge }),
-			};
-		}
-	}
-	return cell;
-}
-
-/** null for anything that is not a valid spatz-bench-snapshot/1; unknown efforts, task types and difficulties are skipped, `other` never counts. */
-export function parseSnapshot(value: unknown): Snapshot | null {
+function parseCell(v: unknown): SnapshotCell | null {
 	if (
-		!object(value) ||
-		value.schema !== "spatz-bench-snapshot/1" ||
-		typeof value.model !== "string" ||
-		!(
-			value.model_version === null || typeof value.model_version === "string"
-		) ||
-		!object(value.efforts)
+		!object(v) ||
+		typeof v.model !== "string" ||
+		!MODEL_ID.test(v.model) ||
+		!(v.model_version === null || typeof v.model_version === "string") ||
+		typeof v.effort !== "string" ||
+		typeof v.task_type !== "string" ||
+		typeof v.difficulty !== "string" ||
+		!count(v.n) ||
+		!count(v.pass) ||
+		!count(v.partial) ||
+		!count(v.fail) ||
+		v.pass + v.partial + v.fail !== v.n ||
+		!Array.isArray(v.runs) ||
+		!v.runs.every((r) => typeof r === "string" && RUN_ID.test(r))
 	)
 		return null;
-	const judges: Snapshot["judges"] = Object.create(null);
-	if (value.judges !== undefined) {
-		if (!object(value.judges)) return null;
-		for (const [id, j] of Object.entries(value.judges))
-			if (object(j)) judges[id] = { validated: j.validated === true };
-	}
-	const efforts: Snapshot["efforts"] = {};
-	for (const [effort, types] of Object.entries(value.efforts)) {
-		if (!object(types)) return null;
-		if (!(EFFORTS as readonly string[]).includes(effort)) continue;
-		for (const [type, difficulties] of Object.entries(types)) {
-			if (!object(difficulties)) return null;
-			if (!(TASK_TYPES as readonly string[]).includes(type) || type === "other")
-				continue;
-			for (const [difficulty, raw] of Object.entries(difficulties)) {
-				const cell = parseCell(raw);
-				if (!cell) return null;
-				if (!(DIFFICULTIES as readonly string[]).includes(difficulty)) continue;
-				efforts[effort] ??= {};
-				const byType = efforts[effort];
-				byType[type] ??= {};
-				byType[type][difficulty] = cell;
-			}
-		}
-	}
 	return {
-		model: value.model,
-		model_version: value.model_version,
-		judges,
-		efforts,
+		model: v.model,
+		model_version: v.model_version,
+		effort: v.effort,
+		task_type: v.task_type,
+		difficulty: v.difficulty,
+		n: v.n,
+		pass: v.pass,
+		runs: v.runs,
 	};
 }
 
-/** Weighted counts of one cell: f = 1 for tests, golden, human; rubric 1 only with a validated judge, else 0.5. */
-function effective(cell: Cell, judges: Snapshot["judges"]) {
-	let n = 0;
-	let s = 0;
-	for (const [kind, c] of Object.entries(
-		cell.by_check ?? { tests: { n: cell.n, successes: cell.successes } },
-	)) {
-		const f = kind === "rubric" && !judges[c.judge ?? ""]?.validated ? 0.5 : 1;
-		n += f * c.n;
-		s += f * c.successes;
+/** null for anything that is not a valid spatz-snapshot/1; cells with unknown efforts, task types or difficulties are skipped, `other` never counts. */
+export function parseSnapshot(value: unknown): Snapshot | null {
+	if (
+		!object(value) ||
+		value.schema !== "spatz-snapshot/1" ||
+		typeof value.generated_at !== "string" ||
+		!Number.isFinite(Date.parse(value.generated_at)) ||
+		!object(value.source) ||
+		typeof value.source.commit !== "string" ||
+		!/^[0-9a-f]{40}$/.test(value.source.commit) ||
+		!Array.isArray(value.cells)
+	)
+		return null;
+	const cells: SnapshotCell[] = [];
+	for (const raw of value.cells) {
+		const cell = parseCell(raw);
+		if (!cell) return null;
+		if (
+			(EFFORTS as readonly string[]).includes(cell.effort) &&
+			(TASK_TYPES as readonly string[]).includes(cell.task_type) &&
+			cell.task_type !== "other" &&
+			(DIFFICULTIES as readonly string[]).includes(cell.difficulty)
+		)
+			cells.push(cell);
 	}
-	return { n, s };
+	return {
+		commit: value.source.commit,
+		generated_at: value.generated_at,
+		cells,
+	};
 }
 
-/** Prior cells of a snapshot. A known live version that differs from the snapshot's seeds nothing; null on either side matches. */
+/** Whole days since the snapshot was generated. */
+export const snapshotAgeDays = (s: Snapshot, now: number) =>
+	Math.max(0, Math.floor((now - Date.parse(s.generated_at)) / DAY_MS));
+
+/** Prior cells of a snapshot. A known live version that differs from the cell's seeds nothing; null on either side matches. Cells that count a run in skipRuns are left out (those rows come from the local bench import). */
 export function priorCells(
-	snapshot: Snapshot,
-	liveVersion: string | null,
+	snapshot: LoadedSnapshot,
+	liveVersions: Record<string, string>,
+	skipRuns: ReadonlySet<string>,
+	now: number,
 ): PriorCell[] {
-	if (
-		snapshot.model_version !== null &&
-		liveVersion !== null &&
-		snapshot.model_version !== liveVersion
-	)
-		return [];
-	const version_match =
-		snapshot.model_version !== null && liveVersion !== null
-			? "exact"
-			: "unknown";
-	const out: PriorCell[] = [];
-	for (const [effort, types] of Object.entries(snapshot.efforts))
-		for (const [task_type, difficulties] of Object.entries(types))
-			for (const [difficulty, cell] of Object.entries(difficulties)) {
-				const { n, s } = effective(cell, snapshot.judges);
-				if (n > 0)
-					out.push({
-						task_type,
-						difficulty,
-						model: snapshot.model,
-						effort,
-						n_eff: n,
-						s_eff: s,
-						n_bench: cell.n,
-						version_match,
-					});
-			}
-	return out;
+	const source = `${snapshot.source} snapshot ${snapshot.commit.slice(0, 7)} of ${snapshot.generated_at.slice(0, 10)} (${snapshotAgeDays(snapshot, now)} d old)`;
+	return snapshot.cells.flatMap((c): PriorCell[] => {
+		const live = liveVersions[c.model] ?? null;
+		if (c.model_version !== null && live !== null && c.model_version !== live)
+			return [];
+		// ponytail: a partly imported cell drops its other runs too; per-run counts in the snapshot would keep them.
+		if (c.n === 0 || c.runs.some((r) => skipRuns.has(r))) return [];
+		// ponytail: every snapshot row weighs 1; rubric rows need per-check counts in the snapshot to weigh 0.5.
+		return [
+			{
+				task_type: c.task_type,
+				difficulty: c.difficulty,
+				model: c.model,
+				effort: c.effort,
+				n_eff: c.n,
+				s_eff: c.pass,
+				n_bench: c.n,
+				version_match:
+					c.model_version !== null && live !== null ? "exact" : "unknown",
+				source,
+			},
+		];
+	});
+}
+
+const checkedBundle = parseSnapshot(bundled);
+if (!checkedBundle) throw new Error("Invalid bundled bench snapshot");
+export const BUNDLED_SNAPSHOT: LoadedSnapshot = {
+	...checkedBundle,
+	source: "bundled",
+	fetched_at: null,
+};
+
+/** The latest release snapshot, verified against its .sha256. Throws on any failure. */
+export async function fetchSnapshot(
+	fetch: FetchFn,
+	signal?: AbortSignal,
+): Promise<{ text: string; snapshot: Snapshot }> {
+	const get = async (url: string) => {
+		const response = await fetch(url, { signal });
+		if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		if (bytes.byteLength > MAX_BYTES) throw new Error(`${url}: too large`);
+		return bytes;
+	};
+	const [bytes, sum] = await Promise.all([
+		get(SNAPSHOT_URL),
+		get(`${SNAPSHOT_URL}.sha256`),
+	]);
+	const expected = new TextDecoder().decode(sum).trim().split(/\s+/)[0];
+	if (createHash("sha256").update(bytes).digest("hex") !== expected)
+		throw new Error("bench snapshot: checksum mismatch");
+	const text = new TextDecoder().decode(bytes);
+	const snapshot = parseSnapshot(JSON.parse(text));
+	if (!snapshot)
+		throw new Error("bench snapshot: not a valid spatz-snapshot/1");
+	return { text, snapshot };
 }
 
 interface CacheFile {
 	fetched_at: number;
-	/** null caches a 404. */
 	snapshot: unknown;
 }
 
-/** Snapshot for a canonical model id ("provider/model"), or null. Fresh cache -> no fetch; 404 -> null; failed refresh -> stale cache; SPATZ_NO_NETWORK=1 -> cache only. */
+/** Fresh cache -> no fetch; SPATZ_NO_NETWORK=1 -> cache only; failed download, checksum or schema -> the last good cache, else the bundled copy. */
 export async function loadSnapshot(
-	model: string,
-	options: Omit<LoadModelsOptions, "cachePath"> & { cacheDir: string },
-): Promise<Snapshot | null> {
-	const [provider, name, ...rest] = model.split("/");
-	if (!provider || !name || rest.length || !safeId(provider) || !safeId(name))
-		return null;
-	const { fetch, env, clock, ttlMs } = options;
-	const cachePath = join(options.cacheDir, provider, `${name}.json`);
-	let cache: CacheFile | null = null;
+	options: LoadModelsOptions,
+): Promise<LoadedSnapshot> {
+	const { fetch, env, cachePath, clock, ttlMs } = options;
+	let cache: LoadedSnapshot | null = null;
 	try {
 		const raw = await Bun.file(cachePath).json();
-		if (object(raw) && Number.isFinite(raw.fetched_at))
-			cache = raw as unknown as CacheFile;
+		const parsed = object(raw) ? parseSnapshot(raw.snapshot) : null;
+		if (parsed && Number.isFinite(raw.fetched_at))
+			cache = { ...parsed, source: "release", fetched_at: raw.fetched_at };
 	} catch {
 		// Missing or corrupt cache.
 	}
-	const cached = () => {
-		const parsed = cache ? parseSnapshot(cache.snapshot) : null;
-		return parsed?.model === model ? parsed : null;
-	};
+	const fallback = cache ?? BUNDLED_SNAPSHOT;
 	const now = clock.now();
+	const fetchedAt = cache?.fetched_at ?? 0;
 	if (
 		env.SPATZ_NO_NETWORK === "1" ||
-		(cache && cache.fetched_at <= now && now - cache.fetched_at < ttlMs)
+		(cache && fetchedAt <= now && now - fetchedAt < ttlMs)
 	)
-		return cached();
+		return fallback;
 
 	const abort = new AbortController();
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -208,34 +231,24 @@ export async function loadSnapshot(
 			reject(new Error("Snapshot timeout"));
 		}, options.timeoutMs ?? DEFAULT_TUNING.openRouterTimeoutMs);
 	});
-	let snapshot: unknown = null;
+	let fetched: Awaited<ReturnType<typeof fetchSnapshot>>;
 	try {
-		const response = await Promise.race([
-			fetch(`${SNAPSHOT_BASE_URL}/${provider}/${name}.json`, {
-				signal: abort.signal,
-			}),
-			timeout,
-		]);
-		if (response.status !== 404) {
-			if (!response.ok) return cached();
-			const text = await Promise.race([response.text(), timeout]);
-			if (text.length > MAX_BYTES) return cached();
-			snapshot = JSON.parse(text);
-			const parsed = parseSnapshot(snapshot);
-			if (parsed?.model !== model) return cached();
-		}
+		fetched = await Promise.race([fetchSnapshot(fetch, abort.signal), timeout]);
 	} catch {
-		return cached();
+		return fallback;
 	} finally {
 		clearTimeout(timer);
 	}
 	try {
 		await Bun.write(
 			cachePath,
-			JSON.stringify({ fetched_at: now, snapshot } satisfies CacheFile),
+			JSON.stringify({
+				fetched_at: now,
+				snapshot: JSON.parse(fetched.text),
+			} satisfies CacheFile),
 		);
 	} catch {
 		// A failed cache write only costs a refetch.
 	}
-	return parseSnapshot(snapshot);
+	return { ...fetched.snapshot, source: "release", fetched_at: now };
 }
