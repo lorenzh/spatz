@@ -1,6 +1,6 @@
 {
 	"unit": "USD per 1M tokens",
-	"notes": "Official list prices, standard tier, global endpoint, pinned by hand. scripts/price-check.ts compares them with OpenRouter daily and reports differences; it never changes this file. cache_write is the 1-hour cache write, which Claude Code bills; OpenRouter lists the 5-minute rate for Anthropic, so prefer_official marks that field. OpenAI lists no cache write price (null). Reasoning tokens are part of output and billed as output on both providers (https://developers.openai.com/api/docs/guides/reasoning, https://platform.claude.com/docs/en/build-with-claude/extended-thinking).",
+	"notes": "Official list prices, standard tier, global endpoint, pinned by hand. scripts/price-check.ts compares them with OpenRouter daily and reports differences; it never changes this file. cache_write is the 1-hour cache write, which Claude Code bills; OpenRouter lists the 5-minute rate for Anthropic, so prefer_official marks that field. OpenAI lists no cache write price (null). Reasoning tokens are part of output and billed as output on both providers (https://developers.openai.com/api/docs/guides/reasoning, https://platform.claude.com/docs/en/build-with-claude/extended-thinking). Claude Haiku 5.5 is priced per request by prompt length: these are its rates for prompts up to 100,000 tokens; a request over that pays 5x on every field (https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing).",
 	"models": {
 		"anthropic/claude-fable-5.1": {
 			"input": 10,
@@ -9,6 +9,15 @@
 			"output": 50,
 			"source": "https://platform.claude.com/docs/en/about-claude/pricing",
 			"date": "2026-10-07",
+			"prefer_official": ["cache_write"]
+		},
+		"anthropic/claude-haiku-5.5": {
+			"input": 0.1,
+			"cache_read": 0.01,
+			"cache_write": 0.2,
+			"output": 0.5,
+			"source": "https://platform.claude.com/docs/en/about-claude/pricing",
+			"date": "2026-10-10",
 			"prefer_official": ["cache_write"]
 		},
 		"anthropic/claude-opus-5.5": {
