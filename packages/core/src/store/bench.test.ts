@@ -272,6 +272,10 @@ test("a run imported in parts gets the id of the whole run when the full file is
 		// A smaller file afterwards does not take the rows back.
 		store.importEvalRows([part(1, "aaaaaaaaaaa1")], 3000, false);
 		expect(store.benchRuns()).toEqual(new Set(["ffffffffffff"]));
+		// Not even when it is passed several times in one import.
+		const once = part(2, "aaaaaaaaaaa2");
+		store.importEvalRows([once, once, once, once], 4000, false);
+		expect(store.benchRuns()).toEqual(new Set(["ffffffffffff"]));
 	});
 });
 

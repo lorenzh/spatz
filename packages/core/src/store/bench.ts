@@ -44,9 +44,14 @@ export function benchStore(
 				`UPDATE bench_attempts SET source_run = $source_run WHERE run_id = $run_id AND source_run IS NOT $source_run
 				AND (source_run IS NULL OR (SELECT COUNT(*) FROM bench_attempts b WHERE b.source_run = bench_attempts.source_run) < $size)`,
 			);
-			const sizes = new Map<string, number>();
-			for (const { source_run } of rows)
-				if (source_run) sizes.set(source_run, (sizes.get(source_run) ?? 0) + 1);
+			// Distinct rows per file id: a file passed twice does not grow.
+			const sizes = new Map<string, Set<string>>();
+			for (const { row, source_run } of rows)
+				if (source_run)
+					sizes.set(
+						source_run,
+						(sizes.get(source_run) ?? new Set()).add(row.run_id),
+					);
 			let added: boolean[] = [];
 			const rollback = new Error("dry run");
 			try {
@@ -57,7 +62,7 @@ export function benchStore(
 							fill.run({
 								source_run,
 								run_id: r.run_id,
-								size: sizes.get(source_run) ?? 0,
+								size: sizes.get(source_run)?.size ?? 0,
 							});
 						// The harness bill first, else the bench's list-price estimate; never priced without usage.
 						const cost = r.cost_usd ?? r.estimated_cost_usd;
