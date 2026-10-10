@@ -627,6 +627,18 @@ export function openStore(
 			const top = store.getSuggestion(id)?.ranking[0];
 			return top ? { model: top.model, effort: top.effort } : null;
 		},
+		signalAttempt(id) {
+			return (
+				db
+					.query<
+						{ attempt_id: string; model: string | null; effort: Effort | null },
+						[string]
+					>(
+						"SELECT a.id AS attempt_id, a.model, a.effort FROM attempt_events e JOIN attempts a ON a.id = e.attempt_id WHERE e.suggestion_id = ? AND e.kind = 'report' AND e.source = 'signal' ORDER BY e.received_at, e.revision LIMIT 1",
+					)
+					.get(id) ?? null
+			);
+		},
 		closeSuggestion(id, at) {
 			db.query("UPDATE suggestions SET closed_at = ? WHERE id = ?").run(at, id);
 		},

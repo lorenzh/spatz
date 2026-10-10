@@ -3237,6 +3237,73 @@ describe("automatic outcomes", () => {
 			}
 			expect(fetched).toHaveLength(3);
 		});
+		test("credits the attempt that produced the PR and revises it on repeat", async () => {
+			const dbPath = join(dir, "pr-attempts.db");
+			const deps = setup({ dbPath, openStore }).deps;
+			const { suggestion_id } = await createApi(deps).suggest(suggestInput());
+			const report = (
+				effort: "low" | "medium" | "high",
+				result: "fail" | "pass",
+			) =>
+				createApi(deps).report({
+					suggestionId: suggestion_id,
+					model: "gpt-6-luna",
+					effort,
+					result,
+				});
+			await report("low", "fail");
+			await report("high", "pass");
+			let current = pr(suggestion_id);
+			const api = createApi(deps, { fetchPr: async () => current });
+			const rows = () => {
+				const db = new Database(dbPath, { readonly: true });
+				try {
+					return db
+						.query<{ effort: string; quality: number }, []>(
+							"SELECT a.effort, q.quality FROM attempts a JOIN attempt_quality q ON q.attempt_id = a.id ORDER BY a.ordinal",
+						)
+						.all();
+				} finally {
+					db.close();
+				}
+			};
+			const snapshot = () => {
+				const db = new Database(dbPath, { readonly: true });
+				try {
+					return {
+						events: db.query("SELECT * FROM attempt_events").all(),
+						attempts: db
+							.query("SELECT id, closed_at, finalized_at FROM attempts")
+							.all(),
+					};
+				} finally {
+					db.close();
+				}
+			};
+			await api.signalPr({ url: "u" });
+			const once = snapshot();
+			await api.signalPr({ url: "u" });
+			expect(snapshot()).toEqual(once);
+			expect(rows()).toEqual([
+				{ effort: "low", quality: 0 },
+				{ effort: "high", quality: 1 },
+			]);
+			// A later failed retry does not take over the PR's credit.
+			await report("medium", "fail");
+			await api.signalPr({ url: "u" });
+			expect(rows()).toEqual([
+				{ effort: "low", quality: 0 },
+				{ effort: "high", quality: 1 },
+				{ effort: "medium", quality: 0 },
+			]);
+			current = pr(suggestion_id, "MERGED", ["FAILURE"]);
+			await api.signalPr({ url: "u" });
+			expect(rows()).toEqual([
+				{ effort: "low", quality: 0 },
+				{ effort: "high", quality: 0.5 },
+				{ effort: "medium", quality: 0 },
+			]);
+		});
 		test("a PR without the trailer is an error", async () => {
 			const api = createApi(setup().deps, {
 				fetchPr: async () => ({

@@ -464,7 +464,7 @@ This command turns a pull request into an outcome. Put the line `Spatz-Suggestio
 | Closed without merge | `fail` |
 | Open | No result. With `--review approve`, `changes` or `blocker`: `pass`, `partial` or `fail`. |
 
-A PR without the trailer gives exit code 1. The result is recorded like `spatz report`, for the pair of the first attempt of the suggestion, or its top ranked pair.
+A PR without the trailer gives exit code 1. The result is recorded like `spatz report`, for the latest attempt of the suggestion, because that attempt produced the PR. Without an attempt, it goes to the top ranked pair. Later signals for the same suggestion stay bound to that attempt, even after a newer attempt. A repeated signal with a changed result revises that report; an unchanged one changes nothing.
 
 ## spatz stats
 
