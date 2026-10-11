@@ -160,6 +160,9 @@ async function readEvalFile(file: string) {
 	};
 }
 
+/** Waits between re-reads of a transcript that has no messages yet at a stop hook (1.4 s at most). */
+const FLUSH_RETRY_MS = [200, 400, 800];
+
 /** Missing, unreadable or malformed transcripts count as an empty parse. */
 async function readTranscript<T>(
 	path: string,
@@ -354,12 +357,20 @@ export function createApi(
 		const sub = !!event.agent_id;
 		const ended = event.type === "session_end" || event.type === "subagent_end";
 		const versionOf = await versionResolver();
-		const messages =
+		const read = async () =>
 			(await readTranscript(event.transcript_path ?? "", (text) =>
 				sub
 					? subagentMessages(text)
 					: mainTurnMessages(text, event.turn_id ?? ""),
 			)) ?? [];
+		let messages = await read();
+		// The harness flushes its transcript after the stop hook starts: retry a bounded time before a parse failure.
+		for (const wait of ended ? FLUSH_RETRY_MS : [])
+			if (messages.length) break;
+			else {
+				await (deps.sleep ?? Bun.sleep)(wait);
+				messages = await read();
+			}
 		return withStore(async (store) => {
 			const ownsUsage = store.attemptOwnsUsage(context);
 			const effort = sub || ownsUsage ? null : (event.effort ?? null);

@@ -211,6 +211,8 @@ export interface CoreDeps {
 	/** null when TYPESAFE_AI_API_KEY is unset (-> fallback "no_key"). */
 	jev: JevClient | null;
 	clock: Clock;
+	/** Pause between transcript re-reads at a stop hook; default Bun.sleep. */
+	sleep?: (ms: number) => Promise<void>;
 	random: RandomFn;
 	/** New suggestion id; default crypto.randomUUID. */
 	newId: () => string;
