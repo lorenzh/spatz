@@ -28,7 +28,7 @@ const USAGE = `usage:
   spatz --version
   spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
   spatz suggest "<task>" [--retry-of <suggestion_id>] [suggestion options]
-  spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--owns-usage] [--json]
+  spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--model-version <v>] [--owns-usage] [--json]
   spatz attempt bind <attempt_id> --call <id> --session <id> [--agent-id <id>]
   spatz attempt finalize --session <id> [--agent-id <id>]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
@@ -245,6 +245,9 @@ export async function main(
 						effort: required(v.effort, "--effort"),
 					}),
 					...(v.turn !== undefined && { turn: required(v.turn, "--turn") }),
+					...(v["model-version"] !== undefined && {
+						modelVersion: required(v["model-version"], "--model-version"),
+					}),
 					ownsUsage: v["owns-usage"] ?? false,
 				};
 				run = async () => {

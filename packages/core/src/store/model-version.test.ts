@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { modelVersion } from "../catalog/index.ts";
+import { modelVersion, resolveModelVersion } from "../catalog/index.ts";
 import type { SuggestionRecord } from "../contracts/types.ts";
 import { openStore } from "./index.ts";
 
@@ -33,6 +33,38 @@ test("modelVersion takes the date suffix of dated ids, else null", () => {
 	expect(modelVersion("claude-sonnet-4-5-20250929")).toBe("20250929");
 	expect(modelVersion("gpt-5-2025-08-07")).toBe("2025-08-07");
 	expect(modelVersion("claude-sonnet-5-5")).toBeNull();
+});
+
+test("resolveModelVersion takes an undated alias's revision from the one dated harness entry", () => {
+	const harness = [
+		"claude-haiku-4-5-20251001",
+		"claude-sonnet-5-5",
+		"gpt-6-luna-2026-09-01",
+		"gpt-6-sol-2026-09-01",
+		"gpt-6-sol-2026-10-01",
+	];
+	expect(resolveModelVersion("claude-haiku-4-5", harness)).toBe("20251001");
+	// Canonical and aliased forms of the same model find the same revision.
+	expect(resolveModelVersion("anthropic/claude-haiku-4.5", harness)).toBe(
+		"20251001",
+	);
+	expect(
+		resolveModelVersion("haiku", harness, {
+			haiku: "anthropic/claude-haiku-4.5",
+		}),
+	).toBe("20251001");
+	expect(resolveModelVersion("openai/gpt-6-luna", harness)).toBe("2026-09-01");
+	// The same dated id listed by two harnesses is still one revision.
+	expect(
+		resolveModelVersion("claude-haiku-4-5", [...harness, harness[0] as string]),
+	).toBe("20251001");
+	expect(resolveModelVersion("gpt-6-luna", harness)).toBe("2026-09-01");
+	expect(resolveModelVersion("claude-sonnet-4-5-20250929", harness)).toBe(
+		"20250929",
+	);
+	// No dated entry, or two revisions: unknown.
+	expect(resolveModelVersion("claude-sonnet-5-5", harness)).toBeNull();
+	expect(resolveModelVersion("gpt-6-sol", harness)).toBeNull();
 });
 
 test("a new known model_version starts an empty prior; null rows match any version", () => {
