@@ -548,11 +548,17 @@ export function attemptStore(
 		);
 		if (e.kind === "usage" && e.cost_source !== "reported") {
 			let cost: number | null = null;
-			const price =
+			// Exact key first; older snapshots may key the same model with a dated GPT id.
+			const snapshot =
 				suggestion && e.model
-					? store().getSuggestion(suggestion)?.price_snapshot?.[
-							stableModel(e.model)
-						]
+					? store().getSuggestion(suggestion)?.price_snapshot
+					: undefined;
+			const price =
+				snapshot && e.model
+					? (snapshot[e.model] ??
+						Object.entries(snapshot).find(
+							([k]) => stableModel(k) === stableModel(e.model),
+						)?.[1])
 					: null;
 			if (price) {
 				const rates = [

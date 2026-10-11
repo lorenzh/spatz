@@ -452,6 +452,7 @@ const STABLE = "openai/gpt-5";
 // Store holding rows the way spatz 0.4 wrote them (dated GPT keys), with one open suggestion s1.
 async function datedStore(
 	write: (old: ReturnType<typeof openStore>, path: string) => void,
+	over: Record<string, unknown> = {},
 ) {
 	const dir = directory();
 	const path = join(dir, "spatz.db");
@@ -480,6 +481,7 @@ async function datedStore(
 		is_test: false,
 		last_event_at: 1000,
 		closed_at: null,
+		...over,
 	});
 	write(old, path);
 	old.dispose();
@@ -734,4 +736,69 @@ test("stats group dated and stable outcomes as one pair", async () => {
 			.flatMap((t) => t.pairs)
 			.map((p) => [p.model, p.cost_usd_per_attempt]),
 	).toEqual([[STABLE, 0.1]]);
+});
+
+const pairsOf = async (path: string) =>
+	(await runStats({ dbPath: path, successQuality: 0.8 })).by_type.flatMap(
+		(t) => t.pairs,
+	);
+
+test("cost per attempt sums dated and stable events of one attempt", async () => {
+	const priced = (model: string, scope_key: string, cost_usd: number) => ({
+		...usageAt(model),
+		scope_key,
+		turn_id: scope_key,
+		cost_usd,
+		cost_source: "reported" as const,
+	});
+	const path = await datedStore((old) =>
+		old.upsertUsage(priced(DATED, "t1", 0.1)),
+	);
+	const store = openStore(path);
+	store.upsertUsage(priced(STABLE, "t2", 0.2));
+	store.reportAttempt({
+		suggestion_id: "s1",
+		model: STABLE,
+		effort: "high",
+		result: "pass",
+		at: 1200,
+	});
+	store.dispose();
+	expect((await pairsOf(path))[0]?.cost_usd_per_attempt).toBeCloseTo(0.3);
+});
+
+test("a stable usage is priced from a dated price snapshot", async () => {
+	const price = {
+		price_prompt: 0.001,
+		price_completion: 0.002,
+		price_cache_read: 0,
+		price_cache_write: 0,
+	};
+	const path = await datedStore(() => {}, {
+		price_snapshot: { [DATED]: price },
+	});
+	const store = openStore(path);
+	store.upsertUsage(usageAt(STABLE));
+	expect(
+		store.getUsage("s1", "transcript", "turn", STABLE)?.cost_usd,
+	).toBeCloseTo(0.05);
+	store.dispose();
+});
+
+test("a dated recommendation counts as adopted by its stable execution", async () => {
+	const path = await datedStore(() => {}, {
+		ranking: [{ model: DATED, effort: "high", estimate: 0.5, n: 0 }],
+	});
+	const store = openStore(path);
+	store.upsertUsage(usageAt(STABLE));
+	store.reportAttempt({
+		suggestion_id: "s1",
+		model: STABLE,
+		effort: "high",
+		result: "pass",
+		at: 1200,
+	});
+	store.dispose();
+	const stats = await runStats({ dbPath: path, successQuality: 0.8 });
+	expect(stats.by_type[0]?.adoption_rate).toBe(1);
 });

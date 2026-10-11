@@ -42,7 +42,7 @@ o AS (
 	SELECT s.id AS suggestion_id, s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success,
 		(o.attempt_id IS NULL OR o.attempt_id = o.root_id) AS first_attempt,
-		COALESCE(o.model = json_extract(s.ranking, '$[0].model')
+		COALESCE(o.model = ${stableModelSql("json_extract(s.ranking, '$[0].model')")}
 			AND o.effort = json_extract(s.ranking, '$[0].effort'), 0) AS adopted
 	FROM s JOIN oq o ON o.suggestion_id = s.id
 )`;
@@ -179,11 +179,14 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					1.0 * COUNT(*) FILTER (WHERE NOT known) / COUNT(*) AS incomplete_share
 				FROM ch GROUP BY task_type, model, effort
 			), ap AS (
-				SELECT s.task_type, ${stableModelSql("u.model")} AS model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, AVG(u.cost_usd) AS per_attempt
-				FROM s JOIN attempt_usage u ON u.suggestion_id = s.id
-				LEFT JOIN attempts a ON a.id = u.attempt_id
-				WHERE ($mv IS NULL OR a.model_version = $mv)
-				GROUP BY s.task_type, ${stableModelSql("u.model")}, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END
+				-- One cost per attempt and stable pair first, so dated and stable events of an attempt add up.
+				SELECT task_type, model, effort, AVG(cost) AS per_attempt FROM (
+					SELECT s.task_type, u.attempt_id, ${stableModelSql("u.model")} AS model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, SUM(u.cost_usd) AS cost
+					FROM s JOIN attempt_usage u ON u.suggestion_id = s.id
+					LEFT JOIN attempts a ON a.id = u.attempt_id
+					WHERE ($mv IS NULL OR a.model_version = $mv)
+					GROUP BY 1, 2, 3, 4
+				) GROUP BY task_type, model, effort
 			)
 			SELECT o.task_type, o.model, o.effort, COUNT(*) AS n, AVG(o.success) AS success_rate,
 				COALESCE(cs.n_chains, 0) AS n_chains,
