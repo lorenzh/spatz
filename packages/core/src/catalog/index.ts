@@ -52,7 +52,8 @@ export function toCanonicalId(
 	// Greedy prefix makes this hit the last digit-dash-digit.
 	if (id.startsWith("claude-"))
 		return `anthropic/${id.replace(/-\d{8}$/, "").replace(/^(.*\d)-(\d)/, "$1.$2")}`;
-	if (id.startsWith("gpt-")) return `openai/${id}`;
+	if (id.startsWith("gpt-"))
+		return `openai/${id.replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, "")}`;
 	return id;
 }
 
