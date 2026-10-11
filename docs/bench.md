@@ -34,7 +34,7 @@ All fields are required unless the rule says otherwise. Strings must not be empt
 | `task_version` | integer >= 1 | Bumps when the prompt, the start snapshot or the check change. |
 | `task_type` | string | One of the 16 labelled task types of taxonomy v2 (every type except `other`). The bench sets it, not the classifier. |
 | `difficulty` | `easy`, `medium`, `hard` | Bench label. |
-| `criticality` | string, optional | `none`, `business_logic`, `security` or `data_integrity`. Default `none`. |
+| `criticality` | string, optional | `none`, `business_logic`, `security` or `data_integrity`. Omitted means `none`; an explicit `null` is invalid and the row is rejected. |
 | `harness` | string | `claude-code`, `codex`, or the ACP agent name. |
 | `agent_version` | string | Version of the harness. |
 | `model` | string | Canonical OpenRouter id, for example `anthropic/claude-sonnet-5.5`. |
