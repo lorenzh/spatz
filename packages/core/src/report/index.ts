@@ -193,7 +193,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				COALESCE(cs.incomplete_share, 0) AS cost_incomplete_share
 			FROM o LEFT JOIN cs ON cs.task_type = o.task_type AND cs.model IS o.model AND cs.effort IS o.effort
 			LEFT JOIN ap ON ap.task_type = o.task_type AND ap.model IS o.model AND ap.effort IS o.effort
-			WHERE o.model IS NOT NULL GROUP BY o.task_type, o.model, o.effort ORDER BY o.model, o.effort`,
+			WHERE o.model IS NOT NULL GROUP BY o.task_type, o.model, o.effort ORDER BY o.model, o.effort IS NULL, o.effort`,
 		);
 		const decisions = rows<Decision>(
 			`SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty,
@@ -328,7 +328,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				`SELECT model, effort, COUNT(*) AS n, AVG(result = 'pass') AS success_rate,
 				CASE WHEN COUNT(estimated_cost_usd) = COUNT(*) THEN SUM(estimated_cost_usd) / NULLIF(SUM(result = 'pass'), 0) END AS estimated_cost_usd_per_success
 				FROM bench_attempts WHERE $type IS NULL OR task_type = $type
-				GROUP BY model, effort ORDER BY model, effort`,
+				GROUP BY model, effort ORDER BY model, effort IS NULL, effort`,
 			)
 			.all({ type: type ?? null });
 
