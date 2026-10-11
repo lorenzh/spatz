@@ -24,6 +24,8 @@ export interface AttemptStart extends AttemptContext {
 	key: string;
 	model: string | null;
 	effort: Effort | null;
+	/** Dated revision the harness reported for this attempt's model; kept on the attempt from its start. */
+	model_version?: string | null;
 	at: number;
 	prompt_id?: string | null;
 	turn_id?: string | null;

@@ -28,7 +28,7 @@ const USAGE = `usage:
   spatz --version
   spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
   spatz suggest "<task>" [--retry-of <suggestion_id>] [suggestion options]
-  spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--owns-usage] [--json]
+  spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--model-version <v>] [--owns-usage] [--json]
   spatz attempt bind <attempt_id> --call <id> --session <id> [--agent-id <id>]
   spatz attempt finalize --session <id> [--agent-id <id>]
   spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
@@ -101,7 +101,7 @@ function formatStats(r: StatsReport): string {
 		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cache_read_tokens=${t.cache_read_tokens}  cache_creation_tokens=${t.cache_creation_tokens}  cost_usd=${t.cost_usd ?? "-"}  incomplete=${t.incomplete}${t.incomplete ? " (excluded from cost; token totals may be lower bounds)" : ""}`,
 		...t.pairs.map(
 			(p) =>
-				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}  cost_per_success=${usd(p.cost_usd_per_success)}  tokens_per_success=${p.tokens_per_success === null ? "-" : Math.round(p.tokens_per_success)}  cost_per_attempt=${usd(p.cost_usd_per_attempt)}${p.cost_incomplete_share ? `  cost_incomplete=${pct(p.cost_incomplete_share)}` : ""}`,
+				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  chains=${p.n_chains}  success=${pct(p.success_rate)}  cost_per_success=${usd(p.cost_usd_per_success)}  tokens_per_success=${p.tokens_per_success === null ? "-" : Math.round(p.tokens_per_success)}  cost_per_attempt=${usd(p.cost_usd_per_attempt)}${p.cost_incomplete_share ? `  cost_incomplete=${pct(p.cost_incomplete_share)}` : ""}`,
 		),
 	]);
 	const opt = (x: number | null) => (x === null ? "-" : pct(x));
@@ -250,6 +250,9 @@ export async function main(
 						effort: required(v.effort, "--effort"),
 					}),
 					...(v.turn !== undefined && { turn: required(v.turn, "--turn") }),
+					...(v["model-version"] !== undefined && {
+						modelVersion: required(v["model-version"], "--model-version"),
+					}),
 					ownsUsage: v["owns-usage"] ?? false,
 				};
 				run = async () => {

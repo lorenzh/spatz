@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [import-eval, bench, eval row, run_id, dry-run, pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [import-eval, bench, eval row, run_id, dry-run, pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, n_chains, chains, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -247,13 +247,14 @@ The mod uses these commands to register execution identity. The routing skill do
 
 ```sh
 spatz attempt start <suggestion_id> --key <turnId:index> --model <m> \
-  [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--owns-usage] [--json]
+  [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--model-version <v>] [--owns-usage] [--json]
 spatz attempt bind <attempt_id> --call <tool_use_id> --session <id> [--agent-id <id>]
 spatz attempt finalize --session <id> [--agent-id <id>]
 ```
 
 `start` registers a segment before execution. A repeated start key returns the same attempt.
 Unknown effort stays null. `--owns-usage` marks mod usage ownership for this context.
+`--model-version` stores the model revision the caller knows. Without it, start takes the date of a dated `--model`, or the revision the harness catalog lists for an undated alias. Otherwise the version stays null.
 `bind` connects a hook/mod tool-call ID to the active attempt.
 `finalize` closes observed execution without inventing a successful verdict.
 The main session omits `--agent-id`. Each subagent supplies its own ID.
@@ -475,7 +476,7 @@ This command shows how well each pair worked, per task type. It reads the databa
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `--type <t>` | task type | all types | Show only this task type. Allowed: `code.bugfix`, `code.feature`, `code.refactor`, `code.test`, `code.explain`, `investigation`, `review`, `spec`, `planning`, `ops`, `design.ui`, `design.visual`, `design.3d`, `writing`, `research`, `data`, `other`. Another value gives exit code 2. |
-| `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. |
+| `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. Also filters the per-attempt cost. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 
 Text output ends with one `outcome coverage <source>` line per source (`claude-code-mod`, `claude-code`, `codex`, `cli`). Coverage is the share of suggestions with an outcome or an explicit `unknown`. A source below 80 % shows a warning. JSON has the same data as `coverage_by_source`.
@@ -616,6 +617,8 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `coverage` | number, 0 to 1 | Share of suggestions that have an outcome. All task types count, also with `--type`. |
 | `learned_success` | number or null | First-attempt success rate of learned root decisions in cells with both learned and control outcomes, weighted by their counts. |
 | `learned_vs_control` | object | `itt`, `qualified`, `fallback` (each `decisions`, `outcomes`, `coverage`, `rate`, `control_rate`, `diff`, `ci95`), `control` and `cells`. See [recommendation.md](recommendation.md). |
+| `by_type[].pairs[].n` | number | Attempt outcomes of the pair. |
+| `by_type[].pairs[].n_chains` | number | Completed root chains rooted at the pair. A retried chain counts once here and once per attempt in `n`. |
 | `by_type[].pairs[]` cost fields | numbers or null | `cost_usd_per_success`, `tokens_per_success`, `cost_usd_per_attempt`, `orchestration_cost_usd`, `cost_incomplete_share`. |
 | `fallback_success` | number or null | The same for `learned-fallback` root decisions (best estimate, no pair met the limits). |
 | `control_success` | number or null | Success rate of the control group in the cells and weights of `learned_success`. |

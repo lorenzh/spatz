@@ -49,6 +49,8 @@ const live = (c: Candidate, n: number, successes: number): CellStat => ({
 	effort: c.effort,
 	n,
 	sum_quality: successes,
+	n_live: n,
+	successes_live: successes,
 	successes,
 });
 function run(

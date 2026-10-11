@@ -215,6 +215,10 @@ export interface CellStat {
 	sum_quality: number;
 	/** Outcomes with quality >= successQuality; learning uses these, not sum_quality. */
 	successes: number;
+	/** Live first attempts only (no legacy outcomes); the learning gates count these. */
+	n_live: number;
+	/** Successes among the live first attempts. */
+	successes_live: number;
 }
 
 // ---------- Suggestion (spec "Output") ----------
@@ -233,7 +237,7 @@ export interface RankingEntry {
 	estimate: number;
 	/** Live first attempts; the only count gates use. */
 	n: number;
-	/** Prior weight from the bench snapshot (min(2, n_eff)); absent without a prior. */
+	/** Prior weight from the bench snapshot (min(priorWeight, n_eff)); absent without a prior. */
 	n_prior?: number;
 	/** Raw bench runs behind the prior; absent without a prior. */
 	n_bench?: number;
@@ -436,7 +440,10 @@ export interface SuggestionRecord {
 export interface PairStats {
 	model: string;
 	effort: Effort | null;
+	/** Attempt outcomes of this pair. */
 	n: number;
+	/** Completed root chains rooted at this pair. */
+	n_chains: number;
 	/** Share of outcomes with quality >= 0.8. */
 	success_rate: number;
 	/** Chain spend (attempts only) of completed chains rooted at this pair with known cost / their successes. null without a success or cost. */

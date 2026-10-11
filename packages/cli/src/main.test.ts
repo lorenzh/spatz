@@ -14,6 +14,7 @@ import type {
 import { type CliIO, main } from "./main.ts";
 
 const nocost = {
+	n_chains: 0,
 	cost_usd_per_success: null,
 	tokens_per_success: null,
 	cost_usd_per_attempt: null,
@@ -813,8 +814,8 @@ describe("stats", () => {
 		expect(stdout()).toBe(
 			[
 				"code.bugfix  n=4  adoption=75%  input_tokens=1200  output_tokens=340  cache_read_tokens=0  cache_creation_tokens=0  cost_usd=-  incomplete=2 (excluded from cost; token totals may be lower bounds)",
-				"  openai/gpt-6-sol:medium  n=3  success=67%  cost_per_success=-  tokens_per_success=-  cost_per_attempt=-",
-				"  anthropic/claude-opus-5.5:-  n=1  success=100%  cost_per_success=-  tokens_per_success=-  cost_per_attempt=-",
+				"  openai/gpt-6-sol:medium  n=3  chains=0  success=67%  cost_per_success=-  tokens_per_success=-  cost_per_attempt=-",
+				"  anthropic/claude-opus-5.5:-  n=1  chains=0  success=100%  cost_per_success=-  tokens_per_success=-  cost_per_attempt=-",
 				"itt: learned=-  control=-  diff=-  outcomes=0/0\nqualified: learned=-  control=-  diff=-  outcomes=0/0\nfallback: learned=-  control=-  diff=-  outcomes=0/0\ncoverage: 80%  learned_success: 70%  fallback_success: -  control_success: -  fallback_control_success: -",
 				"dispatches: 0  routed_by_mod: 0  swapped: 0",
 				"fallbacks: -",
@@ -895,6 +896,8 @@ describe("mod CLI", () => {
 					"child",
 					"--turn",
 					"t",
+					"--model-version",
+					"20251001",
 					"--owns-usage",
 					"--json",
 				],
@@ -936,6 +939,7 @@ describe("mod CLI", () => {
 				session: "session",
 				agentId: "child",
 				turn: "t",
+				modelVersion: "20251001",
 				ownsUsage: true,
 			},
 			{ attempt: "a1", call: "call1", session: "session", agentId: "child" },

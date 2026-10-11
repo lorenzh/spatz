@@ -237,7 +237,46 @@ describe("schema", () => {
 					n: 2,
 					sum_quality: 2,
 					successes: 2,
+					n_live: 0,
+					successes_live: 0,
 				},
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("legacy outcomes inform the estimate but not the live first-attempt counts of the gates", () => {
+		const path = tempDb();
+		const store = open(path);
+		const db = new Database(path);
+		try {
+			for (const id of ["old1", "old2", "live"])
+				store.insertSuggestion(suggestion({ id }));
+			for (const id of ["old1", "old2"]) {
+				db.run(
+					"INSERT INTO usages (suggestion_id, model, effort, source, scope_key, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_sidechain, rounds, note, reported_at, turn_id, agent_id) VALUES (?, 'm/a', 'low', 'report', '', 0, 0, 0, 0, 0, NULL, NULL, 1, NULL, NULL)",
+					[id],
+				);
+				db.run(
+					"INSERT INTO signals VALUES (?, 'report', 1, 1, 'report', 1, NULL, NULL)",
+					[id],
+				);
+			}
+			store.reportAttempt({
+				suggestion_id: "live",
+				model: "m/a",
+				effort: "low",
+				at: 2000,
+				result: "fail",
+			});
+			expect(store.cellStats("code.bugfix")).toEqual([
+				expect.objectContaining({
+					n: 3,
+					successes: 2,
+					n_live: 1,
+					successes_live: 0,
+				}),
 			]);
 		} finally {
 			db.close();
@@ -677,6 +716,8 @@ describe("cellStats", () => {
 					n: 2,
 					sum_quality: 1.5,
 					successes: 1,
+					n_live: 2,
+					successes_live: 1,
 				},
 				{
 					task_type: "code.bugfix",
@@ -686,6 +727,8 @@ describe("cellStats", () => {
 					n: 1,
 					sum_quality: 1,
 					successes: 1,
+					n_live: 1,
+					successes_live: 1,
 				},
 				{
 					task_type: "code.bugfix",
@@ -695,6 +738,8 @@ describe("cellStats", () => {
 					n: 1,
 					sum_quality: 1,
 					successes: 1,
+					n_live: 1,
+					successes_live: 1,
 				},
 			]),
 		);
@@ -722,8 +767,24 @@ describe("cellStats", () => {
 		expect(stats).toHaveLength(2);
 		expect(stats).toEqual(
 			expect.arrayContaining([
-				{ ...cell, effort: "low", n: 2, sum_quality: 1, successes: 1 },
-				{ ...cell, effort: "high", n: 3, sum_quality: 2.5, successes: 2 },
+				{
+					...cell,
+					effort: "low",
+					n: 2,
+					sum_quality: 1,
+					successes: 1,
+					n_live: 2,
+					successes_live: 1,
+				},
+				{
+					...cell,
+					effort: "high",
+					n: 3,
+					sum_quality: 2.5,
+					successes: 2,
+					n_live: 3,
+					successes_live: 2,
+				},
 			]),
 		);
 	});
@@ -887,6 +948,8 @@ test("none-only models normalize missing usage effort and pool legacy null rows"
 			n: 3,
 			sum_quality: 3,
 			successes: 3,
+			n_live: 3,
+			successes_live: 3,
 		},
 	]);
 });

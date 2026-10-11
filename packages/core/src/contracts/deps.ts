@@ -286,6 +286,8 @@ export interface SpatzApi {
 		session: string;
 		agentId?: string;
 		turn?: string;
+		/** Model revision the caller knows; else taken from a dated id or the harness catalog. */
+		modelVersion?: string;
 		ownsUsage?: boolean;
 	}): Promise<import("./attempts.ts").AttemptRecord>;
 	bindAttempt(input: {

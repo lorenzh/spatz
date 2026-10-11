@@ -319,6 +319,67 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 	]);
 });
 
+test("legacy null-effort none-only pairs keep chain and attempt cost", async () => {
+	const model = "anthropic/claude-haiku-4.5";
+	sug("nn", { top: [model, "none"] });
+	usage("nn", model, null, [10, 10]);
+	store.reportAttempt({
+		suggestion_id: "nn",
+		model,
+		effort: null as unknown as Effort,
+		result: "pass",
+		at: 1,
+	});
+	const db = new Database(dbPath);
+	db.run(
+		"UPDATE attempt_events SET cost_usd = 0.4, cost_source = 'priced' WHERE suggestion_id = 'nn' AND kind = 'usage'",
+	);
+	db.close();
+	const r = await runStats({
+		dbPath,
+		successQuality: 0.8,
+		noneOnlyModels: [model],
+	});
+	expect(r.by_type[0]?.pairs).toMatchObject([
+		{
+			model,
+			effort: "none",
+			n: 1,
+			cost_usd_per_success: 0.4,
+			cost_usd_per_attempt: 0.4,
+		},
+	]);
+});
+
+test("per-attempt cost counts only attempts of the selected model version", async () => {
+	for (const [id, version, cost] of [
+		["av1", "20250101", 0.1],
+		["av2", "20260101", 0.5],
+	] as const) {
+		sug(id);
+		usage(id, "m/a", "low", [1, 1]);
+		store.reportAttempt({
+			suggestion_id: id,
+			model: "m/a",
+			effort: "low",
+			result: "pass",
+			at: 2,
+			model_version: version,
+		});
+		const db = new Database(dbPath);
+		db.run(
+			`UPDATE attempt_events SET cost_usd = ${cost}, cost_source = 'priced' WHERE suggestion_id = '${id}' AND kind = 'usage'`,
+		);
+		db.close();
+	}
+	const perAttempt = async (modelVersion?: string) =>
+		(await runStats({ dbPath, successQuality: 0.8, modelVersion })).by_type[0]
+			?.pairs[0]?.cost_usd_per_attempt;
+	expect(await perAttempt("20250101")).toBeCloseTo(0.1, 12);
+	expect(await perAttempt("20260101")).toBeCloseTo(0.5, 12);
+	expect(await perAttempt()).toBeCloseTo(0.3, 12);
+});
+
 test("stats filters by model_version and keeps old versions visible under their own", async () => {
 	for (const [id, version, result] of [
 		["v1", "20250101", "pass"],
@@ -1009,6 +1070,19 @@ test("a chain with an attempt lacking usage evidence is excluded from spend", as
 	).by_type[0]?.pairs.find((x) => x.model === "m/a");
 	expect(p?.cost_usd_per_success).toBeNull();
 	expect(p?.cost_incomplete_share).toBe(1);
+});
+
+test("pairs count attempts in n and completed chains in n_chains", async () => {
+	sug("rc");
+	report("rc", "m/a", "low", "fail", [10, 10]);
+	retry("rc", "pass", false);
+	const pairs = (await runStats({ dbPath, successQuality: 0.8 })).by_type[0]
+		?.pairs;
+	// The chain belongs to its root pair (m/a); the retry attempt is one outcome of m/b.
+	expect(pairs).toMatchObject([
+		{ model: "m/a", n: 1, n_chains: 1 },
+		{ model: "m/b", n: 1, n_chains: 0 },
+	]);
 });
 
 test("bench rows show in their own section and leave live stats unchanged", async () => {

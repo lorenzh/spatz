@@ -21,7 +21,9 @@ For each candidate in a cell, spatz computes an estimate of the success rate:
 estimate = (1 + successes) / (2 + n)
 ```
 
-`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `successes` counts the outcomes with quality `≥ 0.8` (`successQuality`). A partial result is no success. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each first-attempt outcome moves the estimate towards the observed success rate. Only live first attempts count in `n`.
+`n` counts scored first attempts of the candidate in the cell, plus frozen legacy and eval outcomes. `successes` counts the outcomes with quality `≥ 0.8` (`successQuality`). A partial result is no success. This is the mean of a Beta distribution that starts at 0.5. A candidate without outcomes has the estimate 0.5. Each outcome moves the estimate towards the observed success rate.
+
+Learning gates use a separate count of live first attempts. Frozen legacy outcomes can inform the estimate but cannot qualify a pair or meet the critical minimum.
 
 Only some outcomes count:
 
@@ -42,7 +44,8 @@ A sequence `A → B → A` keeps three attempts even when the first and last pai
 
 ### Model versions
 
-Outcomes do not decay with age. Instead, each attempt stores a `model_version` when the harness shows a dated model id (for example `claude-sonnet-4-5-20250929` gives `20250929`). Otherwise it stores null.
+Outcomes do not decay with age. Instead, each attempt stores a `model_version` when the harness shows a dated model id (for example `claude-sonnet-4-5-20250929` gives `20250929`). For an undated alias, it uses the revision the harness reports: the date of the one dated entry for that alias in the harness model catalog (for example `claude-haiku-4-5` gives `20251001`). Otherwise it stores null.
+The version is stored when the attempt starts. A Codex turn that switches models keeps the version of each model on that model's attempt.
 For each model, the newest known version is the live one. Outcomes of an older known version do not count, so a new version starts with an empty estimate. Outcomes with a null version count for every version.
 The old outcomes stay in the database. `spatz stats --model-version <v>` shows them.
 
@@ -69,7 +72,7 @@ estimate = (1 + successes + a) / (2 + n + w)
 
 Live outcomes dominate quickly. A cell with a perfect bench record starts at 7/8. After 20 live failures the estimate is 7/28 = 0.25.
 
-The prior changes the estimate only. `n` stays the count of live first attempts. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use `n` and live `successes` only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies. The reason names `version_match` and the source, for example `source: release snapshot 3ce2237 of 2026-10-10 (2 d old)`. `spatz stats` shows the snapshot in use (see [cli.md](cli.md#spatz-stats)).
+The prior changes the estimate only. `n` is the count of scored first attempts plus frozen legacy and eval outcomes. Gates (`n ≥ 5`, critical `n ≥ 10` and the lower bound) use live first-attempt counts and successes only. The ranking shows `n_prior` (= `w`) and `n_bench` (raw bench runs) next to `n` when a prior applies. The reason names `version_match` and the source, for example `source: release snapshot 3ce2237 of 2026-10-10 (2 d old)`. `spatz stats` shows the snapshot in use (see [cli.md](cli.md#spatz-stats)).
 
 **Version.** A cell applies when its `model_version` equals the live model version (`version_match: exact`) or either one is null (`unknown`). A known different version seeds nothing.
 
@@ -81,7 +84,7 @@ The prior changes the estimate only. `n` stays the count of live first attempts.
 
 ### Enough data and pooling
 
-A cell has enough data when at least one candidate of the catalog has `n ≥ 5` in it.
+A cell has enough data when at least one candidate of the catalog has at least five live first attempts in it.
 
 If the cell has too little data, spatz pools the outcomes of the same task type over the same and harder difficulty levels:
 
@@ -99,13 +102,13 @@ With `SPATZ_FAMILY_POOLING=1`, a level that still has too little data pools next
 
 spatz applies the first rule that matches. The values are the start values in `DEFAULT_TUNING` (`packages/core/src/contracts/types.ts`).
 
-1. **Critical task.** If the criticality is not `none`, spatz uses the critical rule. A cheaper candidate wins only with `n ≥ 10` in this cell and a 5 % lower credible bound `≥ 0.9`. The bound is the 5 % quantile of Beta(1 + successes, 1 + n − successes). With only passes, a candidate needs 28 outcomes. spatz takes the cheapest such candidate (strategy `learned`). Otherwise it recommends the most expensive candidate (strategy `strongest`). There is no pooling, no control and no exploration for critical tasks.
+1. **Critical task.** If the criticality is not `none`, spatz uses the critical rule. A cheaper candidate wins only with at least 10 live first attempts in this cell and a 5 % lower credible bound `≥ 0.9`. The bound is the 5 % quantile of Beta(1 + live successes, 1 + live first attempts − live successes). With only passes, a candidate needs 28 outcomes. spatz takes the cheapest such candidate (strategy `learned`). Otherwise it recommends the most expensive candidate (strategy `strongest`). There is no pooling, no control and no exploration for critical tasks.
 2. **Random draw.** spatz draws one number `u` in [0, 1) per suggestion.
    - If `u < 0.1`, the suggestion is in the control group. spatz recommends the most expensive candidate (strategy `strongest`, `control: true`).
    - If `0.1 ≤ u < 0.2`, spatz explores after steps 3 to 7. See [Exploration](#exploration).
    - If `u ≥ 0.2`, spatz continues with step 3.
-3. **Learned choice in the cell.** If the cell has enough data, spatz takes the cheapest candidate with `n ≥ 5` and estimate `≥ 0.8` (strategy `learned`).
-4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate among the candidates with `n ≥ 5`. Candidates with fewer outcomes cannot win this step. On a tie, the more expensive candidate wins (strategy `learned-fallback`). This strategy marks a pick that met no limit.
+3. **Learned choice in the cell.** If the cell has enough data, spatz takes the cheapest candidate with at least five live first attempts and estimate `≥ 0.8` (strategy `learned`).
+4. **Best estimate in the cell.** If the cell has enough data but no candidate meets both limits, spatz takes the candidate with the highest estimate among the candidates with at least five live first attempts. Candidates with fewer live first attempts cannot win this step. On a tie, the more expensive candidate wins (strategy `learned-fallback`). This strategy marks a pick that met no limit.
 5. **Pooled level.** If the cell has too little data, spatz repeats steps 3 and 4 on the pooled levels.
 6. **Jev choice.** If the pooled levels also have too little data, spatz takes the best candidate of Jev (strategy `jev-choice`).
 7. **Rules.** If Jev was not involved, or its answer is not in the catalog, spatz recommends the most expensive candidate (strategy `rules`).
@@ -163,7 +166,8 @@ The control group gets the most expensive candidate in 10 % of the normal sugges
 | `control_success` | Success rate of the control group in the cells of `learned_success`. |
 | `fallback_control_success` | Success rate of the control group in the cells of `fallback_success`. |
 | `learned_vs_control` | Intent-to-treat comparison: `itt` (every root decision of strategy `learned` or `learned-fallback`, explored and retried ones included; retry children are not decisions), `qualified` and `fallback` (not explored), each with `decisions`, `outcomes`, `coverage` (outcomes per decision), `rate`, `control_rate`, `diff` and a bootstrap 95 % interval `ci95` of `diff`. `cells` shows the mix of outcomes per task type and difficulty. |
-| `cost_usd_per_success`, `tokens_per_success` | Per pair: spend of completed chains rooted at the pair, divided by their successes. `null` without a success. Orchestration spend is listed apart as `orchestration_cost_usd`. Chains with incomplete cost evidence (an unpriced or lower-bound usage, or an attempt without usage) count in `n` but not in the spend; `cost_incomplete_share` shows their share. |
+| `n`, `n_chains` | Per pair: `n` counts attempt outcomes; `n_chains` counts completed root chains rooted at the pair. A retried chain adds one to `n` per attempt and one to `n_chains`. |
+| `cost_usd_per_success`, `tokens_per_success` | Per pair: spend of completed chains rooted at the pair, divided by their successes. `null` without a success. Orchestration spend is listed apart as `orchestration_cost_usd`. Chains with incomplete cost evidence (an unpriced or lower-bound usage, or an attempt without usage) count in `n_chains` but not in the spend; `cost_incomplete_share` shows their share. |
 | `cost_usd_per_attempt` | Per pair: mean cost of one attempt. |
 | `coverage` | Share of suggestions (without `--dry-run`) that have an outcome. |
 | `adoption` | Per task type: share of root decisions whose first actual pair is the recommended pair. |
@@ -251,7 +255,7 @@ The cell (`code.bugfix`, `easy`) has this history:
 
 1. The criticality is `none`. The critical rule does not apply.
 2. `u = 0.5` is not below 0.2. No control, no exploration.
-3. The cell has enough data: `sonnet:medium` and `opus:high` have `n ≥ 5`. Both have an estimate `≥ 0.8`. `sonnet:medium` is cheaper, so it wins.
+3. The cell has enough data: `sonnet:medium` and `opus:high` each have at least five live first attempts. Both have an estimate `≥ 0.8`. `sonnet:medium` is cheaper, so it wins.
 
 The ranking is `sonnet:medium`, `sonnet:high`, `opus:low`.
 

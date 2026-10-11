@@ -158,7 +158,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		// incomplete cost evidence (cost_usd NULL, lower bounds, or an attempt without usage) count in n_chains but not in the spend.
 		const pairs = rows<PairStats & { task_type: TaskType }>(
 			`, ch AS (
-				SELECT s.task_type, c.model, c.effort, c.success, c.cost_usd,
+				SELECT s.task_type, c.model, CASE WHEN c.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE c.effort END AS effort, c.success, c.cost_usd,
 					COALESCE(c.cost_usd IS NOT NULL AND c.incomplete = 0 AND NOT EXISTS (
 						SELECT 1 FROM attempts a WHERE a.root_id = c.root_id
 						AND NOT EXISTS (SELECT 1 FROM attempt_usage u WHERE u.attempt_id = a.id)), 0) AS known,
@@ -174,13 +174,18 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					SUM(spend) FILTER (WHERE known) AS spend,
 					SUM(tokens) FILTER (WHERE known) AS tokens,
 					SUM(orch) FILTER (WHERE known) AS orch,
+					COUNT(*) AS n_chains,
 					1.0 * COUNT(*) FILTER (WHERE NOT known) / COUNT(*) AS incomplete_share
 				FROM ch GROUP BY task_type, model, effort
 			), ap AS (
-				SELECT s.task_type, u.model, u.effort, AVG(u.cost_usd) AS per_attempt
-				FROM s JOIN attempt_usage u ON u.suggestion_id = s.id GROUP BY s.task_type, u.model, u.effort
+				SELECT s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, AVG(u.cost_usd) AS per_attempt
+				FROM s JOIN attempt_usage u ON u.suggestion_id = s.id
+				LEFT JOIN attempts a ON a.id = u.attempt_id
+				WHERE ($mv IS NULL OR a.model_version = $mv)
+				GROUP BY s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END
 			)
 			SELECT o.task_type, o.model, o.effort, COUNT(*) AS n, AVG(o.success) AS success_rate,
+				COALESCE(cs.n_chains, 0) AS n_chains,
 				CASE WHEN cs.wins > 0 THEN cs.spend / cs.wins END AS cost_usd_per_success,
 				CASE WHEN cs.wins > 0 THEN cs.tokens / cs.wins END AS tokens_per_success,
 				ap.per_attempt AS cost_usd_per_attempt,

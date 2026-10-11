@@ -2861,6 +2861,46 @@ test.each(["low", "high"] as const)(
 	},
 );
 
+test("startAttempt stores the revision of an undated alias, from the caller or the harness catalog", async () => {
+	const dbPath = join(dir, "alias-version.db");
+	const s = setup({ dbPath, openStore });
+	const { suggestion_id } = await s.api.suggest({
+		...suggestInput(),
+		session: SESSION,
+		turn: "mod-turn",
+		source: "claude-code-mod",
+	});
+	const start = (key: string, model: string, modelVersion?: string) =>
+		s.api.startAttempt({
+			suggestionId: suggestion_id,
+			key,
+			model,
+			session: SESSION,
+			turn: "mod-turn",
+			...(modelVersion && { modelVersion }),
+		});
+	// The bundled Claude Code catalog lists only claude-haiku-4-5-20251001 for this alias.
+	expect(await start("mod-turn:0", "claude-haiku-4-5")).toMatchObject({
+		model: "anthropic/claude-haiku-4.5",
+		model_version: "20251001",
+	});
+	expect(await start("mod-turn:4", "anthropic/claude-haiku-4.5")).toMatchObject(
+		{
+			model: "anthropic/claude-haiku-4.5",
+			model_version: "20251001",
+		},
+	);
+	expect(
+		await start("mod-turn:1", "claude-sonnet-5-5", "20261001"),
+	).toMatchObject({ model_version: "20261001" });
+	expect(await start("mod-turn:2", "claude-opus-5-5")).toMatchObject({
+		model_version: null,
+	});
+	await expect(start("mod-turn:3", "claude-opus-5-5", " ")).rejects.toThrow(
+		"invalid model version",
+	);
+});
+
 test("mod low 100/high 200 steps own usage and bind hook tools despite different prompt and turn IDs", async () => {
 	const dbPath = join(dir, "mod-steps.db");
 	const s = setup({ dbPath, openStore });
@@ -3120,6 +3160,50 @@ test("Codex mixed pair turn records its measured total once without inventing an
 				input_tokens: 300,
 				output_tokens: 30,
 			},
+		]);
+	} finally {
+		db.close();
+	}
+});
+
+test("Codex mixed pair turn keeps the known revision of each segment's attempt", async () => {
+	const dbPath = join(dir, "mixed-version.db");
+	const s = setup({ dbPath, openStore });
+	await s.api.suggest(suggestInput());
+	const file = join(dir, "mixed-version.jsonl");
+	await Bun.write(
+		file,
+		[
+			{
+				type: "turn_context",
+				payload: {
+					turn_id: "mixed",
+					model: "gpt-6-luna-2026-09-01",
+					effort: "low",
+				},
+			},
+			{
+				type: "turn_context",
+				payload: {
+					turn_id: "mixed",
+					model: "gpt-6-sol-2026-10-01",
+					effort: "high",
+				},
+			},
+		]
+			.map((row) => JSON.stringify(row))
+			.join("\n"),
+	);
+	await s.api.importRollout({ file, suggestionId: ID1 });
+	const db = new Database(dbPath);
+	try {
+		expect(
+			db
+				.query("SELECT model,model_version FROM attempts ORDER BY ordinal")
+				.all(),
+		).toEqual([
+			{ model: "openai/gpt-6-luna-2026-09-01", model_version: "2026-09-01" },
+			{ model: "openai/gpt-6-sol-2026-10-01", model_version: "2026-10-01" },
 		]);
 	} finally {
 		db.close();

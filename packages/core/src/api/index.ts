@@ -12,6 +12,7 @@ import {
 	buildCatalog,
 	modelVersion,
 	parseModelsArg,
+	resolveModelVersion,
 	toCanonicalId,
 } from "../catalog/index.ts";
 import { loadOpenRouterModels } from "../catalog/openrouter.ts";
@@ -33,13 +34,7 @@ import {
 	evalRowError,
 	parseEvalRow,
 } from "../contracts/eval-row.ts";
-import type {
-	AgentToolResponse,
-	BashToolInput,
-	BashToolResponse,
-	CodexHookInput,
-	HookInput,
-} from "../contracts/hooks.ts";
+import type { CodexHookInput } from "../contracts/hooks.ts";
 import {
 	AGENTS,
 	type Config,
@@ -53,18 +48,21 @@ import {
 	TASK_TYPES,
 	type UsageRecord,
 } from "../contracts/types.ts";
-import { closeOnEnd, fromClaudeHook, fromCodexHook } from "../events/index.ts";
+import {
+	closeOnEnd,
+	fromClaudeHook,
+	fromCodexHook,
+	type HarnessEvent,
+	signalFromToolRun,
+	suggestionFromToolRun,
+} from "../events/index.ts";
 import { recommend } from "../recommend/index.ts";
 import type { StatsOptions } from "../report/index.ts";
 import {
 	detectCommandKind,
-	effortFromHook,
-	extractSuggestionId,
-	isIgnoredHookInput,
 	type PrInfo,
 	parseHookInput,
 	resultFromPr,
-	signalFromBashEvent,
 	suggestionFromPr,
 } from "../signals/index.ts";
 import {
@@ -196,6 +194,15 @@ export function createApi(
 			ttlMs: cfg.tuning.openRouterCacheMs,
 		});
 	}
+	/** Model id -> revision: a dated id's own, else the one the harness catalog reports for an undated alias. */
+	async function versionResolver() {
+		const cfg = await getConfig();
+		const catalog = await cachedHarnessCatalog();
+		const ids = Object.values(catalog.harnesses).flatMap((h) =>
+			h.models.map((m) => m.id),
+		);
+		return (id: string) => resolveModelVersion(id, ids, cfg.aliases);
+	}
 	async function availableEfforts() {
 		const cfg = await getConfig();
 		const catalog = await cachedHarnessCatalog();
@@ -297,47 +304,69 @@ export function createApi(
 		return null;
 	}
 
-	async function onHook(input: HookInput, cfg: Config): Promise<void> {
-		if (isIgnoredHookInput(input)) return;
+	const contextOf = (event: HarnessEvent) => ({
+		harness: event.harness,
+		session_key: event.session_id,
+		agent_key: event.agent_id ?? "",
+	});
+
+	/** A `spatz <task>` run in the session links its suggestion to this session and agent. */
+	function linkFromToolRun(store: Store, event: HarnessEvent, cfg: Config) {
+		const id = suggestionFromToolRun(event);
+		if (!id) return false;
+		const codex = event.harness === "codex";
+		const context = contextOf(event);
+		store.linkSession(
+			id,
+			event.session_id,
+			codex ? null : (event.turn_id ?? null),
+			store.getSuggestion(id)?.created_at ?? deps.clock.now(),
+			event.agent_id,
+			codex ? "codex" : undefined,
+		);
+		// Codex turns have no per-message transcript identity: bind the turn to the linked attempt.
+		const attempt = codex ? store.outcome(id)?.attempt_id : undefined;
+		if (attempt && event.turn_id)
+			store.bindAttempt({
+				...context,
+				attempt_id: attempt,
+				id_kind: "turn",
+				external_id: event.turn_id,
+			});
+		store.reconcileAttempts(context, cfg.tuning.openWindowMs);
+		return true;
+	}
+
+	async function onClaudeEvent(event: HarnessEvent, cfg: Config) {
 		const now = deps.clock.now();
-		const context = {
-			harness: "claude-code",
-			session_key: input.session_id,
-			agent_key: input.agent_id ?? "",
-		};
-		const sub = !!input.agent_id;
-		const path =
-			input.hook_event_name === "SubagentStop"
-				? input.agent_transcript_path
-				: input.transcript_path;
+		const context = contextOf(event);
+		const sub = !!event.agent_id;
+		const ended = event.type === "session_end" || event.type === "subagent_end";
+		const versionOf = await versionResolver();
 		const messages =
-			(await readTranscript(path, (text) =>
+			(await readTranscript(event.transcript_path ?? "", (text) =>
 				sub
 					? subagentMessages(text)
-					: mainTurnMessages(text, input.prompt_id ?? ""),
+					: mainTurnMessages(text, event.turn_id ?? ""),
 			)) ?? [];
 		return withStore(async (store) => {
 			const ownsUsage = store.attemptOwnsUsage(context);
-			const effort = sub || ownsUsage ? null : effortFromHook(input);
+			const effort = sub || ownsUsage ? null : (event.effort ?? null);
 			const events: AttemptEvent[] = [];
 			for (const message of messages) {
 				const base = {
 					...context,
-					prompt_id: message.prompt_id ?? input.prompt_id ?? null,
+					prompt_id: message.prompt_id ?? event.turn_id ?? null,
 					message_id: message.id,
 					source_seq: message.source_seq,
 					occurred_at: Number.isFinite(message.at) ? message.at : null,
 					received_at: now,
 					model: toCanonicalId(message.model, cfg.aliases),
-					model_version: modelVersion(message.model),
+					model_version: versionOf(message.model),
 					effort,
 					revision: 0,
 				};
-				if (
-					!ownsUsage &&
-					(input.hook_event_name === "Stop" ||
-						input.hook_event_name === "SubagentStop")
-				)
+				if (!ownsUsage && ended)
 					events.push({
 						...base,
 						event_id: `message:${message.id}`,
@@ -359,94 +388,52 @@ export function createApi(
 							call_id: call.id,
 						});
 			}
+			if (event.type === "agent_dispatch" && event.child_agent_id)
+				store.upsertDispatch({
+					session_id: event.session_id,
+					agent_id: event.child_agent_id,
+					tool_use_id: event.call_id,
+					requested_model: await requestedDispatchModel(
+						event.requested_model,
+						event.requested_agent_type,
+						event.cwd,
+					),
+					requested_agent_type: event.requested_agent_type ?? null,
+					answered_model: await dispatchModel(event.answered_model),
+					suggestion_id: null,
+				});
+			const signal = signalFromToolRun(event);
 			if (
-				input.hook_event_name === "PostToolUse" ||
-				input.hook_event_name === "PostToolUseFailure"
+				event.type === "tool_run" &&
+				!linkFromToolRun(store, event, cfg) &&
+				signal
 			) {
 				const message = messages.find((m) =>
-					m.calls.some((call) => call.id === input.tool_use_id),
+					m.calls.some((call) => call.id === event.call_id),
 				);
-				if (
-					input.hook_event_name === "PostToolUse" &&
-					input.tool_name === "Agent"
-				) {
-					const response = input.tool_response as AgentToolResponse | null;
-					if (typeof response?.agentId === "string" && response.agentId) {
-						const requested = input.tool_input as {
-							model?: unknown;
-							subagent_type?: unknown;
-						} | null;
-						store.upsertDispatch({
-							session_id: input.session_id,
-							agent_id: response.agentId,
-							tool_use_id: input.tool_use_id,
-							requested_model: await requestedDispatchModel(
-								requested?.model,
-								requested?.subagent_type,
-								input.cwd,
-							),
-							requested_agent_type:
-								typeof requested?.subagent_type === "string"
-									? requested.subagent_type
-									: null,
-							answered_model: await dispatchModel(response.resolvedModel),
-							suggestion_id: null,
-						});
-					}
-				}
-				if (input.tool_name === "Bash") {
-					const command =
-						(input.tool_input as BashToolInput | null)?.command ?? "";
-					if (
-						input.hook_event_name === "PostToolUse" &&
-						detectCommandKind(command) === "spatz-suggest"
-					) {
-						const id = extractSuggestionId(
-							(input.tool_response as BashToolResponse | null)?.stdout ?? "",
-						);
-						if (id) {
-							store.linkSession(
-								id,
-								input.session_id,
-								input.prompt_id ?? null,
-								store.getSuggestion(id)?.created_at ?? now,
-								input.agent_id,
-							);
-							store.reconcileAttempts(context, cfg.tuning.openWindowMs);
-						}
-					} else {
-						const signal = signalFromBashEvent(input, "", now);
-						if (signal)
-							events.push({
-								...context,
-								event_id: `call:${input.tool_use_id}:${signal.kind}`,
-								revision: message ? 1 : 0,
-								prompt_id: message?.prompt_id ?? input.prompt_id ?? null,
-								call_id: input.tool_use_id,
-								message_id: message?.id ?? null,
-								source_seq: message?.source_seq ?? null,
-								occurred_at:
-									message && Number.isFinite(message.at) ? message.at : null,
-								received_at: now,
-								model: message
-									? toCanonicalId(message.model, cfg.aliases)
-									: null,
-								model_version: message ? modelVersion(message.model) : null,
-								effort,
-								kind: signal.kind as "test" | "build",
-								value: signal.value,
-								weight: signal.weight,
-								source: input.hook_event_name,
-							});
-					}
-				}
+				events.push({
+					...context,
+					event_id: `call:${event.call_id}:${signal.kind}`,
+					revision: message ? 1 : 0,
+					prompt_id: message?.prompt_id ?? event.turn_id ?? null,
+					call_id: event.call_id ?? null,
+					message_id: message?.id ?? null,
+					source_seq: message?.source_seq ?? null,
+					occurred_at:
+						message && Number.isFinite(message.at) ? message.at : null,
+					received_at: now,
+					model: message ? toCanonicalId(message.model, cfg.aliases) : null,
+					model_version: message ? versionOf(message.model) : null,
+					effort,
+					kind: signal.kind,
+					value: signal.value,
+					weight: signal.weight,
+					source: event.source,
+				});
 			}
 			if (events.length)
 				store.recordAttemptEvents(events, cfg.tuning.openWindowMs);
-			if (
-				input.hook_event_name === "Stop" ||
-				input.hook_event_name === "SubagentStop"
-			) {
+			if (ended) {
 				const times = messages.map((m) => m.at).filter(Number.isFinite);
 				if (times.length)
 					store.finalizeAttempts(
@@ -457,13 +444,12 @@ export function createApi(
 				else
 					store.recordFailure(
 						"parse",
-						input.hook_event_name,
+						event.source,
 						now,
-						input.session_id,
-						input.agent_id ?? input.prompt_id ?? null,
+						event.session_id,
+						event.agent_id ?? event.turn_id ?? null,
 					);
-				const ended = fromClaudeHook(input);
-				if (ended) closeOnEnd(store, ended, now);
+				closeOnEnd(store, event, now);
 			}
 		});
 	}
@@ -475,6 +461,7 @@ export function createApi(
 		suggestionId: string | null,
 		turnId: string,
 		rollout: CodexRollout,
+		versionOf: (id: string) => string | null,
 		sessionId?: string,
 	) {
 		const now = deps.clock.now();
@@ -493,6 +480,7 @@ export function createApi(
 					suggestion_id: suggestionId,
 					key: `dispatch:${context.session_key}:${segment.key}`,
 					model: toCanonicalId(segment.model, cfg.aliases),
+					model_version: versionOf(segment.model),
 					effort: EFFORTS.find((e) => e === segment.effort) ?? null,
 					at:
 						segment.at ?? store.getSuggestion(suggestionId)?.created_at ?? now,
@@ -532,7 +520,7 @@ export function createApi(
 				occurred_at: call.at,
 				received_at: now,
 				model: toCanonicalId(call.model, cfg.aliases),
-				model_version: modelVersion(call.model),
+				model_version: versionOf(call.model),
 				effort: EFFORTS.find((e) => e === call.effort) ?? null,
 				kind,
 				value: call.exit_code === 0 ? 1 : 0,
@@ -552,7 +540,7 @@ export function createApi(
 				model: rollout.mixed_pair
 					? null
 					: toCanonicalId(rollout.model, cfg.aliases),
-				model_version: rollout.mixed_pair ? null : modelVersion(rollout.model),
+				model_version: rollout.mixed_pair ? null : versionOf(rollout.model),
 				effort: rollout.mixed_pair
 					? null
 					: (EFFORTS.find((e) => e === rollout.effort) ?? null),
@@ -572,74 +560,34 @@ export function createApi(
 			store.finalizeAttempts(context, at, cfg.tuning.successQuality);
 	}
 
-	async function onCodexHook(
-		input: CodexHookInput,
-		cfg: Config,
-	): Promise<void> {
+	async function onCodexEvent(event: HarnessEvent, cfg: Config) {
 		const suggestionId = deps.env.SPATZ_SUGGESTION_ID;
+		const versionOf = await versionResolver();
 		return withStore(async (store) => {
 			if (suggestionId !== undefined && !store.getSuggestion(suggestionId))
 				throw new Error(`unknown suggestion_id ${suggestionId}`);
-			if (
-				input.hook_event_name === "PostToolUse" &&
-				input.tool_name === "Bash" &&
-				suggestionId === undefined
-			) {
-				const command =
-					(input.tool_input as BashToolInput | undefined)?.command ?? "";
-				if (detectCommandKind(command) === "spatz-suggest") {
-					const id = extractSuggestionId(
-						typeof input.tool_response === "string" ? input.tool_response : "",
-					);
-					if (id) {
-						store.linkSession(
-							id,
-							input.session_id,
-							null,
-							store.getSuggestion(id)?.created_at ?? deps.clock.now(),
-							undefined,
-							"codex",
-						);
-						const attempt = store.outcome(id)?.attempt_id;
-						if (attempt && input.turn_id)
-							store.bindAttempt({
-								harness: "codex",
-								session_key: input.session_id,
-								agent_key: "",
-								attempt_id: attempt,
-								id_kind: "turn",
-								external_id: input.turn_id,
-							});
-						store.reconcileAttempts(
-							{
-								harness: "codex",
-								session_key: input.session_id,
-								agent_key: "",
-							},
-							cfg.tuning.openWindowMs,
-						);
-					}
-				}
-			}
-			if (input.hook_event_name !== "Stop") return;
-			const ended = fromCodexHook(input);
+			// A CLI-routed run already knows its suggestion; only interactive sessions link.
+			if (suggestionId === undefined) linkFromToolRun(store, event, cfg);
+			if (event.type !== "session_end") return;
 			// Whatever the rollout holds, the run is over: close what no evidence reached.
 			const close = () =>
-				ended && closeOnEnd(store, ended, deps.clock.now(), suggestionId);
-			if (!input.turn_id) {
+				closeOnEnd(store, event, deps.clock.now(), suggestionId);
+			const turnId = event.turn_id;
+			if (!turnId) {
 				close();
 				throw new Error("missing turn id");
 			}
-			const rollout = await readTranscript(input.transcript_path, (text) =>
-				parseCodexRollout(text, input.turn_id as string),
+			const rollout = await readTranscript(
+				event.transcript_path ?? "",
+				(text) => parseCodexRollout(text, turnId),
 			);
 			if (!rollout) {
 				store.recordFailure(
 					"parse",
-					"codex:Stop",
+					event.source,
 					deps.clock.now(),
-					input.session_id,
-					input.turn_id,
+					event.session_id,
+					turnId,
 				);
 				close();
 				return;
@@ -648,9 +596,10 @@ export function createApi(
 				store,
 				cfg,
 				suggestionId ?? null,
-				input.turn_id,
+				turnId,
 				rollout,
-				input.session_id,
+				versionOf,
+				event.session_id,
 			);
 			close();
 		});
@@ -665,8 +614,12 @@ export function createApi(
 				!(EFFORTS as readonly string[]).includes(input.effort)
 			)
 				throw new Error("invalid effort");
+			if (input.modelVersion !== undefined && !input.modelVersion.trim())
+				throw new Error("invalid model version");
 			if (input.effort === "none") await validateNone([input.model]);
 			const cfg = await getConfig();
+			const model_version =
+				input.modelVersion ?? (await versionResolver())(input.model);
 			return withStore((store) =>
 				store.startAttempt({
 					harness: "claude-code",
@@ -675,6 +628,7 @@ export function createApi(
 					suggestion_id: input.suggestionId,
 					key: input.key,
 					model: toCanonicalId(input.model, cfg.aliases),
+					model_version,
 					effort: (input.effort as Effort) ?? null,
 					at: deps.clock.now(),
 					turn_id: input.turn,
@@ -710,6 +664,7 @@ export function createApi(
 		},
 		async importRollout({ file, suggestionId }) {
 			const cfg = await getConfig();
+			const versionOf = await versionResolver();
 			return withStore(async (store) => {
 				if (!store.getSuggestion(suggestionId))
 					throw new Error(`unknown suggestion_id ${suggestionId}`);
@@ -717,7 +672,7 @@ export function createApi(
 				if (!turns.size)
 					throw new Error("Codex rollout has no matching turn context");
 				for (const [turnId, rollout] of turns)
-					recordCodexTurn(store, cfg, suggestionId, turnId, rollout);
+					recordCodexTurn(store, cfg, suggestionId, turnId, rollout, versionOf);
 				return { suggestion_id: suggestionId, turns: turns.size };
 			});
 		},
@@ -1116,38 +1071,40 @@ export function createApi(
 
 		async handleHook(_event, stdin) {
 			// Hooks must never block the session: every error is swallowed.
+			// Adapter boundary: native payloads end here; recording sees only HarnessEvent.
+			let event: HarnessEvent | null = null;
 			try {
 				if (_event.startsWith("codex:")) {
 					const input = JSON.parse(stdin) as CodexHookInput;
 					if (!input || typeof input.hook_event_name !== "string")
 						throw new Error("invalid hook input");
-					await onCodexHook(input, await getConfig());
+					event = fromCodexHook(input);
 				} else {
 					const input = parseHookInput(stdin);
 					if (!input) throw new Error("invalid hook input");
-					await onHook(input, await getConfig());
+					event = fromClaudeHook(input);
 				}
+				if (!event) return;
+				const cfg = await getConfig();
+				await (event.harness === "codex"
+					? onCodexEvent(event, cfg)
+					: onClaudeEvent(event, cfg));
 			} catch {
 				debugHook(
 					"Recording failed; check hook input, transcript access and database permissions.",
 				);
 				// Recording must also work when config loading failed. Never block a hook on diagnostics.
 				try {
-					const input = parseHookInput(stdin);
-					const session = input?.session_id;
-					const turn =
-						input?.hook_event_name === "SubagentStop"
-							? input.agent_id
-							: (input?.prompt_id ??
-								(input as unknown as CodexHookInput)?.turn_id);
 					const store = deps.openStore(deps.dbPath);
 					try {
 						store.recordFailure(
 							"hook",
 							_event,
 							deps.clock.now(),
-							typeof session === "string" ? session : null,
-							typeof turn === "string" ? turn : null,
+							event?.session_id ?? null,
+							(event?.type === "subagent_end"
+								? event.agent_id
+								: event?.turn_id) ?? null,
 						);
 					} finally {
 						store.dispose();
