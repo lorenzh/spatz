@@ -624,3 +624,87 @@ test("legacy outcomes read a colliding dated usage under the stable key", async 
 	expect(store.cellStats("code.bugfix").map((c) => c.model)).toEqual([STABLE]);
 	store.dispose();
 });
+
+const usageAt = (model: string) => ({
+	suggestion_id: "s1",
+	model,
+	effort: "high" as const,
+	source: "transcript" as const,
+	scope_key: "turn",
+	turn_id: "turn",
+	agent_id: null,
+	input_tokens: 10,
+	output_tokens: 20,
+	cache_read_tokens: 0,
+	cache_creation_tokens: 0,
+	is_sidechain: false,
+	rounds: null,
+	note: null,
+	reported_at: 1100,
+});
+const totals = (path: string) => {
+	const db = new Database(path);
+	handles.push(db);
+	return db
+		.query(
+			"SELECT SUM(input_tokens) AS i, SUM(output_tokens) AS o FROM usage_totals WHERE attempt_id IS NOT NULL",
+		)
+		.get();
+};
+
+test("dated and stable usage events for one scope migrate without a key conflict", async () => {
+	let before: unknown;
+	const path = await datedStore((old, p) => {
+		old.upsertUsage(usageAt(DATED));
+		old.upsertUsage(usageAt(STABLE));
+		before = totals(p);
+	});
+	const store = openStore(path);
+	expect(totals(path)).toEqual(before as object);
+	store.dispose();
+});
+
+test("caller keys that contain a dated model stay unchanged", async () => {
+	const key = `k:${DATED}`;
+	const step = (model: string, attempt_id: string) => ({
+		...ctx,
+		event_id: `step:${DATED}`,
+		revision: 0,
+		suggestion_id: "s1",
+		attempt_id,
+		kind: "usage" as const,
+		source: "transcript",
+		model,
+		effort: "high" as const,
+		input_tokens: 10,
+		output_tokens: 20,
+		source_seq: 0,
+		received_at: 1100,
+	});
+	let id = "";
+	const path = await datedStore((old) => {
+		id = old.startAttempt({
+			...ctx,
+			suggestion_id: "s1",
+			key,
+			model: DATED,
+			effort: "high",
+			at: 1100,
+		}).id;
+		old.recordAttemptEvents([step(DATED, id)]);
+	});
+	const store = openStore(path);
+	expect(
+		store.startAttempt({
+			...ctx,
+			suggestion_id: "s1",
+			key,
+			model: STABLE,
+			effort: "high",
+			at: 1100,
+		}).id,
+	).toBe(id);
+	store.recordAttemptEvents([step(STABLE, id)]);
+	expect(totals(path)).toEqual({ i: 10, o: 20 });
+	store.dispose();
+});

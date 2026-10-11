@@ -241,15 +241,19 @@ const DATED_GPT = [
 ] as const;
 const stableGpt = (col: string) =>
 	`CASE ${DATED_GPT.map(([d, n]) => `WHEN ${col} GLOB 'openai/gpt-*-${d}' THEN substr(${col},1,length(${col})-${n + 1})`).join(" ")} ELSE ${col} END`;
+// Only ids spatz derives from the model ("usage:<source>:<scope>:<model>[:<effort>]"); caller keys stay.
+// ponytail: rows whose new id collides keep their dated id and key, like usages.
+const derived = (col: string, tail: string, next: string) =>
+	`CASE WHEN ${col} GLOB 'usage:*' AND substr(${col},-length(${tail}))=${tail} THEN substr(${col},1,length(${col})-length(${tail}))||${next} ELSE ${col} END`;
 const DATED_GPT_SCHEMA = [
 	...DATED_GPT.flatMap(([date, n]) => {
 		const where = `WHERE model GLOB 'openai/gpt-*-${date}'`;
 		const stable = `substr(model,1,length(model)-${n + 1})`;
 		const version = `model_version=COALESCE(NULLIF(model_version,''),substr(model,-${n}))`;
 		return [
-			`UPDATE attempts SET ${version},execution_key=replace(execution_key,model,${stable}),model=${stable} ${where}`,
+			`UPDATE OR IGNORE attempts SET ${version},execution_key=${derived("execution_key", "':'||model||':'||COALESCE(effort,'null')", `':'||${stable}||':'||COALESCE(effort,'null')`)},model=${stable} ${where}`,
 			`UPDATE bench_attempts SET ${version},model=${stable} ${where}`,
-			`UPDATE attempt_events SET event_id=replace(event_id,model,${stable}),model=${stable} ${where}`,
+			`UPDATE OR IGNORE attempt_events SET event_id=${derived("event_id", "':'||model", `':'||${stable}`)},model=${stable} ${where}`,
 			`UPDATE OR IGNORE usages SET model=${stable} ${where}`,
 		];
 	}),
