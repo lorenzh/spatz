@@ -311,6 +311,8 @@ export interface SpatzApi {
 	usage(input: UsageInput): Promise<UsageRecord>;
 	/** Gives a suggestion made before its subagent existed the real agent id and the session. Idempotent. */
 	link(input: LinkInput): Promise<void>;
+	/** Marks a suggestion that was made but never used (a discarded decision) unknown, so its row closes. Idempotent. */
+	discard(input: { suggestionId: string }): Promise<void>;
 	report(input: ReportInput): Promise<Outcome | null>;
 	/** Never throws; swallows every error (hooks must not block the session). */
 	handleHook(event: string, stdin: string): Promise<void>;

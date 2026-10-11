@@ -3688,3 +3688,87 @@ describe("importEval", () => {
 		});
 	});
 });
+
+describe("session links from the environment, attempts and discards", () => {
+	const row = (dbPath: string, id: string) => {
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			return db
+				.query<
+					{ session_id: string | null; agent_id: string | null },
+					[string]
+				>("SELECT session_id, agent_id FROM suggestions WHERE id = ?")
+				.get(id);
+		} finally {
+			db.close();
+		}
+	};
+	const OTHER = "5e550000-0000-4000-8000-000000000002";
+
+	test.each([
+		["CLAUDE_CODE_SESSION_ID", { CLAUDE_CODE_SESSION_ID: SESSION }],
+		["CODEX_SESSION_ID", { CODEX_SESSION_ID: SESSION }],
+		["CODEX_THREAD_ID", { CODEX_THREAD_ID: SESSION }],
+	])("suggest without a session takes it from %s", async (_name, env) => {
+		const dbPath = join(dir, `env-${_name}.db`);
+		const s = setup({ env, openStore: () => openStore(dbPath) });
+		const out = await s.api.suggest(suggestInput());
+		expect(row(dbPath, out.suggestion_id)?.session_id).toBe(SESSION);
+	});
+
+	test("an explicit session wins over the environment", async () => {
+		const dbPath = join(dir, "env-explicit.db");
+		const s = setup({
+			env: { CLAUDE_CODE_SESSION_ID: OTHER },
+			openStore: () => openStore(dbPath),
+		});
+		const out = await s.api.suggest({ ...suggestInput(), session: SESSION });
+		expect(row(dbPath, out.suggestion_id)?.session_id).toBe(SESSION);
+	});
+
+	test("binding an attempt backfills its session and agent into the suggestion", async () => {
+		const dbPath = join(dir, "backfill.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const out = await s.api.suggest(suggestInput());
+		expect(row(dbPath, out.suggestion_id)).toEqual({
+			session_id: null,
+			agent_id: null,
+		});
+		const started = await s.api.startAttempt({
+			suggestionId: out.suggestion_id,
+			key: "mod-turn:0",
+			model: "gpt-6-luna",
+			effort: "low",
+			session: SESSION,
+			agentId: "worker",
+			turn: "mod-turn",
+			ownsUsage: true,
+		});
+		await s.api.bindAttempt({
+			attempt: started.id,
+			call: "c1",
+			session: SESSION,
+			agentId: "worker",
+		});
+		expect(row(dbPath, out.suggestion_id)).toEqual({
+			session_id: SESSION,
+			agent_id: "worker",
+		});
+	});
+
+	test("discard marks a suggestion unknown once and leaves decided rows alone", async () => {
+		const dbPath = join(dir, "discard.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const out = await s.api.suggest({ ...suggestInput(), session: SESSION });
+		await s.api.discard({ suggestionId: out.suggestion_id });
+		await s.api.discard({ suggestionId: out.suggestion_id });
+		const db = new Database(dbPath, { readonly: true });
+		const count = db
+			.query<{ n: number }, [string]>(
+				"SELECT COUNT(*) AS n FROM unknown_outcomes WHERE suggestion_id = ?",
+			)
+			.get(out.suggestion_id);
+		db.close();
+		expect(count?.n).toBe(1);
+	});
+});

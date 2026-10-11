@@ -3,6 +3,7 @@ import {
 	aliasFor,
 	attemptCommand,
 	type Decision,
+	discardSuggestion,
 	type Link,
 	linkAgent,
 	type Run,
@@ -141,7 +142,11 @@ export function register(on: On, options: PluginOptions = {}) {
 			(error) => logFailure(io, error),
 		);
 		if (!d) return undefined;
-		if (d.exploredRisky && !s.exploreHard) return undefined;
+		if (d.exploredRisky && !s.exploreHard) {
+			// Decided but not used: close the row now, a later outcome for it still wins.
+			await discardSuggestion(io.run, d.suggestionId, s.spatz);
+			return undefined;
+		}
 		last = d;
 		show(io);
 		return d;

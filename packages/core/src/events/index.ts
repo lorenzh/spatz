@@ -13,7 +13,7 @@ import { type Effort, SIGNAL_WEIGHTS } from "../contracts/types.ts";
 import {
 	detectCommandKind,
 	effortFromHook,
-	extractSuggestionId,
+	extractSuggestionIds,
 	isIgnoredHookInput,
 } from "../signals/index.ts";
 
@@ -220,12 +220,12 @@ export function fromCodexHook(input: CodexHookInput): HarnessEvent | null {
 	return null;
 }
 
-/** The suggestion id a `spatz <task>` run printed, unless the run failed. */
-export function suggestionFromToolRun(event: HarnessEvent): string | null {
-	if (event.type !== "tool_run" || !event.output) return null;
-	if (event.exit_code !== null && event.exit_code !== 0) return null;
-	if (detectCommandKind(event.command) !== "spatz-suggest") return null;
-	return extractSuggestionId(event.output);
+/** Every suggestion id a `spatz <task>` run printed, unless the run failed. */
+export function suggestionIdsFromToolRun(event: HarnessEvent): string[] {
+	if (event.type !== "tool_run" || !event.output) return [];
+	if (event.exit_code !== null && event.exit_code !== 0) return [];
+	if (detectCommandKind(event.command) !== "spatz-suggest") return [];
+	return extractSuggestionIds(event.output);
 }
 
 /** Test or build run with a known exit status -> value 1 on exit 0, else 0. */

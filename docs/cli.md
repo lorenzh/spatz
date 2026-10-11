@@ -15,6 +15,7 @@ spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [-
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
+spatz discard <suggestion_id> [--json]
 spatz import-rollout <file> --suggestion <id> [--json]
 spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
 spatz hook <event> [--agent codex]
@@ -46,7 +47,7 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--dry-run` | boolean | `false` | Mark the suggestion as a test (`is_test: true`). A test suggestion never counts for learning or for `spatz stats`. |
 | `--retry-of <suggestion_id>` | string | none | Join the named suggestion's recovery chain. |
 | `--scope <scope>` | string | `null` | Store `step`, `turn`, `subagent`, `session` or `escalate`. This labels the routing decision. |
-| `--session <id>` | string | `null` | Link the suggestion at creation. This does not need a Bash hook. With `--source claude-code-mod`, you must also give `--turn` or `--agent-id`. Otherwise the call fails. |
+| `--session <id>` | string | env | Link the suggestion at creation. This does not need a Bash hook. Without the flag, spatz reads the session from `CLAUDE_CODE_SESSION_ID` (Claude Code), then `CODEX_SESSION_ID` or `CODEX_THREAD_ID` (Codex). An explicit flag wins. With `--source claude-code-mod`, you must also give `--turn` or `--agent-id`. Otherwise the call fails. |
 | `--turn <id>` | string | `null` | Store the initial turn id. |
 | `--agent-id <id>` | string | `null` | Store the subagent id. Without it, the suggestion uses the main window. |
 | `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code`, `claude-code-mod` or `codex`. |
@@ -130,7 +131,7 @@ task_type: <type>  difficulty: <level>  criticality: <level>
 explored: <bool>  control: <bool>  fallback_used: <bool>[  (dry-run)]
 ```
 
-The first line is always `suggestion_id: <uuid>`. The Claude Code hook reads this line to link the session to the suggestion. The ranking has one to three lines.
+The first line is always `suggestion_id: <uuid>`. The Claude Code hook reads every `suggestion_id` in the output to link the session to the suggestion. The ranking has one to three lines.
 
 ### JSON output
 
@@ -334,6 +335,16 @@ spatz link <suggestion_id> --agent-id agent-1 --session session-1
 ```
 
 Text output is `linked: <suggestion_id>  agent: <agent_id>`.
+
+## spatz discard
+
+```
+spatz discard <suggestion_id> [--json]
+```
+
+Marks a suggestion unknown. The Claude Code mod calls it when it decides a pick but does not use it, so the row does not stay pending. A later outcome for the same suggestion still wins. A repeated call does nothing. The call fails for an unknown id.
+
+Session-only links inside a subagent (no agent id yet) close at the session end, not at the subagent's end. The subagent's end is too early: a result can still arrive for that agent after it stops. A later outcome still wins.
 
 ## spatz import-rollout
 

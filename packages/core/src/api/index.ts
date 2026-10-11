@@ -54,7 +54,7 @@ import {
 	fromCodexHook,
 	type HarnessEvent,
 	signalFromToolRun,
-	suggestionFromToolRun,
+	suggestionIdsFromToolRun,
 } from "../events/index.ts";
 import { recommend } from "../recommend/index.ts";
 import type { StatsOptions } from "../report/index.ts";
@@ -170,6 +170,15 @@ async function readTranscript<T>(
 	} catch {
 		return null;
 	}
+}
+
+/** The harness session of an unlinked spatz call: Claude Code, then Codex (session or thread id). */
+function sessionFromEnv(
+	env: Record<string, string | undefined>,
+): string | undefined {
+	return [env.CLAUDE_CODE_SESSION_ID, env.CODEX_SESSION_ID, env.CODEX_THREAD_ID]
+		.map((value) => value?.trim())
+		.find((value) => value);
 }
 
 export function createApi(
@@ -312,27 +321,29 @@ export function createApi(
 
 	/** A `spatz <task>` run in the session links its suggestion to this session and agent. */
 	function linkFromToolRun(store: Store, event: HarnessEvent, cfg: Config) {
-		const id = suggestionFromToolRun(event);
-		if (!id) return false;
+		const ids = suggestionIdsFromToolRun(event);
+		if (ids.length === 0) return false;
 		const codex = event.harness === "codex";
 		const context = contextOf(event);
-		store.linkSession(
-			id,
-			event.session_id,
-			codex ? null : (event.turn_id ?? null),
-			store.getSuggestion(id)?.created_at ?? deps.clock.now(),
-			event.agent_id,
-			codex ? "codex" : undefined,
-		);
-		// Codex turns have no per-message transcript identity: bind the turn to the linked attempt.
-		const attempt = codex ? store.outcome(id)?.attempt_id : undefined;
-		if (attempt && event.turn_id)
-			store.bindAttempt({
-				...context,
-				attempt_id: attempt,
-				id_kind: "turn",
-				external_id: event.turn_id,
-			});
+		for (const id of ids) {
+			store.linkSession(
+				id,
+				event.session_id,
+				codex ? null : (event.turn_id ?? null),
+				store.getSuggestion(id)?.created_at ?? deps.clock.now(),
+				event.agent_id,
+				codex ? "codex" : undefined,
+			);
+			// Codex turns have no per-message transcript identity: bind the turn to the linked attempt.
+			const attempt = codex ? store.outcome(id)?.attempt_id : undefined;
+			if (attempt && event.turn_id)
+				store.bindAttempt({
+					...context,
+					attempt_id: attempt,
+					id_kind: "turn",
+					external_id: event.turn_id,
+				});
+		}
 		store.reconcileAttempts(context, cfg.tuning.openWindowMs);
 		return true;
 	}
@@ -720,7 +731,7 @@ export function createApi(
 			dryRun,
 			scope,
 			source,
-			session,
+			session: explicitSession,
 			turn,
 			agentId,
 			requested: requestedModel,
@@ -734,6 +745,7 @@ export function createApi(
 				!(AGENTS as readonly string[]).includes(source)
 			)
 				throw new Error("invalid source");
+			const session = explicitSession ?? sessionFromEnv(deps.env);
 			for (const [name, value] of Object.entries({
 				session,
 				turn,
@@ -910,6 +922,14 @@ export function createApi(
 					strategy: d.strategy,
 					is_test: dryRun,
 				};
+			});
+		},
+
+		async discard({ suggestionId }) {
+			return withStore((store) => {
+				if (!store.getSuggestion(suggestionId))
+					throw new Error(`unknown suggestion_id ${suggestionId}`);
+				store.closeUnknown({ id: suggestionId }, deps.clock.now());
 			});
 		},
 

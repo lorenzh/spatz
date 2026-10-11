@@ -16,7 +16,7 @@ import {
 	type HarnessEvent,
 	type HarnessEventType,
 	signalFromToolRun,
-	suggestionFromToolRun,
+	suggestionIdsFromToolRun,
 } from "./index.ts";
 
 const claudeInputs = (claude as { input: HookInput }[]).map((c) => c.input);
@@ -43,6 +43,7 @@ test("Claude adapter maps every recorded payload and only declared event types",
 });
 
 const ID = "0b9f4c7e-5d2a-4e8b-9c3f-1a2b3c4d5e6f";
+const OTHER = "7c1e2d3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
 const hook = { session_id: "s", transcript_path: "/t.jsonl", cwd: "/w" };
 const ok = (command: string, stdout = ""): PostToolUseInput => ({
 	...hook,
@@ -278,16 +279,25 @@ describe("signalFromToolRun", () => {
 	});
 });
 
-test("suggestionFromToolRun reads the id of a spatz run unless it failed", () => {
+test("suggestionIdsFromToolRun reads the ids of a spatz run unless it failed", () => {
 	expect(
-		suggestionFromToolRun(
+		suggestionIdsFromToolRun(
 			claudeEvent(ok('spatz "fix it"', `suggestion_id: ${ID}`)),
 		),
-	).toBe(ID);
+	).toEqual([ID]);
 	expect(
-		suggestionFromToolRun(claudeEvent(ok("echo", `suggestion_id: ${ID}`))),
-	).toBe(null);
-	expect(suggestionFromToolRun(claudeEvent(fail('spatz "fix it"')))).toBeNull();
+		suggestionIdsFromToolRun(
+			claudeEvent(
+				ok('spatz "fix it"', `suggestion_id: ${ID}\nsuggestion_id: ${OTHER}`),
+			),
+		),
+	).toEqual([ID, OTHER]);
+	expect(
+		suggestionIdsFromToolRun(claudeEvent(ok("echo", `suggestion_id: ${ID}`))),
+	).toEqual([]);
+	expect(suggestionIdsFromToolRun(claudeEvent(fail('spatz "fix it"')))).toEqual(
+		[],
+	);
 });
 
 test("Claude failure events carry the exit code; success carries 0", () => {

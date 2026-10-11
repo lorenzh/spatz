@@ -27,7 +27,7 @@ export function isIgnoredHookInput(input: HookInput): boolean {
 // A command segment starts at the beginning or after ;, &, |.
 const START = String.raw`(?:^|[;&|]\s*)`;
 const SPATZ_SUGGEST = new RegExp(
-	String.raw`${START}(?:rtk(?:\s+proxy)?\s+)?(?:(?:[^\s;&|]*/)?spatz|(?:npx(?:\s+(?:-y|--yes))?|bunx(?:\s+--bun)?|npm\s+exec)\s+@spatz/cli(?:@[0-9A-Za-z.+_-]+)?(?:\s+--)?)\s+(?!(?:report|hook|stats|usage|link|import-rollout|attempt|pending|signal)(?:\s|$)|-)\S`,
+	String.raw`${START}(?:rtk(?:\s+proxy)?\s+)?(?:(?:[^\s;&|]*/)?spatz|(?:npx(?:\s+(?:-y|--yes))?|bunx(?:\s+--bun)?|npm\s+exec)\s+@spatz/cli(?:@[0-9A-Za-z.+_-]+)?(?:\s+--)?)\s+(?!(?:report|hook|stats|usage|link|import-rollout|attempt|pending|signal|discard)(?:\s|$)|-)\S`,
 );
 // ponytail: keyword regexes, not a shell parser; extend the lists when a tool is missed.
 // Each matches only at the command position of a segment: after env assignments and runner prefixes.
@@ -63,7 +63,7 @@ export function detectCommandKind(command: string): CommandKind {
 		.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (quoted) => {
 			const value = quoted.slice(1, -1);
 			if (
-				/^(?:report|hook|stats|usage|link|import-rollout|attempt|pending|signal)$/.test(
+				/^(?:report|hook|stats|usage|link|import-rollout|attempt|pending|signal|discard)$/.test(
 					value,
 				)
 			)
@@ -80,11 +80,16 @@ export function detectCommandKind(command: string): CommandKind {
 }
 
 const SUGGESTION_ID =
-	/"?suggestion_id"?\s*:\s*"?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i;
+	/"?suggestion_id"?\s*:\s*"?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gi;
 
-/** Finds the suggestion id in spatz output: text line "suggestion_id: <uuid>" or JSON "suggestion_id": "<uuid>". */
+/** Every suggestion id in spatz output, in order: text line "suggestion_id: <uuid>" or JSON "suggestion_id": "<uuid>". */
+export function extractSuggestionIds(stdout: string): string[] {
+	return [...stdout.matchAll(SUGGESTION_ID)].map((m) => m[1] as string);
+}
+
+/** The first suggestion id in spatz output, or null. */
 export function extractSuggestionId(stdout: string): string | null {
-	return SUGGESTION_ID.exec(stdout)?.[1] ?? null;
+	return extractSuggestionIds(stdout)[0] ?? null;
 }
 
 /** effort.level -> Effort, or null when missing or not one of EFFORTS. */
