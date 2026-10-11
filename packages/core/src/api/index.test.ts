@@ -3216,8 +3216,8 @@ test("Codex mixed pair turn keeps the known revision of each segment's attempt",
 				.query("SELECT model,model_version FROM attempts ORDER BY ordinal")
 				.all(),
 		).toEqual([
-			{ model: "openai/gpt-6-luna-2026-09-01", model_version: "2026-09-01" },
-			{ model: "openai/gpt-6-sol-2026-10-01", model_version: "2026-10-01" },
+			{ model: "openai/gpt-6-luna", model_version: "2026-09-01" },
+			{ model: "openai/gpt-6-sol", model_version: "2026-10-01" },
 		]);
 	} finally {
 		db.close();
