@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLED_SNAPSHOT, SNAPSHOT_URL } from "../catalog/snapshot.ts";
@@ -4035,6 +4035,28 @@ describe("stop hook before the transcript flush (SPZ-205)", () => {
 		);
 		expect(failures(dbPath)).toEqual([]);
 	});
+
+	test.skipIf(process.getuid?.() === 0)(
+		"SubagentStop for a transcript behind an unreadable directory still records a parse failure",
+		async () => {
+			const dbPath = join(dir, "locked-sub.db");
+			const locked = join(dir, "locked");
+			await Bun.write(join(locked, "sub.jsonl"), entries(true));
+			chmodSync(locked, 0o000);
+			try {
+				const s = setup({ openStore: () => openStore(dbPath) });
+				await s.api.handleHook(
+					"SubagentStop",
+					JSON.stringify(stopPayload(true, join(locked, "sub.jsonl"))),
+				);
+			} finally {
+				chmodSync(locked, 0o700);
+			}
+			expect(failures(dbPath)).toEqual([
+				{ kind: "parse", event: "SubagentStop" },
+			]);
+		},
+	);
 
 	test("Stop for a transcript that never exists still records a parse failure", async () => {
 		const dbPath = join(dir, "unwritten-main.db");

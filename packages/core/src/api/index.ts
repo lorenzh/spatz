@@ -2,6 +2,7 @@
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	formatHarnessModels,
@@ -371,11 +372,14 @@ export function createApi(
 				await (deps.sleep ?? Bun.sleep)(wait);
 				messages = await read();
 			}
-		// Forked helper agents (prompt suggestion, memory extraction, summaries) fire SubagentStop but never write the named transcript.
+		// Forked helper agents (prompt suggestion, memory extraction, summaries) fire SubagentStop but never write the named transcript; only a confirmed-absent path (ENOENT) skips the parse failure.
 		const unwritten =
 			sub &&
 			!messages.length &&
-			!(await Bun.file(event.transcript_path ?? "").exists());
+			(await stat(event.transcript_path ?? "").then(
+				() => false,
+				(e) => e?.code === "ENOENT",
+			));
 		return withStore(async (store) => {
 			const ownsUsage = store.attemptOwnsUsage(context);
 			const effort = sub || ownsUsage ? null : (event.effort ?? null);
