@@ -181,7 +181,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			), ap AS (
 				-- One cost per attempt and stable pair first, so dated and stable events of an attempt add up.
 				SELECT task_type, model, effort, AVG(cost) AS per_attempt FROM (
-					SELECT s.task_type, u.attempt_id, ${stableModelSql("u.model")} AS model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, SUM(u.cost_usd) AS cost
+					SELECT s.task_type, u.attempt_id, ${stableModelSql("u.model")} AS model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, CASE WHEN COUNT(*) = COUNT(u.cost_usd) THEN SUM(u.cost_usd) END AS cost
 					FROM s JOIN attempt_usage u ON u.suggestion_id = s.id
 					LEFT JOIN attempts a ON a.id = u.attempt_id
 					WHERE ($mv IS NULL OR a.model_version = $mv)

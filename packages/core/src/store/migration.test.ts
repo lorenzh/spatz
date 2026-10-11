@@ -802,3 +802,30 @@ test("a dated recommendation counts as adopted by its stable execution", async (
 	const stats = await runStats({ dbPath: path, successQuality: 0.8 });
 	expect(stats.by_type[0]?.adoption_rate).toBe(1);
 });
+
+test("cost per attempt stays unknown when one event has no cost", async () => {
+	const at = (model: string, scope_key: string) => ({
+		...usageAt(model),
+		scope_key,
+		turn_id: scope_key,
+	});
+	const path = await datedStore((old) => {
+		old.upsertUsage({
+			...at(DATED, "t1"),
+			cost_usd: 0.1,
+			cost_source: "reported" as const,
+		});
+		old.upsertUsage(at(DATED, "t2"));
+	});
+	const store = openStore(path);
+	store.upsertUsage(at(STABLE, "t2"));
+	store.reportAttempt({
+		suggestion_id: "s1",
+		model: STABLE,
+		effort: "high",
+		result: "pass",
+		at: 1200,
+	});
+	store.dispose();
+	expect((await pairsOf(path))[0]?.cost_usd_per_attempt).toBeNull();
+});
