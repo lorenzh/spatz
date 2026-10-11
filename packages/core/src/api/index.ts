@@ -2,6 +2,7 @@
 // Spec: "CLI interface", "Flow", "Attribution", "Used pair", "Privacy".
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	formatHarnessModels,
@@ -364,13 +365,21 @@ export function createApi(
 					: mainTurnMessages(text, event.turn_id ?? ""),
 			)) ?? [];
 		let messages = await read();
-		// The harness flushes its transcript after the stop hook starts: retry a bounded time before a parse failure.
+		// The stop hook can fire before the last transcript entries are written: re-read a bounded time.
 		for (const wait of ended ? FLUSH_RETRY_MS : [])
 			if (messages.length) break;
 			else {
 				await (deps.sleep ?? Bun.sleep)(wait);
 				messages = await read();
 			}
+		// Forked helper agents (prompt suggestion, memory extraction, summaries) fire SubagentStop but never write the named transcript; only a confirmed-absent path (ENOENT) skips the parse failure.
+		const unwritten =
+			sub &&
+			!messages.length &&
+			(await stat(event.transcript_path ?? "").then(
+				() => false,
+				(e) => e?.code === "ENOENT",
+			));
 		return withStore(async (store) => {
 			const ownsUsage = store.attemptOwnsUsage(context);
 			const effort = sub || ownsUsage ? null : (event.effort ?? null);
@@ -463,7 +472,7 @@ export function createApi(
 						Math.max(...times),
 						cfg.tuning.successQuality,
 					);
-				else
+				else if (!unwritten)
 					store.recordFailure(
 						"parse",
 						event.source,
