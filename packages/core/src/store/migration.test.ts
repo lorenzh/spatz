@@ -447,12 +447,15 @@ test("a v5 backup keeps its rows and the current store refuses a newer schema", 
 	expect(() => openDatabase(path)).toThrow(/newer than supported.*upgrade/i);
 });
 
-test("dated gpt keys from an older store migrate to the stable key", async () => {
+const DATED = "openai/gpt-5-2025-08-07";
+const STABLE = "openai/gpt-5";
+// Store at the previous schema with one open suggestion s1; returns its path.
+async function datedStore(
+	write: (old: ReturnType<typeof openStore>, path: string) => void,
+) {
 	const dir = directory();
 	const path = join(dir, "spatz.db");
-	const previous = await previousStore(dir);
-	const old = previous.openStore(path);
-	const ctx = { harness: "codex", session_key: "s", agent_key: "" };
+	const old = (await previousStore(dir)).openStore(path);
 	old.insertSuggestion({
 		id: "s1",
 		created_at: 1000,
@@ -478,29 +481,39 @@ test("dated gpt keys from an older store migrate to the stable key", async () =>
 		last_event_at: 1000,
 		closed_at: null,
 	});
+	write(old, path);
+	old.dispose();
+	return path;
+}
+const ctx = { harness: "codex", session_key: "s", agent_key: "" };
+
+test("dated gpt keys from an older store migrate to the stable key", async () => {
 	const dated = {
 		...ctx,
 		suggestion_id: "s1",
 		key: "t:0",
-		model: "openai/gpt-5-2025-08-07",
+		model: DATED,
 		effort: "high" as const,
 		at: 1100,
 	};
-	const attempt = old.startAttempt(dated);
-	old.dispose();
-
-	const store = openStore(path);
-	const stable = { model: "openai/gpt-5", model_version: "2025-08-07" };
-	expect(store.startAttempt({ ...dated, ...stable }).id).toBe(attempt.id);
-	const report = store.reportAttempt({
-		suggestion_id: "s1",
-		attempt_id: attempt.id,
-		...stable,
-		effort: "high",
-		result: "pass",
-		at: 2000,
-	});
-	expect(report.attempt_id).toBe(attempt.id);
+	let id = "";
+	const store = openStore(
+		await datedStore((old) => {
+			id = old.startAttempt(dated).id;
+		}),
+	);
+	const stable = { model: STABLE, model_version: "2025-08-07" };
+	expect(store.startAttempt({ ...dated, ...stable }).id).toBe(id);
+	expect(
+		store.reportAttempt({
+			suggestion_id: "s1",
+			attempt_id: id,
+			...stable,
+			effort: "high",
+			result: "pass",
+			at: 2000,
+		}).attempt_id,
+	).toBe(id);
 	expect(
 		store.reportAttempt({
 			suggestion_id: "s1",
@@ -509,9 +522,105 @@ test("dated gpt keys from an older store migrate to the stable key", async () =>
 			result: "pass",
 			at: 2001,
 		}).attempt_id,
-	).toBe(attempt.id);
+	).toBe(id);
 	expect(store.cellStats("code.bugfix")).toMatchObject([
-		{ model: "openai/gpt-5", n: 1 },
+		{ model: STABLE, n: 1 },
 	]);
+	store.dispose();
+});
+
+test("replaying a migrated dated usage does not double its tokens", async () => {
+	const usage = (model: string) => ({
+		suggestion_id: "s1",
+		model,
+		effort: "high" as const,
+		source: "transcript" as const,
+		scope_key: "turn",
+		turn_id: "turn",
+		agent_id: null,
+		input_tokens: 10,
+		output_tokens: 20,
+		cache_read_tokens: 0,
+		cache_creation_tokens: 0,
+		is_sidechain: false,
+		rounds: null,
+		note: null,
+		reported_at: 1100,
+	});
+	const path = await datedStore((old) => old.upsertUsage(usage(DATED)));
+	const store = openStore(path);
+	store.upsertUsage(usage(STABLE));
+	const db = new Database(path);
+	handles.push(db);
+	expect(
+		db
+			.query(
+				"SELECT model, SUM(input_tokens) AS i, SUM(output_tokens) AS o FROM usage_totals WHERE attempt_id IS NOT NULL GROUP BY model",
+			)
+			.all(),
+	).toEqual([{ model: STABLE, i: 10, o: 20 }]);
+	store.dispose();
+});
+
+test("a migrated dated step event replays without a version conflict", async () => {
+	const step = (model: string) => ({
+		...ctx,
+		event_id: "step:t:0",
+		revision: 0,
+		suggestion_id: "s1",
+		kind: "usage" as const,
+		source: "transcript",
+		model,
+		effort: "high" as const,
+		input_tokens: 10,
+		output_tokens: 20,
+		source_seq: 0,
+		received_at: 1100,
+	});
+	const path = await datedStore((old) => {
+		const a = old.startAttempt({
+			...ctx,
+			suggestion_id: "s1",
+			key: "t:0",
+			model: DATED,
+			effort: "high",
+			at: 1100,
+		});
+		old.recordAttemptEvents([{ ...step(DATED), attempt_id: a.id }]);
+	});
+	const store = openStore(path);
+	const a = store.startAttempt({
+		...ctx,
+		suggestion_id: "s1",
+		key: "t:0",
+		model: STABLE,
+		effort: "high",
+		at: 1100,
+	});
+	expect(() =>
+		store.recordAttemptEvents([{ ...step(STABLE), attempt_id: a.id }]),
+	).not.toThrow();
+	store.dispose();
+});
+
+test("legacy outcomes read a colliding dated usage under the stable key", async () => {
+	const path = await datedStore((_old, p) => {
+		const db = new Database(p);
+		db.run("UPDATE suggestions SET is_legacy = 1");
+		for (const [model, out] of [
+			[STABLE, 1],
+			[DATED, 50],
+		] as const)
+			db.run(
+				"INSERT INTO usages (suggestion_id,model,effort,source,scope_key,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,is_sidechain,reported_at) VALUES ('s1',?,'high','transcript','turn',1,?,0,0,0,1100)",
+				[model, out],
+			);
+		db.run(
+			"INSERT INTO signals (suggestion_id,kind,value,weight,source,observed_at) VALUES ('s1','report',1,1,'report',1200)",
+		);
+		db.close();
+	});
+	const store = openStore(path);
+	expect(store.cellStats("code.bugfix").map((c) => c.model)).toEqual([STABLE]);
 	store.dispose();
 });

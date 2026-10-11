@@ -230,24 +230,37 @@ const SCHEMA_V11 = [
 	"CREATE TABLE unknown_outcomes (suggestion_id TEXT PRIMARY KEY REFERENCES suggestions(id), marked_at INTEGER NOT NULL)",
 ];
 
-// v15: dated GPT keys ("openai/gpt-5-2025-08-07") become the stable key; the date moves to
-// model_version where that is empty. Raw harness ids (answered_model, dispatches) stay.
+// v15: dated GPT keys ("openai/gpt-5-2025-08-07") become the stable key, in ids derived from
+// them too. attempts and bench rows get the date as model_version where that is empty; events
+// keep theirs, so step replays stay identical. Raw harness ids (answered_model, dispatches) stay.
+// Usage rows that collide with a stable-key row keep their dated key; legacy outcomes read it
+// normalized.
 const DATED_GPT = [
 	["[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]", 10],
 	["[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]", 8],
 ] as const;
-const DATED_GPT_SCHEMA = DATED_GPT.flatMap(([date, n]) => {
-	const where = `WHERE model GLOB 'openai/gpt-*-${date}'`;
-	const base = `model=substr(model,1,length(model)-${n + 1})`;
-	const version = `model_version=COALESCE(NULLIF(model_version,''),substr(model,-${n}))`;
-	return [
-		...["attempts", "attempt_events", "bench_attempts"].map(
-			(t) => `UPDATE ${t} SET ${version},${base} ${where}`,
-		),
-		// ponytail: a usage row that collides with an existing stable-key row keeps its dated key.
-		`UPDATE OR IGNORE usages SET ${base} ${where}`,
-	];
-});
+const stableGpt = (col: string) =>
+	`CASE ${DATED_GPT.map(([d, n]) => `WHEN ${col} GLOB 'openai/gpt-*-${d}' THEN substr(${col},1,length(${col})-${n + 1})`).join(" ")} ELSE ${col} END`;
+const DATED_GPT_SCHEMA = [
+	...DATED_GPT.flatMap(([date, n]) => {
+		const where = `WHERE model GLOB 'openai/gpt-*-${date}'`;
+		const stable = `substr(model,1,length(model)-${n + 1})`;
+		const version = `model_version=COALESCE(NULLIF(model_version,''),substr(model,-${n}))`;
+		return [
+			`UPDATE attempts SET ${version},execution_key=replace(execution_key,model,${stable}),model=${stable} ${where}`,
+			`UPDATE bench_attempts SET ${version},model=${stable} ${where}`,
+			`UPDATE attempt_events SET event_id=replace(event_id,model,${stable}),model=${stable} ${where}`,
+			`UPDATE OR IGNORE usages SET model=${stable} ${where}`,
+		];
+	}),
+	"DROP VIEW outcomes",
+	"DROP VIEW legacy_outcomes",
+	(SCHEMA_V8.at(-3) as string).replace(
+		"p.model AS model",
+		`${stableGpt("p.model")} AS model`,
+	),
+	SCHEMA_V8.at(-1) as string,
+];
 
 const MIGRATIONS = [
 	SCHEMA_V1,

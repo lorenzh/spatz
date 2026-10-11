@@ -259,7 +259,7 @@ spatz attempt finalize --session <id> [--agent-id <id>]
 Unknown effort stays null. `--owns-usage` marks mod usage ownership for this context.
 `--model-version` stores the model revision the caller knows. Without it, start takes the date of a dated `--model`, or the revision the harness catalog lists for an undated alias. Otherwise the version stays null.
 
-Stores from spatz 0.4 and older can hold dated GPT keys such as `openai/gpt-5-2025-08-07`. The schema v15 migration rewrites them to the stable key (`openai/gpt-5`) and moves the date to the model version when that is empty. Raw harness ids stay unchanged.
+Stores from spatz 0.4 and older can hold dated GPT keys such as `openai/gpt-5-2025-08-07`. The schema v15 migration rewrites them to the stable key (`openai/gpt-5`) and moves the date to the attempt model version when that is empty. Ids built from the key change with it. Raw harness ids stay unchanged.
 `bind` connects a hook/mod tool-call ID to the active attempt.
 `finalize` closes observed execution without inventing a successful verdict.
 The main session omits `--agent-id`. Each subagent supplies its own ID.
