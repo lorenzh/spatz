@@ -3943,6 +3943,35 @@ describe("stop hook before the transcript flush (SPZ-205)", () => {
 		}
 	};
 
+	test("a suggestion made during the retry stays open after the Stop", async () => {
+		const dbPath = join(dir, "during-retry.db");
+		const s = setup({
+			openStore: () => openStore(dbPath),
+			sleep: async () => {
+				s.setNow(T0 + 500);
+				await s.api.suggest({ ...suggestInput("Next turn"), session: SESSION });
+			},
+		});
+		await s.api.suggest({ ...suggestInput(), session: SESSION });
+		s.setNow(T0 + 10);
+		await s.api.handleHook(
+			"Stop",
+			JSON.stringify(stopPayload(false, join(dir, "never.jsonl"))),
+		);
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT s.created_at FROM unknown_outcomes u JOIN suggestions s ON s.id = u.suggestion_id",
+					)
+					.all(),
+			).toEqual([{ created_at: T0 }]);
+		} finally {
+			db.close();
+		}
+	});
+
 	for (const sub of [false, true]) {
 		const name = sub ? "SubagentStop" : "Stop";
 		test(`${name} records usage when the transcript appears during the retry`, async () => {

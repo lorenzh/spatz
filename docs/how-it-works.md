@@ -308,9 +308,10 @@ Historical retry counts and first-pair costs remain unknown.
 ### Failure recording
 
 If no assistant message has a usable timestamp for the prompt id, Claude `Stop` counts a parse failure.
-Claude Code can run the stop hook before it has written the last transcript entries.
+The likely cause of such a failure is that the transcript is not yet available at hook time.
 When a Claude `Stop` or `SubagentStop` finds no message, spatz reads the transcript again after 200, 400 and 800 ms.
 It counts the parse failure only if the third retry still finds no message.
+A closing `Stop` or `SubagentStop` marks only suggestions created before the hook fired, so a suggestion made during the retry stays open.
 `SubagentStop` checks the subagent transcript in the same way.
 If the rollout has no matching turn context with a model, Codex `Stop` counts a parse failure.
 Missing files, unreadable files and parser exceptions also count as parse failures.
