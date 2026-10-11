@@ -319,6 +319,18 @@ test("stats normalizes legacy null efforts for none-only catalog models", async 
 	]);
 });
 
+test("pairs sort null effort last for one model", async () => {
+	const t = "code.feature";
+	sug("known", { task_type: t, top: ["m/a", "low"] });
+	usage("known", "m/a", "low", [1, 1]);
+	signal("known", 0.9);
+	sug("unknown", { task_type: t, top: ["m/a", null as unknown as Effort] });
+	usage("unknown", "m/a", null, [1, 1], "transcript");
+	signal("unknown", 0.9);
+	const [s] = (await stats()).by_type;
+	expect(s?.pairs.map((p) => p.effort)).toEqual(["low", null]);
+});
+
 test("legacy null-effort none-only pairs keep chain and attempt cost", async () => {
 	const model = "anthropic/claude-haiku-4.5";
 	sug("nn", { top: [model, "none"] });
