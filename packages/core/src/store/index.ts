@@ -18,7 +18,12 @@ import {
 	type SuggestionRecord,
 	type UsageRecord,
 } from "../contracts/types.ts";
-import { ATTEMPT_SCHEMA, USAGE_COMPLETENESS_SCHEMA } from "./attempt-schema.ts";
+import {
+	ATTEMPT_SCHEMA,
+	stableModel,
+	stableModelSql,
+	USAGE_COMPLETENESS_SCHEMA,
+} from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
 import { BENCH_RUN_SCHEMA, BENCH_SCHEMA, benchStore } from "./bench.ts";
 
@@ -230,42 +235,6 @@ const SCHEMA_V11 = [
 	"CREATE TABLE unknown_outcomes (suggestion_id TEXT PRIMARY KEY REFERENCES suggestions(id), marked_at INTEGER NOT NULL)",
 ];
 
-// v15: dated GPT keys ("openai/gpt-5-2025-08-07") become the stable key, in ids derived from
-// them too. attempts and bench rows get the date as model_version where that is empty; events
-// keep theirs, so step replays stay identical. Raw harness ids (answered_model, dispatches) stay.
-// Usage rows that collide with a stable-key row keep their dated key; legacy outcomes read it
-// normalized.
-const DATED_GPT = [
-	["[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]", 10],
-	["[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]", 8],
-] as const;
-const stableGpt = (col: string) =>
-	`CASE ${DATED_GPT.map(([d, n]) => `WHEN ${col} GLOB 'openai/gpt-*-${d}' THEN substr(${col},1,length(${col})-${n + 1})`).join(" ")} ELSE ${col} END`;
-// Only ids spatz derives from the model ("usage:<source>:<scope>:<model>[:<effort>]"); caller keys stay.
-// ponytail: rows whose new id collides keep their dated id and key, like usages.
-const derived = (col: string, tail: string, next: string) =>
-	`CASE WHEN ${col} GLOB 'usage:*' AND substr(${col},-length(${tail}))=${tail} THEN substr(${col},1,length(${col})-length(${tail}))||${next} ELSE ${col} END`;
-const DATED_GPT_SCHEMA = [
-	...DATED_GPT.flatMap(([date, n]) => {
-		const where = `WHERE model GLOB 'openai/gpt-*-${date}'`;
-		const stable = `substr(model,1,length(model)-${n + 1})`;
-		const version = `model_version=COALESCE(NULLIF(model_version,''),substr(model,-${n}))`;
-		return [
-			`UPDATE OR IGNORE attempts SET ${version},execution_key=${derived("execution_key", "':'||model||':'||COALESCE(effort,'null')", `':'||${stable}||':'||COALESCE(effort,'null')`)},model=${stable} ${where}`,
-			`UPDATE bench_attempts SET ${version},model=${stable} ${where}`,
-			`UPDATE OR IGNORE attempt_events SET event_id=${derived("event_id", "':'||model", `':'||${stable}`)},model=${stable} ${where}`,
-			`UPDATE OR IGNORE usages SET model=${stable} ${where}`,
-		];
-	}),
-	"DROP VIEW outcomes",
-	"DROP VIEW legacy_outcomes",
-	(SCHEMA_V8.at(-3) as string).replace(
-		"p.model AS model",
-		`${stableGpt("p.model")} AS model`,
-	),
-	SCHEMA_V8.at(-1) as string,
-];
-
 const MIGRATIONS = [
 	SCHEMA_V1,
 	SCHEMA_V2,
@@ -281,7 +250,6 @@ const MIGRATIONS = [
 	BENCH_SCHEMA,
 	BENCH_RUN_SCHEMA,
 	["ALTER TABLE suggestions ADD COLUMN label TEXT"],
-	DATED_GPT_SCHEMA,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -386,13 +354,13 @@ export function openStore(
 		db
 			.query<CellStat, (string | number)[]>(
 				`WITH history AS (
-					SELECT suggestion_id,quality,model,effort,model_version,1 AS live FROM attempt_outcomes
+					SELECT suggestion_id,quality,${stableModelSql("model")} AS model,effort,model_version,1 AS live FROM attempt_outcomes
 					WHERE ${retries ? "ordinal>1 OR attempt_id<>root_id" : "ordinal=1 AND attempt_id=root_id"}
-					${retries ? "" : "UNION ALL SELECT suggestion_id,quality,model,effort,NULL,0 FROM legacy_outcomes"}
+					${retries ? "" : `UNION ALL SELECT suggestion_id,quality,${stableModelSql("model")},effort,NULL,0 FROM legacy_outcomes`}
 				), live AS (
 					-- The newest known version per model; older known versions seed nothing, null matches any.
 					SELECT model, model_version FROM (
-						SELECT a.model, a.model_version, ROW_NUMBER() OVER (PARTITION BY a.model ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
+						SELECT ${stableModelSql("a.model")} AS model, a.model_version, ROW_NUMBER() OVER (PARTITION BY ${stableModelSql("a.model")} ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
 						FROM attempts a JOIN suggestions s ON s.id = a.suggestion_id
 						WHERE a.model_version IS NOT NULL AND s.is_test = 0
 					) WHERE rn = 1
@@ -509,7 +477,7 @@ export function openStore(
 				db
 					.query<{ model: string; model_version: string }, []>(
 						`SELECT model, model_version FROM (
-							SELECT a.model, a.model_version, ROW_NUMBER() OVER (PARTITION BY a.model ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
+							SELECT ${stableModelSql("a.model")} AS model, a.model_version, ROW_NUMBER() OVER (PARTITION BY ${stableModelSql("a.model")} ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
 							FROM attempts a JOIN suggestions s ON s.id = a.suggestion_id
 							WHERE a.model_version IS NOT NULL AND s.is_test = 0
 						) WHERE rn = 1`,
@@ -727,7 +695,7 @@ export function openStore(
 					const effort = noneOnly.has(r.model) ? "none" : r.effort;
 					if (
 						current.model &&
-						(current.model !== r.model ||
+						(stableModel(current.model) !== r.model ||
 							(current.effort && effort && current.effort !== effort))
 					)
 						attempt = ledger.startAttempt({
@@ -738,17 +706,23 @@ export function openStore(
 							effort,
 							at: r.reported_at,
 						}).id;
-					const eventId = `usage:${r.source}:${r.scope_key}:${r.model}`;
+					// Older stores may hold this event under a dated GPT id; continue that history.
 					const previous = db
-						.query<{ revision: number }, [string, string, string, string]>(
-							"SELECT MAX(revision) AS revision FROM attempt_events WHERE harness=? AND session_key=? AND agent_key=? AND event_id=?",
+						.query<
+							{ event_id: string; revision: number },
+							[string, string, string, string, string]
+						>(
+							`SELECT event_id, revision FROM attempt_events WHERE harness=? AND session_key=? AND agent_key=? AND ${stableModelSql("event_id")}=? ORDER BY event_id=? DESC, revision DESC LIMIT 1`,
 						)
 						.get(
 							context.harness,
 							context.session_key,
 							context.agent_key,
-							eventId,
+							stableModel(`usage:${r.source}:${r.scope_key}:${r.model}`),
+							`usage:${r.source}:${r.scope_key}:${r.model}`,
 						);
+					const eventId =
+						previous?.event_id ?? `usage:${r.source}:${r.scope_key}:${r.model}`;
 					ledger.recordAttemptEvents([
 						{
 							...context,

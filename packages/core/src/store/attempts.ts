@@ -14,7 +14,11 @@ import {
 	REPORT_VALUES,
 } from "../contracts/types.ts";
 
-import { lowerBoundSql } from "./attempt-schema.ts";
+import {
+	lowerBoundSql,
+	stableModel,
+	stableModelSql,
+} from "./attempt-schema.ts";
 
 const tokenKeys = [
 	"input_tokens",
@@ -67,7 +71,7 @@ export function attemptStore(
 		a: AttemptRecord,
 		e: Pick<AttemptEvent, "model" | "effort" | "model_version">,
 	) =>
-		(!e.model || !a.model || a.model === e.model) &&
+		(!e.model || !a.model || stableModel(a.model) === stableModel(e.model)) &&
 		(!e.effort || !a.effort || a.effort === e.effort) &&
 		(!e.model_version ||
 			!a.model_version ||
@@ -1001,7 +1005,11 @@ export function attemptStore(
 										...(input.cost_source === "reported"
 											? []
 											: ["cost_usd", "cost_source"]),
-									].includes(k) && previous[k] !== e[k],
+									].includes(k) &&
+									(k === "model"
+										? stableModel(previous[k] as string | null)
+										: previous[k]) !==
+										(k === "model" ? stableModel(e[k] as string | null) : e[k]),
 							)
 						)
 							throw new Error("event identity/revision payload conflict");
@@ -1077,11 +1085,11 @@ export function attemptStore(
 						? get(input.attempt_id)
 						: db
 								.query<AttemptRecord, [string, string, string, string | null]>(
-									"SELECT * FROM attempts WHERE suggestion_id=? AND (model=? OR model IS NULL) AND (effort=? OR effort IS NULL) AND (?4 IS NULL OR model_version IS NULL OR model_version=?4) ORDER BY ordinal DESC LIMIT 1",
+									`SELECT * FROM attempts WHERE suggestion_id=? AND (${stableModelSql("model")}=? OR model IS NULL) AND (effort=? OR effort IS NULL) AND (?4 IS NULL OR model_version IS NULL OR model_version=?4) ORDER BY ordinal DESC LIMIT 1`,
 								)
 								.get(
 									input.suggestion_id,
-									input.model,
+									stableModel(input.model),
 									input.effort,
 									input.model_version ?? null,
 								);

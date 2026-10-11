@@ -143,3 +143,18 @@ export const USAGE_COMPLETENESS_SCHEMA = [
  ${tokens.map((t) => `u.orchestration_${t}`).join(",")},u.orchestration_cost_usd
  FROM attempts r JOIN verdict v ON v.root_id=r.id LEFT JOIN usage u ON u.root_id=r.id WHERE r.id=r.root_id`,
 ];
+
+// Older stores keep dated GPT keys ("openai/gpt-5-2025-08-07"); readers compare the stable key.
+const DATED_GPT = /^(.*openai\/gpt-.+)-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+export const stableModel = <T extends string | null | undefined>(m: T): T =>
+	(m?.replace(DATED_GPT, "$1") ?? m) as T;
+export const stableModelSql = (col: string) =>
+	`CASE ${[
+		["[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]", 10],
+		["[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]", 8],
+	]
+		.map(
+			([d, n]) =>
+				`WHEN ${col} GLOB '*openai/gpt-*-${d}' THEN substr(${col},1,length(${col})-${Number(n) + 1})`,
+		)
+		.join(" ")} ELSE ${col} END`;

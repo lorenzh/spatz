@@ -449,13 +449,13 @@ test("a v5 backup keeps its rows and the current store refuses a newer schema", 
 
 const DATED = "openai/gpt-5-2025-08-07";
 const STABLE = "openai/gpt-5";
-// Store at the previous schema with one open suggestion s1; returns its path.
+// Store holding rows the way spatz 0.4 wrote them (dated GPT keys), with one open suggestion s1.
 async function datedStore(
 	write: (old: ReturnType<typeof openStore>, path: string) => void,
 ) {
 	const dir = directory();
 	const path = join(dir, "spatz.db");
-	const old = (await previousStore(dir)).openStore(path);
+	const old = openStore(path);
 	old.insertSuggestion({
 		id: "s1",
 		created_at: 1000,
@@ -487,7 +487,7 @@ async function datedStore(
 }
 const ctx = { harness: "codex", session_key: "s", agent_key: "" };
 
-test("dated gpt keys from an older store migrate to the stable key", async () => {
+test("dated gpt keys from older stores match their stable key", async () => {
 	const dated = {
 		...ctx,
 		suggestion_id: "s1",
@@ -529,7 +529,7 @@ test("dated gpt keys from an older store migrate to the stable key", async () =>
 	store.dispose();
 });
 
-test("replaying a migrated dated usage does not double its tokens", async () => {
+test("replaying a dated usage with the stable key does not double its tokens", async () => {
 	const usage = (model: string) => ({
 		suggestion_id: "s1",
 		model,
@@ -559,47 +559,6 @@ test("replaying a migrated dated usage does not double its tokens", async () => 
 			)
 			.all(),
 	).toEqual([{ model: STABLE, i: 10, o: 20 }]);
-	store.dispose();
-});
-
-test("a migrated dated step event replays without a version conflict", async () => {
-	const step = (model: string) => ({
-		...ctx,
-		event_id: "step:t:0",
-		revision: 0,
-		suggestion_id: "s1",
-		kind: "usage" as const,
-		source: "transcript",
-		model,
-		effort: "high" as const,
-		input_tokens: 10,
-		output_tokens: 20,
-		source_seq: 0,
-		received_at: 1100,
-	});
-	const path = await datedStore((old) => {
-		const a = old.startAttempt({
-			...ctx,
-			suggestion_id: "s1",
-			key: "t:0",
-			model: DATED,
-			effort: "high",
-			at: 1100,
-		});
-		old.recordAttemptEvents([{ ...step(DATED), attempt_id: a.id }]);
-	});
-	const store = openStore(path);
-	const a = store.startAttempt({
-		...ctx,
-		suggestion_id: "s1",
-		key: "t:0",
-		model: STABLE,
-		effort: "high",
-		at: 1100,
-	});
-	expect(() =>
-		store.recordAttemptEvents([{ ...step(STABLE), attempt_id: a.id }]),
-	).not.toThrow();
 	store.dispose();
 });
 
@@ -647,22 +606,10 @@ const totals = (path: string) => {
 	handles.push(db);
 	return db
 		.query(
-			"SELECT SUM(input_tokens) AS i, SUM(output_tokens) AS o FROM usage_totals WHERE attempt_id IS NOT NULL",
+			"SELECT SUM(input_tokens) AS i, SUM(output_tokens) AS o FROM attempt_events e WHERE kind = 'usage' AND revision = (SELECT MAX(revision) FROM attempt_events x WHERE x.event_id = e.event_id)",
 		)
 		.get();
 };
-
-test("dated and stable usage events for one scope migrate without a key conflict", async () => {
-	let before: unknown;
-	const path = await datedStore((old, p) => {
-		old.upsertUsage(usageAt(DATED));
-		old.upsertUsage(usageAt(STABLE));
-		before = totals(p);
-	});
-	const store = openStore(path);
-	expect(totals(path)).toEqual(before as object);
-	store.dispose();
-});
 
 test("caller keys that contain a dated model stay unchanged", async () => {
 	const key = `k:${DATED}`;
@@ -706,5 +653,35 @@ test("caller keys that contain a dated model stay unchanged", async () => {
 	).toBe(id);
 	store.recordAttemptEvents([step(STABLE, id)]);
 	expect(totals(path)).toEqual({ i: 10, o: 20 });
+	store.dispose();
+});
+
+test("dated usage revisions next to a stable event keep their totals", async () => {
+	const path = await datedStore((old) => {
+		old.upsertUsage({ ...usageAt(DATED), output_tokens: 20 });
+		old.upsertUsage({ ...usageAt(DATED), output_tokens: 30 });
+		old.recordAttemptEvents([
+			{
+				...ctx,
+				harness: "claude-code",
+				session_key: "s",
+				event_id: `usage:transcript:turn:${STABLE}`,
+				revision: 0,
+				suggestion_id: "s1",
+				kind: "usage",
+				source: "transcript",
+				model: STABLE,
+				effort: "high",
+				input_tokens: 10,
+				output_tokens: 40,
+				source_seq: 0,
+				received_at: 1100,
+			},
+		]);
+	});
+	const before = totals(path);
+	expect(before).toMatchObject({ o: 70 });
+	const store = openStore(path);
+	expect(totals(path)).toEqual(before as object);
 	store.dispose();
 });
