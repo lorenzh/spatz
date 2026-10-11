@@ -174,6 +174,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					SUM(spend) FILTER (WHERE known) AS spend,
 					SUM(tokens) FILTER (WHERE known) AS tokens,
 					SUM(orch) FILTER (WHERE known) AS orch,
+					COUNT(*) AS n_chains,
 					1.0 * COUNT(*) FILTER (WHERE NOT known) / COUNT(*) AS incomplete_share
 				FROM ch GROUP BY task_type, model, effort
 			), ap AS (
@@ -184,6 +185,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				GROUP BY s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END
 			)
 			SELECT o.task_type, o.model, o.effort, COUNT(*) AS n, AVG(o.success) AS success_rate,
+				COALESCE(cs.n_chains, 0) AS n_chains,
 				CASE WHEN cs.wins > 0 THEN cs.spend / cs.wins END AS cost_usd_per_success,
 				CASE WHEN cs.wins > 0 THEN cs.tokens / cs.wins END AS tokens_per_success,
 				ap.per_attempt AS cost_usd_per_attempt,

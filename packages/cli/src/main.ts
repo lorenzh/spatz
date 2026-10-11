@@ -101,7 +101,7 @@ function formatStats(r: StatsReport): string {
 		`${t.task_type}  n=${t.n}  adoption=${pct(t.adoption_rate)}  input_tokens=${t.input_tokens}  output_tokens=${t.output_tokens}  cache_read_tokens=${t.cache_read_tokens}  cache_creation_tokens=${t.cache_creation_tokens}  cost_usd=${t.cost_usd ?? "-"}  incomplete=${t.incomplete}${t.incomplete ? " (excluded from cost; token totals may be lower bounds)" : ""}`,
 		...t.pairs.map(
 			(p) =>
-				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  success=${pct(p.success_rate)}  cost_per_success=${usd(p.cost_usd_per_success)}  tokens_per_success=${p.tokens_per_success === null ? "-" : Math.round(p.tokens_per_success)}  cost_per_attempt=${usd(p.cost_usd_per_attempt)}${p.cost_incomplete_share ? `  cost_incomplete=${pct(p.cost_incomplete_share)}` : ""}`,
+				`  ${p.model}:${p.effort ?? "-"}  n=${p.n}  chains=${p.n_chains}  success=${pct(p.success_rate)}  cost_per_success=${usd(p.cost_usd_per_success)}  tokens_per_success=${p.tokens_per_success === null ? "-" : Math.round(p.tokens_per_success)}  cost_per_attempt=${usd(p.cost_usd_per_attempt)}${p.cost_incomplete_share ? `  cost_incomplete=${pct(p.cost_incomplete_share)}` : ""}`,
 		),
 	]);
 	const opt = (x: number | null) => (x === null ? "-" : pct(x));

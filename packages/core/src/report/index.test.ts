@@ -1072,6 +1072,19 @@ test("a chain with an attempt lacking usage evidence is excluded from spend", as
 	expect(p?.cost_incomplete_share).toBe(1);
 });
 
+test("pairs count attempts in n and completed chains in n_chains", async () => {
+	sug("rc");
+	report("rc", "m/a", "low", "fail", [10, 10]);
+	retry("rc", "pass", false);
+	const pairs = (await runStats({ dbPath, successQuality: 0.8 })).by_type[0]
+		?.pairs;
+	// The chain belongs to its root pair (m/a); the retry attempt is one outcome of m/b.
+	expect(pairs).toMatchObject([
+		{ model: "m/a", n: 1, n_chains: 1 },
+		{ model: "m/b", n: 1, n_chains: 0 },
+	]);
+});
+
 test("bench rows show in their own section and leave live stats unchanged", async () => {
 	sug("s1");
 	report("s1", "m/a", "low", "pass");

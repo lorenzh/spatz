@@ -550,7 +550,7 @@ describe("stats", () => {
 		expect(r.code).toBe(0);
 		expect(r.stdout).toMatch(/^other {2}n=2 /);
 		expect(r.stdout).toContain(
-			"anthropic/claude-sonnet-5.5:medium  n=1  success=100%",
+			"anthropic/claude-sonnet-5.5:medium  n=1  chains=1  success=100%",
 		);
 		expect(r.stdout).toContain("coverage: 67%");
 		const bad = await spatz(["stats", "--type", "bogus"]);
