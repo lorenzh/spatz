@@ -115,10 +115,10 @@ spatz converts each id to the canonical OpenRouter id:
 | Key in `~/.spatz/aliases.json` | The alias value wins over all other rules. | `{"my-model": "vendor/model-x"}` |
 | Contains `/` | Used as given. | `openai/gpt-6-sol` |
 | `claude-*` | Prefix `anthropic/`. The last dash between two digits becomes a dot. | `claude-opus-5-5` becomes `anthropic/claude-opus-5.5` |
-| `gpt-*` | Prefix `openai/`. | `gpt-6-sol` becomes `openai/gpt-6-sol` |
+| `gpt-*` | Prefix `openai/`. A trailing date is stripped. | `gpt-6-sol-2026-10-01` becomes `openai/gpt-6-sol` |
 | Any other id | Used as given. | `my-model` |
 
-An 8-digit date snapshot suffix (for example, `-20251001`) is stripped from Claude IDs for pricing and learning and added when spatz matches a picker ID. The Claude picker ID `claude-haiku-4-5-20251001` maps to `anthropic/claude-haiku-4.5`. User aliases take precedence.
+A date snapshot suffix (`-20251001` for Claude, `-20251001` or `-2025-10-01` for GPT) is stripped from Claude and GPT IDs for pricing and learning and added when spatz matches a picker ID. The Claude picker ID `claude-haiku-4-5-20251001` maps to `anthropic/claude-haiku-4.5`. User aliases take precedence.
 
 spatz sorts the candidates by cost: output price, then input price, then effort, then id. A model that OpenRouter does not list counts as the most expensive.
 
@@ -258,6 +258,8 @@ spatz attempt finalize --session <id> [--agent-id <id>]
 `start` registers a segment before execution. A repeated start key returns the same attempt.
 Unknown effort stays null. `--owns-usage` marks mod usage ownership for this context.
 `--model-version` stores the model revision the caller knows. Without it, start takes the date of a dated `--model`, or the revision the harness catalog lists for an undated alias. Otherwise the version stays null.
+
+Stores from spatz 0.4 and older can hold dated GPT keys such as `openai/gpt-5-2025-08-07`. spatz leaves these rows as they are. Learning, stats and attempt matching treat a dated key as its stable key (`openai/gpt-5`), so a replay or report with the stable key finds the old attempt.
 `bind` connects a hook/mod tool-call ID to the active attempt.
 `finalize` closes observed execution without inventing a successful verdict.
 The main session omits `--agent-id`. Each subagent supplies its own ID.

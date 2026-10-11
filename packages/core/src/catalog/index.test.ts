@@ -52,6 +52,8 @@ describe("toCanonicalId", () => {
 		["claude-haiku-4-5-20260101", "anthropic/claude-haiku-4.5"],
 		["gpt-6-sol", "openai/gpt-6-sol"],
 		["gpt-6.1-sol", "openai/gpt-6.1-sol"],
+		["gpt-5-2025-08-07", "openai/gpt-5"],
+		["gpt-6-sol-20261001", "openai/gpt-6-sol"],
 	])("%s -> %s", (id, canonical) => {
 		expect(toCanonicalId(id, {})).toBe(canonical);
 	});
