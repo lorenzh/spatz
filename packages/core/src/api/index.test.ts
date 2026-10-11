@@ -877,6 +877,19 @@ describe("direct mod attribution", () => {
 		).rejects.toThrow("needs --turn or --agent-id");
 	});
 
+	test("a mod pre-spawn suggestion takes the session from the environment without a turn", async () => {
+		const s = setup({ env: { CLAUDE_CODE_SESSION_ID: SESSION } });
+		const out = await s.api.suggest({
+			...suggestInput(),
+			source: "claude-code-mod",
+			scope: "subagent",
+		});
+		expect(s.store.getSuggestion(out.suggestion_id)).toMatchObject({
+			session_id: SESSION,
+			agent_id: null,
+		});
+	});
+
 	test("stats opens the store first so migrations run on an old database", async () => {
 		const s = setup();
 		const order: string[] = [];
@@ -3754,6 +3767,23 @@ describe("session links from the environment, attempts and discards", () => {
 			session_id: SESSION,
 			agent_id: "worker",
 		});
+		s.setNow(T0 + HOUR);
+		expect(await s.api.pending({ olderThanMs: 0 })).toEqual([
+			expect.objectContaining({ id: out.suggestion_id }),
+		]);
+		await s.api.handleHook(
+			"SubagentStop",
+			JSON.stringify(
+				base({
+					hook_event_name: "SubagentStop",
+					agent_id: "worker",
+					agent_type: "test",
+					agent_transcript_path: join(dir, "missing-worker.jsonl"),
+					stop_hook_active: false,
+				}),
+			),
+		);
+		expect(await s.api.pending({ olderThanMs: 0 })).toEqual([]);
 	});
 
 	test("discard marks a suggestion unknown once and leaves decided rows alone", async () => {

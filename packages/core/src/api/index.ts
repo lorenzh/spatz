@@ -777,7 +777,7 @@ export function createApi(
 					throw new Error(`invalid ${name}`);
 			}
 			// A subagent's id exists only after its spawn: link it later with `link`.
-			if (source === "claude-code-mod" && session && !turn && !agentId)
+			if (source === "claude-code-mod" && explicitSession && !turn && !agentId)
 				throw new Error(
 					"a mod suggestion with --session needs --turn or --agent-id",
 				);
