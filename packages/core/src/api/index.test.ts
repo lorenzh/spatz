@@ -3772,3 +3772,104 @@ describe("session links from the environment, attempts and discards", () => {
 		expect(count?.n).toBe(1);
 	});
 });
+
+describe("labels", () => {
+	const labelOf = (dbPath: string, id: string) => {
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			return db
+				.query<{ label: string | null }, [string]>(
+					"SELECT label FROM suggestions WHERE id = ?",
+				)
+				.get(id)?.label;
+		} finally {
+			db.close();
+		}
+	};
+
+	test("suggest stores the label as typed", async () => {
+		const dbPath = join(dir, "label-store.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const out = await s.api.suggest({ ...suggestInput(), label: "Fix  Auth " });
+		expect(labelOf(dbPath, out.suggestion_id)).toBe("Fix  Auth ");
+	});
+
+	test("an empty label is rejected", async () => {
+		const s = setup();
+		await expect(
+			s.api.suggest({ ...suggestInput(), label: "  " }),
+		).rejects.toThrow("invalid label");
+	});
+
+	test("pending lists the label, scope, chosen pair and age", async () => {
+		const s = setup();
+		const out = await s.api.suggest({
+			...suggestInput(),
+			label: "fix-auth",
+			scope: "step",
+		});
+		s.setNow(T0 + 3 * HOUR);
+		const row = (await s.api.pending({})).find(
+			(p) => p.id === out.suggestion_id,
+		);
+		expect(row).toMatchObject({
+			label: "fix-auth",
+			scope: "step",
+			age_ms: 3 * HOUR,
+		});
+		expect(row?.pair).not.toBeNull();
+	});
+
+	test("report by label closes the one pending row with that label", async () => {
+		const s = setup();
+		await s.api.suggest({ ...suggestInput(), label: "fix-auth" });
+		const other = await s.api.suggest({ ...suggestInput(), label: "other" });
+		await s.api.report({
+			label: "fix-auth",
+			model: "claude-opus-5-5",
+			effort: "high",
+			result: "pass",
+		});
+		expect((await s.api.pending({})).map((p) => p.id)).toEqual([
+			other.suggestion_id,
+		]);
+	});
+
+	test("an ambiguous label is an error and writes nothing", async () => {
+		const s = setup();
+		await s.api.suggest({ ...suggestInput(), label: "dup" });
+		await s.api.suggest({ ...suggestInput(), label: "dup" });
+		await expect(
+			s.api.report({
+				label: "dup",
+				model: "claude-opus-5-5",
+				effort: "high",
+				result: "pass",
+			}),
+		).rejects.toThrow('2 pending suggestions labeled "dup"');
+		expect(await s.api.pending({})).toHaveLength(2);
+	});
+
+	test("a label with no pending match is an error", async () => {
+		const s = setup();
+		await expect(
+			s.api.report({
+				label: "missing",
+				model: "claude-opus-5-5",
+				effort: "high",
+				result: "pass",
+			}),
+		).rejects.toThrow('no pending suggestion labeled "missing"');
+	});
+
+	test("report needs a suggestion_id or a label", async () => {
+		const s = setup();
+		await expect(
+			s.api.report({
+				model: "claude-opus-5-5",
+				effort: "high",
+				result: "pass",
+			}),
+		).rejects.toThrow("needs suggestion_id or label");
+	});
+});

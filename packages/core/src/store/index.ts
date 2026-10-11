@@ -244,6 +244,7 @@ const MIGRATIONS = [
 	SCHEMA_V11,
 	BENCH_SCHEMA,
 	BENCH_RUN_SCHEMA,
+	["ALTER TABLE suggestions ADD COLUMN label TEXT"],
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -416,9 +417,10 @@ export function openStore(
 				db.query(
 					`INSERT INTO suggestions VALUES ($id, $created_at, $session_id, $prompt_id, $task_type, $difficulty,
 				$criticality, $probabilities, $model_ref, $strategy, $ranking, $reason, $explored, $control,
-				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason, $price_snapshot, $price_date, $requested_model, 0)`,
+				$fallback_used, $is_test, $last_event_at, $closed_at, $scope, $agent, $turn_id, $agent_id, $fallback_reason, $price_snapshot, $price_date, $requested_model, 0, $label)`,
 				).run({
 					...r,
+					label: r.label ?? null,
 					price_snapshot: r.price_snapshot
 						? JSON.stringify(r.price_snapshot)
 						: null,
@@ -609,7 +611,7 @@ export function openStore(
 		pending(olderThanMs, now) {
 			return db
 				.query<PendingSuggestion, { cutoff: number }>(
-					`SELECT id, created_at, session_id, agent_id, task_type, COALESCE(agent, 'cli') AS source
+					`SELECT id, created_at, session_id, agent_id, task_type, COALESCE(agent, 'cli') AS source, label, scope
 					FROM suggestions s WHERE is_test = 0 AND is_legacy = 0 AND created_at <= $cutoff
 					AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.suggestion_id = s.id)
 					AND NOT EXISTS (SELECT 1 FROM unknown_outcomes u WHERE u.suggestion_id = s.id)

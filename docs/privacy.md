@@ -21,6 +21,7 @@ Only the task text of `spatz "<task>"` leaves the machine with task content. It 
 | Classification, Jev probabilities, ranking, reason, flags | Local SQLite file `~/.spatz/spatz.db` | Each suggestion | Do not run `spatz`. |
 | Session id, prompt id, signals, model, effort, token counts | `~/.spatz/spatz.db` | Hook events and `spatz report` | Remove the spatz hooks from the Claude Code settings. |
 | `--rounds` and `--note` of `spatz report` | `~/.spatz/spatz.db`, as you typed them | Each `spatz report` call | Do not pass `--note`. Do not put secrets or task text in it. |
+| `--label` of `spatz <task>` and `spatz report` | `~/.spatz/spatz.db`, as you typed it | Each suggestion or report with a label | Do not pass `--label` with secrets or task text. spatz stores it as typed, like `--note`. |
 | OpenRouter model list (ids, names, prices) | Local cache `~/.spatz/openrouter-models.json` | After each successful model list request | Delete the file. spatz loads the list again. |
 | Bench snapshot (aggregated benchmark counts) | Local cache `~/.spatz/bench-snapshot.json` | After each verified download | Delete the file. spatz downloads it again or uses its bundled copy. |
 
