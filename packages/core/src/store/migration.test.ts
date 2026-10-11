@@ -446,3 +446,72 @@ test("a v5 backup keeps its rows and the current store refuses a newer schema", 
 	newer.close();
 	expect(() => openDatabase(path)).toThrow(/newer than supported.*upgrade/i);
 });
+
+test("dated gpt keys from an older store migrate to the stable key", async () => {
+	const dir = directory();
+	const path = join(dir, "spatz.db");
+	const previous = await previousStore(dir);
+	const old = previous.openStore(path);
+	const ctx = { harness: "codex", session_key: "s", agent_key: "" };
+	old.insertSuggestion({
+		id: "s1",
+		created_at: 1000,
+		scope: null,
+		agent: null,
+		turn_id: null,
+		agent_id: null,
+		session_id: "s",
+		prompt_id: null,
+		task_type: "code.bugfix",
+		difficulty: "medium",
+		criticality: "none",
+		probabilities: null,
+		model_ref: null,
+		strategy: "rules",
+		ranking: [],
+		reason: "r",
+		explored: false,
+		control: false,
+		fallback_used: true,
+		fallback_reason: null,
+		is_test: false,
+		last_event_at: 1000,
+		closed_at: null,
+	});
+	const dated = {
+		...ctx,
+		suggestion_id: "s1",
+		key: "t:0",
+		model: "openai/gpt-5-2025-08-07",
+		effort: "high" as const,
+		at: 1100,
+	};
+	const attempt = old.startAttempt(dated);
+	old.dispose();
+
+	const store = openStore(path);
+	const stable = { model: "openai/gpt-5", model_version: "2025-08-07" };
+	expect(store.startAttempt({ ...dated, ...stable }).id).toBe(attempt.id);
+	const report = store.reportAttempt({
+		suggestion_id: "s1",
+		attempt_id: attempt.id,
+		...stable,
+		effort: "high",
+		result: "pass",
+		at: 2000,
+	});
+	expect(report.attempt_id).toBe(attempt.id);
+	expect(
+		store.reportAttempt({
+			suggestion_id: "s1",
+			...stable,
+			effort: "high",
+			result: "pass",
+			at: 2001,
+		}).attempt_id,
+	).toBe(attempt.id);
+	expect(store.cellStats("code.bugfix")).toMatchObject([
+		{ model: "openai/gpt-5", n: 1 },
+	]);
+	store.dispose();
+});

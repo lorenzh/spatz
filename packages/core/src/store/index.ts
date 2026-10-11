@@ -230,6 +230,25 @@ const SCHEMA_V11 = [
 	"CREATE TABLE unknown_outcomes (suggestion_id TEXT PRIMARY KEY REFERENCES suggestions(id), marked_at INTEGER NOT NULL)",
 ];
 
+// v15: dated GPT keys ("openai/gpt-5-2025-08-07") become the stable key; the date moves to
+// model_version where that is empty. Raw harness ids (answered_model, dispatches) stay.
+const DATED_GPT = [
+	["[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]", 10],
+	["[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]", 8],
+] as const;
+const DATED_GPT_SCHEMA = DATED_GPT.flatMap(([date, n]) => {
+	const where = `WHERE model GLOB 'openai/gpt-*-${date}'`;
+	const base = `model=substr(model,1,length(model)-${n + 1})`;
+	const version = `model_version=COALESCE(NULLIF(model_version,''),substr(model,-${n}))`;
+	return [
+		...["attempts", "attempt_events", "bench_attempts"].map(
+			(t) => `UPDATE ${t} SET ${version},${base} ${where}`,
+		),
+		// ponytail: a usage row that collides with an existing stable-key row keeps its dated key.
+		`UPDATE OR IGNORE usages SET ${base} ${where}`,
+	];
+});
+
 const MIGRATIONS = [
 	SCHEMA_V1,
 	SCHEMA_V2,
@@ -245,6 +264,7 @@ const MIGRATIONS = [
 	BENCH_SCHEMA,
 	BENCH_RUN_SCHEMA,
 	["ALTER TABLE suggestions ADD COLUMN label TEXT"],
+	DATED_GPT_SCHEMA,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
