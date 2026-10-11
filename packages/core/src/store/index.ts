@@ -601,7 +601,7 @@ export function openStore(
 					SELECT s.id, $at FROM suggestions s WHERE s.is_legacy = 0 AND ${
 						"id" in by
 							? "s.id = $id"
-							: "s.session_id = $session AND s.agent_id IS $agent"
+							: "s.session_id = $session AND s.agent_id IS $agent AND s.created_at <= $at"
 					} AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.suggestion_id = s.id)
 					RETURNING suggestion_id AS id`,
 				)

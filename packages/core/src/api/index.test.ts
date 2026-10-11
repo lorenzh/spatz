@@ -183,6 +183,7 @@ function setup(over: Partial<CoreDeps> = {}) {
 		},
 		jev: null,
 		clock: { now: () => now },
+		sleep: async () => {},
 		random: () => {
 			draws++;
 			return 0.5;
@@ -3902,4 +3903,123 @@ describe("labels", () => {
 			}),
 		).rejects.toThrow("needs suggestion_id or label");
 	});
+});
+
+describe("stop hook before the transcript flush (SPZ-205)", () => {
+	// Real shapes: Claude Code stops the turn, then writes the last entries to the transcript.
+	const stopPayload = (sub: boolean, path: string) => ({
+		session_id: SESSION,
+		transcript_path: path,
+		cwd: dir,
+		permission_mode: "auto",
+		prompt_id: PROMPT,
+		hook_event_name: sub ? "SubagentStop" : "Stop",
+		stop_hook_active: false,
+		last_assistant_message: "Done.",
+		...(sub
+			? {
+					agent_id: "a1aa44be6965f0579",
+					agent_type: "workflow-subagent",
+					agent_transcript_path: path,
+				}
+			: {}),
+	});
+	const entries = (sub: boolean) =>
+		[
+			JSON.stringify({
+				type: "user",
+				promptId: PROMPT,
+				isSidechain: sub,
+				message: { role: "user", content: "Ja bitte" },
+			}),
+			assistant("msg_flushed", "claude-opus-5-5", 42, { isSidechain: sub }),
+		].join("\n");
+	const failures = (dbPath: string) => {
+		const db = new Database(dbPath);
+		try {
+			return db.query("SELECT kind, event FROM failures").all() as unknown[];
+		} finally {
+			db.close();
+		}
+	};
+
+	test("a suggestion made during the retry stays open after the Stop", async () => {
+		const dbPath = join(dir, "during-retry.db");
+		const s = setup({
+			openStore: () => openStore(dbPath),
+			sleep: async () => {
+				s.setNow(T0 + 500);
+				await s.api.suggest({ ...suggestInput("Next turn"), session: SESSION });
+			},
+		});
+		await s.api.suggest({ ...suggestInput(), session: SESSION });
+		s.setNow(T0 + 10);
+		await s.api.handleHook(
+			"Stop",
+			JSON.stringify(stopPayload(false, join(dir, "never.jsonl"))),
+		);
+		const db = new Database(dbPath);
+		try {
+			expect(
+				db
+					.query(
+						"SELECT s.created_at FROM unknown_outcomes u JOIN suggestions s ON s.id = u.suggestion_id",
+					)
+					.all(),
+			).toEqual([{ created_at: T0 }]);
+		} finally {
+			db.close();
+		}
+	});
+
+	for (const sub of [false, true]) {
+		const name = sub ? "SubagentStop" : "Stop";
+		test(`${name} records usage when the transcript appears during the retry`, async () => {
+			const dbPath = join(dir, `late-${name}.db`);
+			const path = join(dir, `late-${name}.jsonl`);
+			const waits: number[] = [];
+			const s = setup({
+				openStore: () => openStore(dbPath),
+				sleep: async (ms) => {
+					waits.push(ms);
+					await Bun.write(path, entries(sub));
+				},
+			});
+			await s.api.suggest({
+				...suggestInput(),
+				session: SESSION,
+				agentId: sub ? "a1aa44be6965f0579" : undefined,
+			});
+			await s.api.handleHook(name, JSON.stringify(stopPayload(sub, path)));
+			expect(waits).toEqual([200]);
+			expect(failures(dbPath)).toEqual([]);
+			const db = new Database(dbPath);
+			try {
+				expect(
+					db
+						.query("SELECT SUM(output_tokens) AS tokens FROM usage_totals")
+						.get(),
+				).toEqual({ tokens: 42 });
+			} finally {
+				db.close();
+			}
+		});
+
+		test(`${name} retries a bounded time, then records one parse failure`, async () => {
+			const dbPath = join(dir, `never-${name}.db`);
+			const waits: number[] = [];
+			const s = setup({
+				openStore: () => openStore(dbPath),
+				sleep: async (ms) => {
+					waits.push(ms);
+				},
+			});
+			await s.api.handleHook(
+				name,
+				JSON.stringify(stopPayload(sub, join(dir, "never.jsonl"))),
+			);
+			expect(waits).toEqual([200, 400, 800]);
+			expect(failures(dbPath)).toEqual([{ kind: "parse", event: name }]);
+		});
+	}
 });

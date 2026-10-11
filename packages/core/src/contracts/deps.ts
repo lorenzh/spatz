@@ -178,7 +178,7 @@ export interface Store extends AttemptStore {
 		model: string,
 	): UsageRecord | null;
 	outcome(suggestionId: string): Outcome | null;
-	/** Mark open suggestions (no outcome yet) of one id, or of a session and agent (null = main), as explicitly unknown. Returns the ids newly marked. */
+	/** Mark open suggestions (no outcome yet) of one id, or of a session and agent (null = main), as explicitly unknown. A session close skips suggestions created after `at`. Returns the ids newly marked. */
 	closeUnknown(
 		by: { id: string } | { session: string; agentId: string | null },
 		at: number,
@@ -211,6 +211,8 @@ export interface CoreDeps {
 	/** null when TYPESAFE_AI_API_KEY is unset (-> fallback "no_key"). */
 	jev: JevClient | null;
 	clock: Clock;
+	/** Pause between transcript re-reads at a stop hook; default Bun.sleep. */
+	sleep?: (ms: number) => Promise<void>;
 	random: RandomFn;
 	/** New suggestion id; default crypto.randomUUID. */
 	newId: () => string;
