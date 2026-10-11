@@ -399,6 +399,8 @@ export interface DispatchRecord {
 /** Row of table `suggestions`. No task text is ever stored. */
 export interface SuggestionRecord {
 	retry_of?: string;
+	/** The caller's label, stored as typed. */
+	label?: string | null;
 	is_legacy?: number;
 	/** Original model before mod routing; null when absent or unknown. */
 	requested_model?: string | null;

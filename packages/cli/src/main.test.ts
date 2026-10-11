@@ -1364,6 +1364,10 @@ describe("pending, signal and coverage", () => {
 						agent_id: "a",
 						task_type: "code.bugfix",
 						source: "claude-code-mod",
+						label: "fix-auth",
+						scope: "step",
+						pair: { model: "claude-opus-5-5", effort: "high" },
+						age_ms: 7_200_000,
 					},
 				];
 			},
@@ -1371,7 +1375,7 @@ describe("pending, signal and coverage", () => {
 		expect(await main(["pending", "--older-than", "1h"], io, api)).toBe(0);
 		expect(calls[0]?.args[0]).toEqual({ olderThanMs: 3_600_000 });
 		expect(stdout()).toBe(
-			"s1  1970-01-01T00:00:00.000Z  source=claude-code-mod  session=S  agent=a  task_type=code.bugfix",
+			"s1  1970-01-01T00:00:00.000Z  label=fix-auth  pair=claude-opus-5-5:high  scope=step  age=2h  source=claude-code-mod  session=S  agent=a  task_type=code.bugfix",
 		);
 		expect(
 			await main(["pending", "--older-than", "soon"], fakeIO().io, api),
@@ -1503,4 +1507,41 @@ test("stats text shows the bench snapshot source and age, or that it is off", as
 		"snapshot: release 3ce2237 of 2026-10-10 (2 d old)  cells=540  prior_weight=6",
 	);
 	expect(await text(null)).toContain("snapshot: off");
+});
+
+describe("labels on the command line", () => {
+	test("suggest forwards --label", async () => {
+		const { io } = fakeIO();
+		const { api, calls } = fakeApi();
+		await main(
+			["fix the bug", "--models", "m", "--label", "fix-auth"],
+			io,
+			api,
+		);
+		expect(calls[0]?.args[0]).toMatchObject({ label: "fix-auth" });
+	});
+
+	test("report --label resolves without a suggestion id", async () => {
+		const { io } = fakeIO();
+		const { api, calls } = fakeApi();
+		expect(
+			await main(
+				[
+					"report",
+					"--label",
+					"fix-auth",
+					"--model",
+					"m",
+					"--effort",
+					"high",
+					"--result",
+					"pass",
+				],
+				io,
+				api,
+			),
+		).toBe(0);
+		expect(calls[0]?.args[0]).toMatchObject({ label: "fix-auth" });
+		expect(calls[0]?.args[0]).not.toHaveProperty("suggestionId");
+	});
 });

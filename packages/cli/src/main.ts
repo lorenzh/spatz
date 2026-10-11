@@ -26,12 +26,12 @@ export interface CliIO {
 
 const USAGE = `usage:
   spatz --version
-  spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
+  spatz "<task>" [--label <text>] [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
   spatz suggest "<task>" [--retry-of <suggestion_id>] [suggestion options]
   spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--model-version <v>] [--owns-usage] [--json]
   spatz attempt bind <attempt_id> --call <id> --session <id> [--agent-id <id>]
   spatz attempt finalize --session <id> [--agent-id <id>]
-  spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
+  spatz report <suggestion_id> | --label <text> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
   spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--attempt <id>] [--key <turn:index>] [--session <id>] [--agent-id <id>] [--cost-usd <n>] [--json]
   spatz import-rollout <file> --suggestion <id> [--json]
   spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
@@ -46,6 +46,14 @@ const REVIEWS: readonly string[] = ["approve", "changes", "blocker"];
 const UNIT_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
 
 /** "1h" -> milliseconds. */
+/** Coarse age for pending rows: minutes, hours, then days. */
+function formatAge(ms: number): string {
+	const minutes = Math.floor(ms / 60_000);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
 function parseAge(text: string): number {
 	const m = /^(\d+)([smhd])$/.exec(text);
 	if (!m) throw new UsageError("--older-than must look like 30m, 1h or 2d");
@@ -192,6 +200,7 @@ function parse(argv: string[]) {
 				"cost-usd": { type: "string" },
 				by: { type: "string" },
 				"model-version": { type: "string" },
+				label: { type: "string" },
 			},
 		});
 	} catch (e) {
@@ -364,7 +373,8 @@ export async function main(
 				};
 			};
 		} else if (cmd === "report") {
-			const suggestionId = required(rest[0], "<suggestion_id>");
+			const suggestionId =
+				v.label === undefined ? required(rest[0], "<suggestion_id>") : rest[0];
 			const model = required(v.model, "--model");
 			const effort = required(v.effort, "--effort");
 			const result = required(v.result, "--result");
@@ -384,7 +394,8 @@ export async function main(
 				}),
 				...(v.correct !== undefined && { correct: v.correct }),
 				...(v.confirm !== undefined && { confirm: v.confirm }),
-				suggestionId,
+				...(suggestionId !== undefined && { suggestionId }),
+				...(v.label !== undefined && { label: v.label }),
 				model,
 				effort,
 				result: result as ReportResult,
@@ -393,7 +404,10 @@ export async function main(
 			};
 			run = async () => {
 				const o = await api.report(input);
-				return { result: o, text: () => formatOutcome(suggestionId, o) };
+				return {
+					result: o,
+					text: () => formatOutcome(o?.suggestion_id ?? suggestionId ?? "-", o),
+				};
 			};
 		} else if (cmd === "signal") {
 			if (rest[0] !== "pr") throw new UsageError("signal needs pr");
@@ -426,7 +440,7 @@ export async function main(
 							? r
 									.map(
 										(p) =>
-											`${p.id}  ${new Date(p.created_at).toISOString()}  source=${p.source}  session=${p.session_id ?? "-"}  agent=${p.agent_id ?? "-"}  task_type=${p.task_type}`,
+											`${p.id}  ${new Date(p.created_at).toISOString()}  label=${p.label ?? "-"}  pair=${p.pair ? `${p.pair.model}:${p.pair.effort}` : "-"}  scope=${p.scope ?? "-"}  age=${formatAge(p.age_ms)}  source=${p.source}  session=${p.session_id ?? "-"}  agent=${p.agent_id ?? "-"}  task_type=${p.task_type}`,
 									)
 									.join("\n")
 							: "pending: none",
@@ -485,6 +499,7 @@ export async function main(
 				...(v["agent-id"] !== undefined && {
 					agentId: required(v["agent-id"], "--agent-id"),
 				}),
+				...(v.label !== undefined && { label: required(v.label, "--label") }),
 			};
 			run = async () => {
 				const s = await api.suggest(input);

@@ -104,6 +104,13 @@ export interface PendingSuggestion {
 	task_type: string;
 	/** suggestions.agent, or "cli" when the suggestion came from no harness. */
 	source: string;
+	label: string | null;
+	scope: string | null;
+}
+
+export interface PendingView extends PendingSuggestion {
+	pair: { model: string; effort: Effort } | null;
+	age_ms: number;
 }
 
 export interface Store extends AttemptStore {
@@ -217,6 +224,8 @@ export interface CoreDeps {
 
 export interface SuggestInput {
 	retryOf?: string;
+	/** Caller-typed label, stored as typed; report can resolve the pending row by it. */
+	label?: string;
 	/** Original explicit model before routing; "-" means no explicit model. */
 	requested?: string;
 	/** Custom Claude agent whose definition supplies the model when none is explicit. */
@@ -237,7 +246,9 @@ export interface ReportInput {
 	attempt?: string;
 	correct?: boolean;
 	confirm?: boolean;
-	suggestionId: string;
+	/** Either the suggestion id or a label that matches exactly one pending row. */
+	suggestionId?: string;
+	label?: string;
 	model: string;
 	effort: string;
 	result: ReportResult;
@@ -318,7 +329,7 @@ export interface SpatzApi {
 	handleHook(event: string, stdin: string): Promise<void>;
 	stats(input: StatsInput): Promise<StatsReport>;
 	/** Suggestions without an outcome or an unknown mark, oldest first. */
-	pending(input: { olderThanMs?: number }): Promise<PendingSuggestion[]>;
+	pending(input: { olderThanMs?: number }): Promise<PendingView[]>;
 	/**
 	 * Records the result of a pull request for the suggestion named by its `Spatz-Suggestion: <id>` trailer.
 	 * Returns null while the PR is open and no review verdict is given.

@@ -616,6 +616,24 @@ export function createApi(
 		});
 	}
 
+	/** The one pending suggestion with this label; ambiguous or missing labels fail without writing. */
+	async function labelledPendingId(label: string | undefined): Promise<string> {
+		if (label === undefined || !label.trim())
+			throw new Error("report needs suggestion_id or label");
+		const ids = await withStore((store) =>
+			store
+				.pending(0, deps.clock.now())
+				.filter((p) => p.label === label)
+				.map((p) => p.id),
+		);
+		if (ids.length === 1) return ids[0] as string;
+		throw new Error(
+			ids.length === 0
+				? `no pending suggestion labeled "${label}"`
+				: `${ids.length} pending suggestions labeled "${label}"; report by suggestion_id`,
+		);
+	}
+
 	return {
 		async startAttempt(input) {
 			if (!input.key.trim() || !input.session.trim() || !input.model.trim())
@@ -737,6 +755,7 @@ export function createApi(
 			requested: requestedModel,
 			requestedAgent,
 			retryOf,
+			label,
 		}) {
 			if (scope !== undefined && !(SCOPES as readonly string[]).includes(scope))
 				throw new Error("invalid scope");
@@ -752,6 +771,7 @@ export function createApi(
 				agentId,
 				requested: requestedModel,
 				requestedAgent,
+				label,
 			})) {
 				if (value !== undefined && !value.trim())
 					throw new Error(`invalid ${name}`);
@@ -864,6 +884,7 @@ export function createApi(
 				store.insertSuggestion({
 					id,
 					retry_of: retryOf,
+					label: label ?? null,
 					requested_model: originalModel,
 					created_at: now,
 					price_date: now,
@@ -1041,7 +1062,8 @@ export function createApi(
 		},
 
 		async report({
-			suggestionId,
+			suggestionId: givenId,
+			label,
 			model,
 			effort,
 			result,
@@ -1053,6 +1075,7 @@ export function createApi(
 			rounds,
 			note,
 		}) {
+			const suggestionId = givenId ?? (await labelledPendingId(label));
 			if (source !== undefined && source !== "claude-code-mod")
 				throw new Error("invalid report source");
 			if (
@@ -1134,7 +1157,14 @@ export function createApi(
 		},
 
 		async pending({ olderThanMs = 0 }) {
-			return withStore((store) => store.pending(olderThanMs, deps.clock.now()));
+			const now = deps.clock.now();
+			return withStore((store) =>
+				store.pending(olderThanMs, now).map((p) => ({
+					...p,
+					pair: store.pairOf(p.id),
+					age_ms: now - p.created_at,
+				})),
+			);
 		},
 
 		async signalPr({ url, review }) {

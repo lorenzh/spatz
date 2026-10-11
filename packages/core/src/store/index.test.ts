@@ -462,6 +462,7 @@ describe("suggestions", () => {
 			is_test: true,
 			last_event_at: 99,
 			closed_at: 100,
+			label: "fix-auth",
 		});
 		store.insertSuggestion(record);
 		expect(store.getSuggestion("abc")).toEqual({
@@ -1365,6 +1366,8 @@ describe("unknown outcomes and pending", () => {
 		store.insertSuggestion(
 			suggestion({
 				id: "old",
+				label: null,
+				scope: null,
 				created_at: 1000,
 				session_id: "S",
 				agent_id: "a",
@@ -1377,6 +1380,8 @@ describe("unknown outcomes and pending", () => {
 		expect(store.pending(5000, 10_000)).toEqual([
 			{
 				id: "old",
+				label: null,
+				scope: null,
 				created_at: 1000,
 				session_id: "S",
 				agent_id: "a",

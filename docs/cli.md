@@ -11,8 +11,8 @@ Each spatz command calls the `@spatz/core` API and formats the result. The CLI h
 
 ```text
 spatz --version
-spatz "<task>" [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>] [--retry-of <suggestion_id>]
-spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
+spatz "<task>" [--label <text>] [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>] [--retry-of <suggestion_id>]
+spatz report <suggestion_id> | --label <text> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
 spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
 spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
 spatz discard <suggestion_id> [--json]
@@ -48,6 +48,7 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--retry-of <suggestion_id>` | string | none | Join the named suggestion's recovery chain. |
 | `--scope <scope>` | string | `null` | Store `step`, `turn`, `subagent`, `session` or `escalate`. This labels the routing decision. |
 | `--session <id>` | string | env | Link the suggestion at creation. This does not need a Bash hook. Without the flag, spatz reads the session from `CLAUDE_CODE_SESSION_ID` (Claude Code), then `CODEX_SESSION_ID` or `CODEX_THREAD_ID` (Codex). An explicit flag wins. With `--source claude-code-mod`, you must also give `--turn` or `--agent-id`. Otherwise the call fails. |
+| `--label <text>` | string | `null` | A name for this suggestion, stored as typed. `spatz report --label` resolves the one pending suggestion with this name. Do not put secrets or private text in it, same as `--note`. An empty label fails. |
 | `--turn <id>` | string | `null` | Store the initial turn id. |
 | `--agent-id <id>` | string | `null` | Store the subagent id. Without it, the suggestion uses the main window. |
 | `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code`, `claude-code-mod` or `codex`. |
@@ -191,6 +192,7 @@ It closes the attempt and suggestion window. Late evidence can still bind by sou
 | `--confirm` | boolean | `false` | Report on an existing `--attempt` without creating a retry. Reject a changed prior report. Cannot combine with `--correct`. |
 | `--rounds <n>` | non-negative integer | none | Count of rounds the agent needed. |
 | `--note <t>` | string | none | A short note. spatz stores it in the database. |
+| `--label <text>` | string | none | Report the pending suggestion with this label instead of giving its id. spatz needs exactly one pending match: no match or several matches fail without writing. The label is stored as typed, like `--note`. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 | `--turn <id>` | string | none | Identify a direct report's turn. Needs `--source claude-code-mod`. |
 | `--source claude-code-mod` | string | none | Identify a direct mod report. Needs `--turn`. |
@@ -463,7 +465,7 @@ This command lists suggestions that have neither an outcome nor an `unknown` mar
 | `--older-than <n>s\|m\|h\|d` | duration | `0s` | List only suggestions at least this old. Another format gives exit code 2. |
 | `--json` | boolean | `false` | Print a JSON array. |
 
-Each text line shows the id, the creation time, `source` (`claude-code-mod`, `claude-code`, `codex` or `cli`), `session`, `agent` and `task_type`.
+Each text line shows the id, the creation time, `label` (as typed with `--label`), `pair` (the chosen model and effort), `scope`, `age` (minutes, hours or days), `source` (`claude-code-mod`, `claude-code`, `codex` or `cli`), `session`, `agent` and `task_type`.
 
 ## spatz signal pr
 
