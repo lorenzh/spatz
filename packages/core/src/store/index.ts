@@ -20,7 +20,7 @@ import {
 } from "../contracts/types.ts";
 import { ATTEMPT_SCHEMA, USAGE_COMPLETENESS_SCHEMA } from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
-import { BENCH_SCHEMA, benchStore } from "./bench.ts";
+import { BENCH_RUN_SCHEMA, BENCH_SCHEMA, benchStore } from "./bench.ts";
 
 // No column holds task text (spec "Storage", "Privacy").
 const SCHEMA_V1 = `
@@ -243,6 +243,7 @@ const MIGRATIONS = [
 	SCHEMA_V10,
 	SCHEMA_V11,
 	BENCH_SCHEMA,
+	BENCH_RUN_SCHEMA,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 

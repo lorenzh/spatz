@@ -21,24 +21,49 @@ export const BENCH_SCHEMA = [
  started_at TEXT NOT NULL, contributor TEXT NOT NULL, verified INTEGER NOT NULL)`,
 ];
 
+// v13: the measurement run (12 hex digits, the snapshot's run id) a row was imported from; null when unknown.
+export const BENCH_RUN_SCHEMA = [
+	"ALTER TABLE bench_attempts ADD COLUMN source_run TEXT",
+];
+
 export function benchStore(
 	db: Database,
 	liveModelVersions: () => Record<string, string>,
-): Pick<Store, "importEvalRows" | "benchPriors"> {
+): Pick<Store, "importEvalRows" | "benchPriors" | "benchRuns"> {
 	return {
 		importEvalRows(rows, at, dryRun) {
 			const insert = db.query(
 				`INSERT OR IGNORE INTO bench_attempts VALUES ($run_id,$at,$bench_version,$task_id,$task_version,$task_hash,
 				$task_type,$difficulty,$criticality,$harness,$agent_version,$model,$effort,$answered_model,$model_version,$attempt,
 				$result,$check,$judge,$duration_s,$input,$output,$cache_read,$cache_write,$reasoning,$tokens_complete,
-				$cost_usd,$cost_source,$estimated_cost_usd,$started_at,$contributor,$verified)`,
+				$cost_usd,$cost_source,$estimated_cost_usd,$started_at,$contributor,$verified,$source_run)`,
 			);
+			// A stored row takes the run id of a larger file: rows imported before v13 or as part of a
+			// split run learn the id of the whole run on its next import. They stay duplicates.
+			const fill = db.query(
+				`UPDATE bench_attempts SET source_run = $source_run WHERE run_id = $run_id AND source_run IS NOT $source_run
+				AND (source_run IS NULL OR (SELECT COUNT(*) FROM bench_attempts b WHERE b.source_run = bench_attempts.source_run) < $size)`,
+			);
+			// Distinct rows per file id: a file passed twice does not grow.
+			const sizes = new Map<string, Set<string>>();
+			for (const { row, source_run } of rows)
+				if (source_run)
+					sizes.set(
+						source_run,
+						(sizes.get(source_run) ?? new Set()).add(row.run_id),
+					);
 			let added: boolean[] = [];
 			const rollback = new Error("dry run");
 			try {
 				db.transaction(() => {
-					added = rows.map(({ row: r, task_hash }) => {
+					added = rows.map(({ row: r, task_hash, source_run = null }) => {
 						const t = r.tokens;
+						if (source_run)
+							fill.run({
+								source_run,
+								run_id: r.run_id,
+								size: sizes.get(source_run)?.size ?? 0,
+							});
 						// The harness bill first, else the bench's list-price estimate; never priced without usage.
 						const cost = r.cost_usd ?? r.estimated_cost_usd;
 						return (
@@ -80,6 +105,7 @@ export function benchStore(
 								started_at: r.started_at,
 								contributor: r.contributor,
 								verified: Number(r.verified),
+								source_run,
 							}).changes > 0
 						);
 					});
@@ -94,7 +120,9 @@ export function benchStore(
 			const live = liveModelVersions();
 			return db
 				.query<
-					Omit<PriorCell, "version_match"> & { model_version: string | null },
+					Omit<PriorCell, "version_match" | "source"> & {
+						model_version: string | null;
+					},
 					[]
 				>(
 					// Rubric rows weigh 0.5: no local judge is validated.
@@ -108,12 +136,23 @@ export function benchStore(
 				.all()
 				.flatMap(({ model_version, ...cell }): PriorCell[] => {
 					const current = live[cell.model] ?? null;
+					const source = "imported bench rows";
 					if (model_version === null || current === null)
-						return [{ ...cell, version_match: "unknown" }];
+						return [{ ...cell, version_match: "unknown", source }];
 					return model_version === current
-						? [{ ...cell, version_match: "exact" }]
+						? [{ ...cell, version_match: "exact", source }]
 						: [];
 				});
+		},
+		benchRuns() {
+			return new Set(
+				db
+					.query<{ source_run: string }, []>(
+						"SELECT DISTINCT source_run FROM bench_attempts WHERE source_run IS NOT NULL",
+					)
+					.all()
+					.map((r) => r.source_run),
+			);
 		},
 	};
 }

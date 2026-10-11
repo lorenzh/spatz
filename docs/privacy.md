@@ -1,8 +1,8 @@
 ---
 title: Privacy and data in spatz
-description: What data spatz sends to TypeSafe (Jev), and OpenRouter, what it stores locally in ~/.spatz, the secret filter, the Jev opt-out and how to delete the data.
+description: What data spatz sends to TypeSafe (Jev) and OpenRouter, what it downloads as bench snapshot, what it stores locally in ~/.spatz, the secret filter, the Jev opt-out and how to delete the data.
 tags: [spatz, privacy, security]
-keywords: [data, network, jev, typesafe, openrouter, secret filter, opt-out, SPATZ_NO_JEV, .spatz.json, retention, delete, gdpr, telemetry]
+keywords: [data, network, jev, typesafe, openrouter, bench snapshot, spatz-measurements, github release, secret filter, opt-out, SPATZ_NO_JEV, .spatz.json, retention, delete, gdpr, telemetry]
 ---
 
 # Privacy and data in spatz
@@ -17,10 +17,12 @@ Only the task text of `spatz "<task>"` leaves the machine with task content. It 
 | `TYPESAFE_AI_API_KEY` | TypeSafe API, as the request credential | With each Jev request | Unset the variable. |
 | Request for the OpenRouter model list. It holds no task data. | `GET https://openrouter.ai/api/v1/models` | Each `spatz "<task>"` call that finds no cache or a cache older than 24 h. After a failed request or a failed cache write, the next call tries again. | No switch. Only a successfully written cache stops the requests for 24 h. |
 | `OPENROUTER_API_KEY` | OpenRouter, as `Authorization: Bearer` header | With the model list request, only when the variable is set | Unset the variable. The request then goes without a key. |
+| Download of the bench snapshot and its checksum. It holds no task data and uploads nothing. | `GET https://github.com/lorenzh/spatz-measurements/releases/latest/download/snapshot.json` and `snapshot.json.sha256` | Each `spatz "<task>"` call that finds no cache or a cache older than 24 h | Set `bench.snapshot` to `false` (see [configuration](configuration.md#bench-evidence-bench-settings)) or `SPATZ_NO_NETWORK=1`. |
 | Classification, Jev probabilities, ranking, reason, flags | Local SQLite file `~/.spatz/spatz.db` | Each suggestion | Do not run `spatz`. |
 | Session id, prompt id, signals, model, effort, token counts | `~/.spatz/spatz.db` | Hook events and `spatz report` | Remove the spatz hooks from the Claude Code settings. |
 | `--rounds` and `--note` of `spatz report` | `~/.spatz/spatz.db`, as you typed them | Each `spatz report` call | Do not pass `--note`. Do not put secrets or task text in it. |
 | OpenRouter model list (ids, names, prices) | Local cache `~/.spatz/openrouter-models.json` | After each successful model list request | Delete the file. spatz loads the list again. |
+| Bench snapshot (aggregated benchmark counts) | Local cache `~/.spatz/bench-snapshot.json` | After each verified download | Delete the file. spatz downloads it again or uses its bundled copy. |
 
 spatz sends nothing else. It has no telemetry. The hooks make no network requests.
 
@@ -98,6 +100,7 @@ The files are in `~/.spatz`. spatz finds the home folder through the `HOME` vari
 | `~/.spatz/spatz.db-wal`, `~/.spatz/spatz.db-shm` | SQLite WAL files of the same database |
 | `~/.spatz/spatz.db.bak-v*` | Database backups and any incomplete backup files left after an interrupted process |
 | `~/.spatz/openrouter-models.json` | OpenRouter model list cache |
+| `~/.spatz/bench-snapshot.json` | Bench snapshot cache |
 | `~/.spatz/aliases.json`, `~/.spatz/descriptions.json` | Your optional configuration files |
 
 To delete the learned data:

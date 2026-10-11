@@ -207,8 +207,75 @@ test("benchPriors weighs rubric rows 0.5 and counts passes as successes", () => 
 				s_eff: 1.5,
 				n_bench: 3,
 				version_match: "unknown",
+				source: "imported bench rows",
 			},
 		]);
+	});
+});
+
+test("benchRuns lists the measurement runs of imported rows; a re-import fills a missing one", () => {
+	withStore((store) => {
+		expect(store.benchRuns()).toEqual(new Set());
+		store.importEvalRows(
+			[
+				{ row: row({ run_id: id(1) }), task_hash: null },
+				{
+					row: row({ run_id: id(2) }),
+					task_hash: null,
+					source_run: "aaaaaaaaaaaa",
+				},
+			],
+			1000,
+			false,
+		);
+		expect(store.benchRuns()).toEqual(new Set(["aaaaaaaaaaaa"]));
+		// A dry run changes nothing; a real re-import fills the gap but still counts as duplicate.
+		const again = [
+			{
+				row: row({ run_id: id(1) }),
+				task_hash: null,
+				source_run: "bbbbbbbbbbbb",
+			},
+		];
+		expect(store.importEvalRows(again, 2000, true)).toEqual([false]);
+		expect(store.benchRuns()).toEqual(new Set(["aaaaaaaaaaaa"]));
+		expect(store.importEvalRows(again, 2000, false)).toEqual([false]);
+		expect(store.benchRuns()).toEqual(
+			new Set(["aaaaaaaaaaaa", "bbbbbbbbbbbb"]),
+		);
+	});
+});
+
+test("a run imported in parts gets the id of the whole run when the full file is imported later, not the reverse", () => {
+	withStore((store) => {
+		const part = (n: number, run: string) => ({
+			row: row({ run_id: id(n) }),
+			task_hash: null,
+			source_run: run,
+		});
+		store.importEvalRows([part(1, "aaaaaaaaaaa1")], 1000, false);
+		store.importEvalRows([part(2, "aaaaaaaaaaa2")], 1000, false);
+		expect(store.benchRuns()).toEqual(
+			new Set(["aaaaaaaaaaa1", "aaaaaaaaaaa2"]),
+		);
+		const whole = [
+			part(1, "ffffffffffff"),
+			part(2, "ffffffffffff"),
+			part(3, "ffffffffffff"),
+		];
+		expect(store.importEvalRows(whole, 2000, false)).toEqual([
+			false,
+			false,
+			true,
+		]);
+		expect(store.benchRuns()).toEqual(new Set(["ffffffffffff"]));
+		// A smaller file afterwards does not take the rows back.
+		store.importEvalRows([part(1, "aaaaaaaaaaa1")], 3000, false);
+		expect(store.benchRuns()).toEqual(new Set(["ffffffffffff"]));
+		// Not even when it is passed several times in one import.
+		const once = part(2, "aaaaaaaaaaa2");
+		store.importEvalRows([once, once, once, once], 4000, false);
+		expect(store.benchRuns()).toEqual(new Set(["ffffffffffff"]));
 	});
 });
 

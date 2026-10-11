@@ -2,7 +2,7 @@
 title: spatz configuration
 description: Environment variables, files under ~/.spatz, candidate defaults and harness detection, fixed tuning values and timeouts. `spatz stats` reads the database with bun:sqlite and needs no download.
 tags: [configuration, reference, spatz]
-keywords: [bench.use, bench_attempts, import-eval, bench prior, cost, tokens, price_snapshot, price_date, migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, offline, bun:sqlite, timeout, threshold, tuning, SPATZ_DEBUG, SPATZ_SUGGESTION_ID, diagnostics, effort]
+keywords: [bench.use, bench.snapshot, bench.prior_weight, bench-snapshot.json, spatz-measurements, bench_attempts, import-eval, bench prior, cost, tokens, price_snapshot, price_date, migration, backup, restore, rollback, downgrade, failures, launcher, models, family, presets, catalog, allow-drop, retired models, SPATZ_NO_NETWORK, SPATZ_MODELS, harness, environment variables, env, api key, opt-out, aliases, descriptions, database, cache, openrouter, offline, bun:sqlite, timeout, threshold, tuning, SPATZ_DEBUG, SPATZ_SUGGESTION_ID, diagnostics, effort]
 ---
 
 # spatz configuration
@@ -33,12 +33,12 @@ For the commands see [cli.md](cli.md). For the hooks see [hooks.md](hooks.md).
 | `~/.spatz/spatz.db.bak-v*` | SQLite backups | spatz | Database copies made before schema upgrades, including incomplete backup files left after an interrupted process. |
 | `~/.spatz/launcher-failures` | One `1` marker per line | Plugin launchers | Failed hook launches for `spatz stats`. |
 | `~/.spatz/harness-models.json` | JSON | spatz | Cache of the harness model catalog. |
-| `~/.spatz/catalog/<provider>/<model>.json` | JSON | spatz | Cache of the bench snapshot of a model (24 h). See [recommendation.md](recommendation.md#bench-prior). |
+| `~/.spatz/bench-snapshot.json` | JSON | spatz | Cache of the verified bench snapshot release (24 h). See [recommendation.md](recommendation.md#bench-prior). Older versions kept per-model files in `~/.spatz/catalog/`; spatz no longer reads them, and you can delete that folder. |
 | `~/.spatz/openrouter-models.json` | JSON | spatz | Cache of the OpenRouter model list. |
 | `~/.spatz/aliases.json` | JSON object | you | Model id mapping. Optional. |
 | `~/.spatz/descriptions.json` | JSON object | you | Model descriptions for Jev. Optional. |
-| `<cwd>/.spatz.json` | JSON object | you | Project models, Jev opt-out and `bench.use`. Optional. |
-| `~/.spatz/config.json` | JSON object | you | User default models and `bench.use`. Optional. |
+| `<cwd>/.spatz.json` | JSON object | you | Project models, Jev opt-out and the `bench` settings. Optional. |
+| `~/.spatz/config.json` | JSON object | you | User default models and the `bench` settings. Optional. |
 
 spatz creates `~/.spatz` when it opens the database. If an optional file is missing, has invalid JSON or is not an object, spatz ignores it. In `aliases.json` and `descriptions.json`, spatz ignores each entry whose value is not a string. In `.spatz.json`, spatz also reads `models`.
 
@@ -46,7 +46,7 @@ spatz creates `~/.spatz` when it opens the database. If an optional file is miss
 
 bun:sqlite writes the database in WAL mode with a busy timeout of 5000 ms. So several Claude Code sessions can write at the same time. spatz migrates the schema when it opens the file. `PRAGMA user_version` holds the schema version.
 
-The tables are `suggestions`, `signals`, `usages`, `usage_scopes` and `failures`. Schema v12 adds `bench_attempts` for rows from [`spatz import-eval`](cli.md#spatz-import-eval), one per `run_id`. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
+The tables are `suggestions`, `signals`, `usages`, `usage_scopes` and `failures`. Schema v12 adds `bench_attempts` for rows from [`spatz import-eval`](cli.md#spatz-import-eval), one per `run_id`. Schema v13 adds `bench_attempts.source_run`, the measurement run of each imported row. The view `outcomes` computes quality and the used pair per suggestion. No table holds the task text.
 
 To delete all learned data, delete `~/.spatz/spatz.db` and the files `spatz.db-wal` and `spatz.db-shm` next to it.
 Also delete its `spatz.db.bak-v*` backups.
@@ -267,17 +267,23 @@ Run spatz from the project root for this file to apply.
 { "jev": false, "models": "claude-sonnet-5-5" }
 ```
 
-### Bench evidence: bench.use
+### Bench evidence: bench settings
 
-[`spatz import-eval`](cli.md#spatz-import-eval) stores bench rows apart from live outcomes. By default they appear only in `spatz stats`. To let them shape recommendations, set `bench.use` to `true`:
+By default spatz uses the [bench snapshot](recommendation.md#bench-prior) of [spatz-measurements](https://github.com/lorenzh/spatz-measurements) as a capped prior. It downloads the snapshot at most once a day and uploads nothing. Three settings change the bench evidence:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `bench.snapshot` | `true` | `false` turns the snapshot prior off. spatz then downloads no snapshot. |
+| `bench.prior_weight` | `6` | The bench prior of a cell is worth at most this many outcomes. A number of at least 0; `0` turns every bench prior off. |
+| `bench.use` | `false` | `true` lets rows imported with [`spatz import-eval`](cli.md#spatz-import-eval) join the prior. Otherwise they appear only in `spatz stats`. |
 
 ```json
-{ "bench": { "use": true } }
+{ "bench": { "snapshot": true, "prior_weight": 6, "use": true } }
 ```
 
-Put it in `~/.spatz/config.json` for all projects, or in `<cwd>/.spatz.json` for one project. The project file wins. A value that is not `true` or `false` is ignored. The default is `false`.
+Put them in `~/.spatz/config.json` for all projects, or in `<cwd>/.spatz.json` for one project. The project file wins per setting. spatz ignores a value of the wrong type or a negative weight.
 
-With `bench.use` on, the imported rows join the [bench prior](recommendation.md#bench-prior). They change the estimate, but never `n` or the gates, so live outcomes stay in control.
+The prior changes the estimate, but never `n` or the gates, so live outcomes stay in control. With `bench.use` on, imported rows replace the snapshot cells of the same measurement runs, so no run counts twice. `spatz stats` shows the snapshot in use, its source and its age.
 
 ## Fixed tuning values
 
@@ -297,6 +303,7 @@ These values are start values from the design. The CLI uses them as they are. No
 | `openRouterCacheMs` | 24 h | Age of the OpenRouter cache before a new request. |
 | `openRouterTimeoutMs` | 3000 ms | Timeout of the OpenRouter request. After a timeout, spatz uses the old cache. |
 | `successQuality` | 0.8 | An outcome is a success when its quality is at least this value. |
+| `priorWeight` | 6 | The bench prior of a cell is worth at most this many outcomes. `bench.prior_weight` in a config file changes it. |
 
 Other fixed values:
 

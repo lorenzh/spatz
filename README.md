@@ -216,6 +216,7 @@ Without `TYPESAFE_AI_API_KEY`, Jev is also disabled.
 
 Disabling Jev still allows OpenRouter requests for model prices. These requests contain no task data.
 spatz caches prices for 24 hours. When the network is unavailable, spatz can still use cached prices.
+spatz also downloads a public benchmark snapshot at most once a day and uses it as a capped prior. The download holds no task data; `bench.snapshot: false` turns it off.
 
 See the [Privacy guide](docs/privacy.md) for data flows and deletion instructions.
 See [Configuration](docs/configuration.md) for environment variables and local files.

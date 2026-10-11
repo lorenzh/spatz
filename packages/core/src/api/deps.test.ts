@@ -28,6 +28,7 @@ describe("loadConfig", () => {
 			aliases: {},
 			descriptions: {},
 			benchUse: false,
+			benchSnapshot: true,
 		});
 	});
 
@@ -46,6 +47,28 @@ describe("loadConfig", () => {
 		expect((await loadConfig({ env: {}, homeDir: home, cwd })).benchUse).toBe(
 			false,
 		);
+	});
+
+	test("bench.snapshot and bench.prior_weight come from .spatz.json, else ~/.spatz/config.json; invalid values are ignored", async () => {
+		const load = () => loadConfig({ env: {}, homeDir: home, cwd });
+		await Bun.write(
+			join(home, ".spatz", "config.json"),
+			JSON.stringify({ bench: { snapshot: false, prior_weight: 2 } }),
+		);
+		expect((await load()).benchSnapshot).toBe(false);
+		expect((await load()).tuning.priorWeight).toBe(2);
+		await Bun.write(
+			join(cwd, ".spatz.json"),
+			JSON.stringify({ bench: { snapshot: true, prior_weight: 0 } }),
+		);
+		expect((await load()).benchSnapshot).toBe(true);
+		expect((await load()).tuning.priorWeight).toBe(0);
+		await Bun.write(
+			join(cwd, ".spatz.json"),
+			JSON.stringify({ bench: { snapshot: "no", prior_weight: -1 } }),
+		);
+		expect((await load()).benchSnapshot).toBe(false);
+		expect((await load()).tuning.priorWeight).toBe(2);
 	});
 
 	test("SPATZ_FAMILY_POOLING=1 enables family pooling", async () => {
