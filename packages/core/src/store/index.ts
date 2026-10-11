@@ -695,7 +695,7 @@ export function openStore(
 					const effort = noneOnly.has(r.model) ? "none" : r.effort;
 					if (
 						current.model &&
-						(stableModel(current.model) !== r.model ||
+						(stableModel(current.model) !== stableModel(r.model) ||
 							(current.effort && effort && current.effort !== effort))
 					)
 						attempt = ledger.startAttempt({
@@ -753,10 +753,14 @@ export function openStore(
 		getUsage(suggestionId, source, scopeKey, model) {
 			if (!store.getSuggestion(suggestionId)?.is_legacy) {
 				const e = db
-					.query<UsageRecord, [string, string]>(
-						`SELECT suggestion_id,model,effort,source,${["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "cost_usd", "cost_source", "tokens_complete", "tokens_schema", "turn_id"].join(",")},agent_key AS agent_id,occurred_at AS reported_at FROM latest_attempt_events WHERE suggestion_id=? AND event_id=?`,
+					.query<UsageRecord, [string, string, string]>(
+						`SELECT suggestion_id,model,effort,source,${["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "cost_usd", "cost_source", "tokens_complete", "tokens_schema", "turn_id"].join(",")},agent_key AS agent_id,occurred_at AS reported_at FROM latest_attempt_events WHERE suggestion_id=? AND ${stableModelSql("event_id")}=? ORDER BY event_id=? DESC LIMIT 1`,
 					)
-					.get(suggestionId, `usage:${source}:${scopeKey}:${model}`);
+					.get(
+						suggestionId,
+						stableModel(`usage:${source}:${scopeKey}:${model}`),
+						`usage:${source}:${scopeKey}:${model}`,
+					);
 				return e
 					? {
 							...e,
@@ -772,9 +776,9 @@ export function openStore(
 					Omit<UsageRecord, "is_sidechain"> & { is_sidechain: number },
 					[string, string, string, string]
 				>(
-					"SELECT * FROM usages WHERE suggestion_id=? AND source=? AND scope_key=? AND model=?",
+					`SELECT * FROM usages WHERE suggestion_id=? AND source=? AND scope_key=? AND ${stableModelSql("model")}=? ORDER BY model=?4 DESC LIMIT 1`,
 				)
-				.get(suggestionId, source, scopeKey, model);
+				.get(suggestionId, source, scopeKey, stableModel(model));
 			return row ? { ...row, is_sidechain: row.is_sidechain === 1 } : null;
 		},
 		outcome(id) {

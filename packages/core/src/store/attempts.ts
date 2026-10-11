@@ -550,7 +550,9 @@ export function attemptStore(
 			let cost: number | null = null;
 			const price =
 				suggestion && e.model
-					? store().getSuggestion(suggestion)?.price_snapshot?.[e.model]
+					? store().getSuggestion(suggestion)?.price_snapshot?.[
+							stableModel(e.model)
+						]
 					: null;
 			if (price) {
 				const rates = [

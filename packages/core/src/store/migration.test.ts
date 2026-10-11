@@ -685,3 +685,53 @@ test("dated usage revisions next to a stable event keep their totals", async () 
 	expect(totals(path)).toEqual(before as object);
 	store.dispose();
 });
+
+test("a stable usage replay of a dated event reads back", async () => {
+	const path = await datedStore((old) => old.upsertUsage(usageAt(DATED)));
+	const store = openStore(path);
+	store.upsertUsage(usageAt(STABLE));
+	expect(store.getUsage("s1", "transcript", "turn", STABLE)).toMatchObject({
+		output_tokens: 20,
+	});
+	store.dispose();
+});
+
+test("alternating dated and stable usage keys stay on one attempt", async () => {
+	const path = await datedStore((old) => old.upsertUsage(usageAt(DATED)));
+	const store = openStore(path);
+	store.upsertUsage(usageAt(STABLE));
+	store.upsertUsage(usageAt(DATED));
+	const db = new Database(path);
+	handles.push(db);
+	expect(db.query("SELECT COUNT(*) AS n FROM attempts").get()).toEqual({
+		n: 1,
+	});
+	store.dispose();
+});
+
+test("stats group dated and stable outcomes as one pair", async () => {
+	const priced = (model: string) => ({
+		...usageAt(model),
+		cost_usd: 0.1,
+		cost_source: "reported" as const,
+	});
+	const path = await datedStore((old) => {
+		old.upsertUsage(priced(DATED));
+		old.reportAttempt({
+			suggestion_id: "s1",
+			model: DATED,
+			effort: "high",
+			result: "pass",
+			at: 1200,
+		});
+	});
+	const store = openStore(path);
+	store.upsertUsage(priced(STABLE));
+	store.dispose();
+	const stats = await runStats({ dbPath: path, successQuality: 0.8 });
+	expect(
+		stats.by_type
+			.flatMap((t) => t.pairs)
+			.map((p) => [p.model, p.cost_usd_per_attempt]),
+	).toEqual([[STABLE, 0.1]]);
+});
