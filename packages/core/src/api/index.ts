@@ -364,13 +364,18 @@ export function createApi(
 					: mainTurnMessages(text, event.turn_id ?? ""),
 			)) ?? [];
 		let messages = await read();
-		// The harness flushes its transcript after the stop hook starts: retry a bounded time before a parse failure.
+		// The stop hook can fire before the last transcript entries are written: re-read a bounded time.
 		for (const wait of ended ? FLUSH_RETRY_MS : [])
 			if (messages.length) break;
 			else {
 				await (deps.sleep ?? Bun.sleep)(wait);
 				messages = await read();
 			}
+		// Forked helper agents (prompt suggestion, memory extraction, summaries) fire SubagentStop but never write the named transcript.
+		const unwritten =
+			sub &&
+			!messages.length &&
+			!(await Bun.file(event.transcript_path ?? "").exists());
 		return withStore(async (store) => {
 			const ownsUsage = store.attemptOwnsUsage(context);
 			const effort = sub || ownsUsage ? null : (event.effort ?? null);
@@ -463,7 +468,7 @@ export function createApi(
 						Math.max(...times),
 						cfg.tuning.successQuality,
 					);
-				else
+				else if (!unwritten)
 					store.recordFailure(
 						"parse",
 						event.source,

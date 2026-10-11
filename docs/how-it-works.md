@@ -315,6 +315,7 @@ A closing `Stop` or `SubagentStop` marks only suggestions created before the hoo
 `SubagentStop` checks the subagent transcript in the same way.
 If the rollout has no matching turn context with a model, Codex `Stop` counts a parse failure.
 Missing files, unreadable files and parser exceptions also count as parse failures.
+The exception is a `SubagentStop` whose transcript file still does not exist after the retries. Claude Code forks short helper agents (prompt suggestions, memory extraction, summaries) that fire `SubagentStop` but never write a transcript. spatz records no failure for them.
 Transcript refreshes after delayed links use the same counters.
 These checks do not change suggestion windows or signal attribution.
 

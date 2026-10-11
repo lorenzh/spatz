@@ -4014,12 +4014,35 @@ describe("stop hook before the transcript flush (SPZ-205)", () => {
 					waits.push(ms);
 				},
 			});
-			await s.api.handleHook(
-				name,
-				JSON.stringify(stopPayload(sub, join(dir, "never.jsonl"))),
-			);
+			const path = join(dir, `garbage-${name}.jsonl`);
+			await Bun.write(path, "not json\n");
+			await s.api.handleHook(name, JSON.stringify(stopPayload(sub, path)));
 			expect(waits).toEqual([200, 400, 800]);
 			expect(failures(dbPath)).toEqual([{ kind: "parse", event: name }]);
 		});
 	}
+
+	// SPZ-207: forked helper agents (prompt suggestion, memory extraction, summaries) never write their transcript.
+	test("SubagentStop for a transcript that never exists records no parse failure", async () => {
+		const dbPath = join(dir, "unwritten-sub.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		await s.api.handleHook(
+			"SubagentStop",
+			JSON.stringify({
+				...stopPayload(true, join(dir, "never.jsonl")),
+				agent_type: "",
+			}),
+		);
+		expect(failures(dbPath)).toEqual([]);
+	});
+
+	test("Stop for a transcript that never exists still records a parse failure", async () => {
+		const dbPath = join(dir, "unwritten-main.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		await s.api.handleHook(
+			"Stop",
+			JSON.stringify(stopPayload(false, join(dir, "never.jsonl"))),
+		);
+		expect(failures(dbPath)).toEqual([{ kind: "parse", event: "Stop" }]);
+	});
 });

@@ -592,7 +592,7 @@ Without fallbacks, JSON gives `{}` and text gives `fallbacks: -`.
 
 | Counter | Meaning |
 | --- | --- |
-| `failures.parse` | Transcript reads or parsing failed, or no usable messages matched the requested turn or subagent. |
+| `failures.parse` | Transcript reads or parsing failed, or no usable messages matched the requested turn or subagent. A `SubagentStop` whose transcript file never appears is not counted. |
 | `failures.hook` | Hook input was invalid, a required turn id was missing, or recording threw an error. |
 | `failures.launcher` | A plugin launcher could not run a hook command successfully. |
 
