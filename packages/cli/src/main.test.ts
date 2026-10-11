@@ -172,6 +172,9 @@ function fakeApi(overrides: Partial<SpatzApi> = {}) {
 		link: async () => {
 			throw new Error("unexpected link");
 		},
+		discard: async () => {
+			throw new Error("unexpected discard");
+		},
 		suggest: async (input: SuggestInput) => {
 			calls.push({ method: "suggest", args: [input] });
 			return suggestion;

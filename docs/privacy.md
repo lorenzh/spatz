@@ -33,7 +33,7 @@ spatz sends nothing else. It has no telemetry. The hooks make no network request
 - The Bash command text. A regex finds test commands, build commands and `spatz` calls. spatz does not store the command.
 - The output of a `spatz "<task>"` call. spatz reads only the suggestion id from it.
 - The transcript files of the session and its subagents. spatz reads only model names, token counts and message times.
-- The session id, prompt id, agent id and effort level.
+- The session id, prompt id, agent id and effort level. Without `--session`, a `spatz` call takes the session id from `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID` or `CODEX_THREAD_ID` in its environment. spatz stores only the id, not the rest of the environment.
 
 The hooks never store prompt text, command text or tool output. For the hook setup, read [hooks.md](hooks.md).
 

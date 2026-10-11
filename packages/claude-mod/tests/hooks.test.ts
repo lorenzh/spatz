@@ -108,10 +108,12 @@ function session(
 	const suggests = () =>
 		argvs.filter(
 			(a) =>
-				!["usage", "link", "attempt"].includes(cliArgs(a)[0] ?? "") &&
-				a[0] !== "claude",
+				!["usage", "link", "attempt", "discard"].includes(
+					cliArgs(a)[0] ?? "",
+				) && a[0] !== "claude",
 		);
 	const links = () => argvs.filter((a) => cliArgs(a)[0] === "link");
+	const discards = () => argvs.filter((a) => cliArgs(a)[0] === "discard");
 	const usages = () =>
 		argvs
 			.filter((a) => cliArgs(a)[0] === "usage")
@@ -280,6 +282,7 @@ function session(
 		toasts,
 		logs,
 		links,
+		discards,
 		statuses,
 		commands,
 		suggests,
@@ -571,6 +574,8 @@ describe("pinned choices and exploration", () => {
 		for (const critical of [false, true]) {
 			const s = session({ ...apply }, exploredHard(critical));
 			expect((await s.spawn({})).passed.model).toBeUndefined();
+			// The decided pick is dropped, so its suggestion closes as unknown.
+			expect(s.discards().map((a) => a.at(-1))).toEqual(["s1"]);
 			const on = session(
 				{ ...apply, exploreHard: true },
 				exploredHard(critical),

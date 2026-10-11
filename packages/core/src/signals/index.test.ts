@@ -5,6 +5,7 @@ import {
 	detectCommandKind,
 	effortFromHook,
 	extractSuggestionId,
+	extractSuggestionIds,
 	isIgnoredHookInput,
 	type PrInfo,
 	parseHookInput,
@@ -357,5 +358,20 @@ describe("pull request signals", () => {
 		expect(resultFromPr(pr({ state: "OPEN" }), "approve")).toBe("pass");
 		expect(resultFromPr(pr({ state: "OPEN" }), "changes")).toBe("partial");
 		expect(resultFromPr(pr({ state: "OPEN" }), "blocker")).toBe("fail");
+	});
+});
+
+describe("extractSuggestionIds", () => {
+	const a = "3f2b8c1e-7a4d-4e5f-9b6a-0c1d2e3f4a5b";
+	const b = "9d8c7b6a-1e2f-4a3b-8c9d-0e1f2a3b4c5d";
+	test("every id in the output, in order", () => {
+		expect(
+			extractSuggestionIds(
+				`suggestion_id: ${a}\nreason: x\n{"suggestion_id": "${b}"}`,
+			),
+		).toEqual([a, b]);
+	});
+	test("none -> empty", () => {
+		expect(extractSuggestionIds("ok")).toEqual([]);
 	});
 });

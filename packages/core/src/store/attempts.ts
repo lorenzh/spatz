@@ -805,6 +805,20 @@ export function attemptStore(
 			db.transaction(() => {
 				alias(input);
 				repair(input, DEFAULT_TUNING.openWindowMs);
+				// A bound attempt proves its suggestion's session and agent, so backfill them: the row can then close at their end.
+				const owner = db
+					.query<{ suggestion_id: string }, [string]>(
+						"SELECT suggestion_id FROM attempts WHERE id = ?",
+					)
+					.get(input.attempt_id);
+				if (owner)
+					db.query(
+						"UPDATE suggestions SET session_id = COALESCE(session_id, ?1), agent_id = COALESCE(agent_id, ?2) WHERE id = ?3 AND (session_id IS NULL OR session_id = ?1)",
+					).run(
+						input.session_key,
+						input.agent_key || null,
+						owner.suggestion_id,
+					);
 			}).immediate();
 		},
 		recordAttemptEvents(events, idle = DEFAULT_TUNING.openWindowMs) {

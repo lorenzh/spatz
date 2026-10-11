@@ -37,6 +37,7 @@ const USAGE = `usage:
   spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
   spatz hook <event> [--agent codex]
   spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
+  spatz discard <suggestion_id> [--json]
   spatz signal pr <url> [--review approve|changes|blocker] [--json]
   spatz pending [--older-than <n>s|m|h|d] [--json]
   spatz stats [--type <t>] [--by scope] [--model-version <v>] [--json]`;
@@ -351,6 +352,15 @@ export async function main(
 						agent_id: input.agentId,
 					},
 					text: () => `linked: ${input.suggestionId}  agent: ${input.agentId}`,
+				};
+			};
+		} else if (cmd === "discard") {
+			const suggestionId = required(rest[0], "<suggestion_id>");
+			run = async () => {
+				await api.discard({ suggestionId });
+				return {
+					result: { suggestion_id: suggestionId, outcome: "unknown" },
+					text: () => `discarded: ${suggestionId}`,
 				};
 			};
 		} else if (cmd === "report") {

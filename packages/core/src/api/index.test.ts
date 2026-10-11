@@ -877,6 +877,19 @@ describe("direct mod attribution", () => {
 		).rejects.toThrow("needs --turn or --agent-id");
 	});
 
+	test("a mod pre-spawn suggestion takes the session from the environment without a turn", async () => {
+		const s = setup({ env: { CLAUDE_CODE_SESSION_ID: SESSION } });
+		const out = await s.api.suggest({
+			...suggestInput(),
+			source: "claude-code-mod",
+			scope: "subagent",
+		});
+		expect(s.store.getSuggestion(out.suggestion_id)).toMatchObject({
+			session_id: SESSION,
+			agent_id: null,
+		});
+	});
+
 	test("stats opens the store first so migrations run on an old database", async () => {
 		const s = setup();
 		const order: string[] = [];
@@ -3686,5 +3699,106 @@ describe("importEval", () => {
 			n_prior: 6,
 			n_bench: 10,
 		});
+	});
+});
+
+describe("session links from the environment, attempts and discards", () => {
+	const row = (dbPath: string, id: string) => {
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			return db
+				.query<
+					{ session_id: string | null; agent_id: string | null },
+					[string]
+				>("SELECT session_id, agent_id FROM suggestions WHERE id = ?")
+				.get(id);
+		} finally {
+			db.close();
+		}
+	};
+	const OTHER = "5e550000-0000-4000-8000-000000000002";
+
+	test.each([
+		["CLAUDE_CODE_SESSION_ID", { CLAUDE_CODE_SESSION_ID: SESSION }],
+		["CODEX_SESSION_ID", { CODEX_SESSION_ID: SESSION }],
+		["CODEX_THREAD_ID", { CODEX_THREAD_ID: SESSION }],
+	])("suggest without a session takes it from %s", async (_name, env) => {
+		const dbPath = join(dir, `env-${_name}.db`);
+		const s = setup({ env, openStore: () => openStore(dbPath) });
+		const out = await s.api.suggest(suggestInput());
+		expect(row(dbPath, out.suggestion_id)?.session_id).toBe(SESSION);
+	});
+
+	test("an explicit session wins over the environment", async () => {
+		const dbPath = join(dir, "env-explicit.db");
+		const s = setup({
+			env: { CLAUDE_CODE_SESSION_ID: OTHER },
+			openStore: () => openStore(dbPath),
+		});
+		const out = await s.api.suggest({ ...suggestInput(), session: SESSION });
+		expect(row(dbPath, out.suggestion_id)?.session_id).toBe(SESSION);
+	});
+
+	test("binding an attempt backfills its session and agent into the suggestion", async () => {
+		const dbPath = join(dir, "backfill.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const out = await s.api.suggest(suggestInput());
+		expect(row(dbPath, out.suggestion_id)).toEqual({
+			session_id: null,
+			agent_id: null,
+		});
+		const started = await s.api.startAttempt({
+			suggestionId: out.suggestion_id,
+			key: "mod-turn:0",
+			model: "gpt-6-luna",
+			effort: "low",
+			session: SESSION,
+			agentId: "worker",
+			turn: "mod-turn",
+			ownsUsage: true,
+		});
+		await s.api.bindAttempt({
+			attempt: started.id,
+			call: "c1",
+			session: SESSION,
+			agentId: "worker",
+		});
+		expect(row(dbPath, out.suggestion_id)).toEqual({
+			session_id: SESSION,
+			agent_id: "worker",
+		});
+		s.setNow(T0 + HOUR);
+		expect(await s.api.pending({ olderThanMs: 0 })).toEqual([
+			expect.objectContaining({ id: out.suggestion_id }),
+		]);
+		await s.api.handleHook(
+			"SubagentStop",
+			JSON.stringify(
+				base({
+					hook_event_name: "SubagentStop",
+					agent_id: "worker",
+					agent_type: "test",
+					agent_transcript_path: join(dir, "missing-worker.jsonl"),
+					stop_hook_active: false,
+				}),
+			),
+		);
+		expect(await s.api.pending({ olderThanMs: 0 })).toEqual([]);
+	});
+
+	test("discard marks a suggestion unknown once and leaves decided rows alone", async () => {
+		const dbPath = join(dir, "discard.db");
+		const s = setup({ openStore: () => openStore(dbPath) });
+		const out = await s.api.suggest({ ...suggestInput(), session: SESSION });
+		await s.api.discard({ suggestionId: out.suggestion_id });
+		await s.api.discard({ suggestionId: out.suggestion_id });
+		const db = new Database(dbPath, { readonly: true });
+		const count = db
+			.query<{ n: number }, [string]>(
+				"SELECT COUNT(*) AS n FROM unknown_outcomes WHERE suggestion_id = ?",
+			)
+			.get(out.suggestion_id);
+		db.close();
+		expect(count?.n).toBe(1);
 	});
 });

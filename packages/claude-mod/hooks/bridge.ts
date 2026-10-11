@@ -198,6 +198,22 @@ export async function linkAgent(
 	}
 }
 
+/** `spatz discard`: a suggestion that was decided but not used closes as unknown. Fails open: false on any error. */
+export async function discardSuggestion(
+	run: Run,
+	suggestionId: string,
+	spatz = "spatz",
+): Promise<boolean> {
+	try {
+		const { exitCode } = await run([spatz, "discard", suggestionId], {
+			timeoutMs: USAGE_TIMEOUT_MS,
+		});
+		return exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
 /** Run an attempt lifecycle command. Only start returns an attempt id. */
 export async function attemptCommand(
 	run: Run,
