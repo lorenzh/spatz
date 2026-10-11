@@ -45,6 +45,7 @@ A sequence `A → B → A` keeps three attempts even when the first and last pai
 ### Model versions
 
 Outcomes do not decay with age. Instead, each attempt stores a `model_version` when the harness shows a dated model id (for example `claude-sonnet-4-5-20250929` gives `20250929`). Otherwise it stores null.
+The version is stored when the attempt starts. A Codex turn that switches models keeps the version of each model on that model's attempt.
 For each model, the newest known version is the live one. Outcomes of an older known version do not count, so a new version starts with an empty estimate. Outcomes with a null version count for every version.
 The old outcomes stay in the database. `spatz stats --model-version <v>` shows them.
 

@@ -448,6 +448,7 @@ export function createApi(
 					suggestion_id: suggestionId,
 					key: `dispatch:${context.session_key}:${segment.key}`,
 					model: toCanonicalId(segment.model, cfg.aliases),
+					model_version: modelVersion(segment.model),
 					effort: EFFORTS.find((e) => e === segment.effort) ?? null,
 					at:
 						segment.at ?? store.getSuggestion(suggestionId)?.created_at ?? now,

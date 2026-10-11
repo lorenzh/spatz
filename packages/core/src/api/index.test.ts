@@ -3030,6 +3030,50 @@ test("Codex mixed pair turn records its measured total once without inventing an
 	}
 });
 
+test("Codex mixed pair turn keeps the known revision of each segment's attempt", async () => {
+	const dbPath = join(dir, "mixed-version.db");
+	const s = setup({ dbPath, openStore });
+	await s.api.suggest(suggestInput());
+	const file = join(dir, "mixed-version.jsonl");
+	await Bun.write(
+		file,
+		[
+			{
+				type: "turn_context",
+				payload: {
+					turn_id: "mixed",
+					model: "gpt-6-luna-2026-09-01",
+					effort: "low",
+				},
+			},
+			{
+				type: "turn_context",
+				payload: {
+					turn_id: "mixed",
+					model: "gpt-6-sol-2026-10-01",
+					effort: "high",
+				},
+			},
+		]
+			.map((row) => JSON.stringify(row))
+			.join("\n"),
+	);
+	await s.api.importRollout({ file, suggestionId: ID1 });
+	const db = new Database(dbPath);
+	try {
+		expect(
+			db
+				.query("SELECT model,model_version FROM attempts ORDER BY ordinal")
+				.all(),
+		).toEqual([
+			{ model: "openai/gpt-6-luna-2026-09-01", model_version: "2026-09-01" },
+			{ model: "openai/gpt-6-sol-2026-10-01", model_version: "2026-10-01" },
+		]);
+	} finally {
+		db.close();
+	}
+});
+
 test("Codex PostToolUse links a normal skill suggestion without a --source flag", async () => {
 	const dbPath = join(dir, "codex-skill.db");
 	const s = setup({ dbPath, openStore });
