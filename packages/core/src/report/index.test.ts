@@ -1160,3 +1160,57 @@ test("bench rows show in their own section and leave live stats unchanged", asyn
 		(await runStats({ dbPath, successQuality: 0.8, type: "review" })).bench,
 	).toMatchObject([{ n: 1, success_rate: 1 }]);
 });
+
+test("bench section leaves prototype rows out and keeps M2 rows", async () => {
+	const row = (n: number, bench_version: string) => ({
+		row: {
+			schema: "spatz-eval-row/1",
+			run_id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+			bench_version,
+			task_id: "t",
+			task_version: 1,
+			task_type: "code.bugfix",
+			difficulty: "easy",
+			criticality: "none",
+			harness: "codex",
+			agent_version: "1",
+			model: "openai/gpt-6-luna",
+			effort: "low",
+			answered_model: null,
+			model_version: null,
+			attempt: 1,
+			result: n === 1 ? "pass" : "fail",
+			check: "tests",
+			judge: null,
+			duration_s: 1,
+			tokens: {
+				input: 1,
+				output: 1,
+				cache_read: 0,
+				cache_write: 0,
+				reasoning: 0,
+			},
+			cost_usd: null,
+			estimated_cost_usd: 0.03,
+			started_at: "2026-10-06T09:00:00.000Z",
+			contributor: "anon",
+			verified: true,
+		} as never,
+		task_hash: null,
+	});
+	store.importEvalRows(
+		[row(1, "m2"), row(2, "prototype"), row(3, "prototype")],
+		1,
+		false,
+	);
+	const { bench } = await runStats({ dbPath, successQuality: 0.8 });
+	expect(bench).toEqual([
+		{
+			model: "openai/gpt-6-luna",
+			effort: "low",
+			n: 1,
+			success_rate: 1,
+			estimated_cost_usd_per_success: 0.03,
+		},
+	]);
+});

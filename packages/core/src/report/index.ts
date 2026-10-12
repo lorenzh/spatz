@@ -331,7 +331,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 			.query<BenchPairStats, { type: string | null }>(
 				`SELECT ${stableModelSql("model")} AS model, effort, COUNT(*) AS n, AVG(result = 'pass') AS success_rate,
 				CASE WHEN COUNT(estimated_cost_usd) = COUNT(*) THEN SUM(estimated_cost_usd) / NULLIF(SUM(result = 'pass'), 0) END AS estimated_cost_usd_per_success
-				FROM bench_attempts WHERE $type IS NULL OR task_type = $type
+				FROM bench_attempts WHERE bench_version != 'prototype' AND ($type IS NULL OR task_type = $type)
 				GROUP BY 1, effort ORDER BY 1, effort IS NULL, effort`,
 			)
 			.all({ type: type ?? null });
