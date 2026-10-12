@@ -115,10 +115,10 @@ spatz converts each id to the canonical OpenRouter id:
 | Key in `~/.spatz/aliases.json` | The alias value wins over all other rules. | `{"my-model": "vendor/model-x"}` |
 | Contains `/` | Used as given. | `openai/gpt-6-sol` |
 | `claude-*` | Prefix `anthropic/`. The last dash between two digits becomes a dot. | `claude-opus-5-5` becomes `anthropic/claude-opus-5.5` |
-| `gpt-*` | Prefix `openai/`. | `gpt-6-sol` becomes `openai/gpt-6-sol` |
+| `gpt-*` | Prefix `openai/`. A trailing date is stripped. | `gpt-6-sol-2026-10-01` becomes `openai/gpt-6-sol` |
 | Any other id | Used as given. | `my-model` |
 
-An 8-digit date snapshot suffix (for example, `-20251001`) is stripped from Claude IDs for pricing and learning and added when spatz matches a picker ID. The Claude picker ID `claude-haiku-4-5-20251001` maps to `anthropic/claude-haiku-4.5`. User aliases take precedence.
+A date snapshot suffix (`-20251001` for Claude, `-20251001` or `-2025-10-01` for GPT) is stripped from Claude and GPT IDs for pricing and learning and added when spatz matches a picker ID. The Claude picker ID `claude-haiku-4-5-20251001` maps to `anthropic/claude-haiku-4.5`. User aliases take precedence.
 
 spatz sorts the candidates by cost: output price, then input price, then effort, then id. A model that OpenRouter does not list counts as the most expensive.
 
@@ -258,6 +258,8 @@ spatz attempt finalize --session <id> [--agent-id <id>]
 `start` registers a segment before execution. A repeated start key returns the same attempt.
 Unknown effort stays null. `--owns-usage` marks mod usage ownership for this context.
 `--model-version` stores the model revision the caller knows. Without it, start takes the date of a dated `--model`, or the revision the harness catalog lists for an undated alias. Otherwise the version stays null.
+
+Stores from spatz 0.4 and older can hold dated GPT keys such as `openai/gpt-5-2025-08-07`. spatz leaves these rows as they are. Learning, stats and attempt matching treat a dated key as its stable key (`openai/gpt-5`), so a replay or report with the stable key finds the old attempt.
 `bind` connects a hook/mod tool-call ID to the active attempt.
 `finalize` closes observed execution without inventing a successful verdict.
 The main session omits `--agent-id`. Each subagent supplies its own ID.
@@ -555,7 +557,7 @@ failures: parse=<count>  hook=<count>  launcher=<count>
 ```
 
 There is one block per task type, with one indented line per used pair. `-` means "no data".
-Each `bench` line is one pair of imported bench rows (see [import-eval](#spatz-import-eval)). `--type` filters them. Bench rows never enter the other lines.
+Each `bench` line is one pair of imported bench rows (see [import-eval](#spatz-import-eval)). Rows with `bench_version` `prototype` are left out, so they do not pool with current rows. `--type` filters them. Bench rows never enter the other lines.
 The `snapshot` line names the [bench snapshot](recommendation.md#bench-prior) that the next suggestion uses: `release` (downloaded and cached) or `bundled` (the copy shipped with this build), its source commit, date and age. It shows `snapshot: off` when `bench.snapshot` is `false`. Stats never download it. JSON has the same data as `snapshot` (`null` when off), with `generated_at` and `fetched_at`.
 The dispatch, fallback and failure lines also appear with `--by scope`.
 
@@ -592,7 +594,7 @@ Without fallbacks, JSON gives `{}` and text gives `fallbacks: -`.
 
 | Counter | Meaning |
 | --- | --- |
-| `failures.parse` | Transcript reads or parsing failed, or no usable messages matched the requested turn or subagent. |
+| `failures.parse` | Transcript reads or parsing failed, or no usable messages matched the requested turn or subagent. A `SubagentStop` whose transcript file never appears is not counted. |
 | `failures.hook` | Hook input was invalid, a required turn id was missing, or recording threw an error. |
 | `failures.launcher` | A plugin launcher could not run a hook command successfully. |
 
@@ -639,7 +641,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |
 | `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
 | `failures` | object | Global `parse`, `hook` and `launcher` counts. Each defaults to zero. |
-| `bench` | array | Imported bench rows per pair, filtered by `--type`: `model`, `effort`, `n`, `success_rate` (share of `pass`) and `estimated_cost_usd_per_success` (sum of list-price estimates per pass, or null without a pass or when a row has no estimate). Empty without imported rows. |
+| `bench` | array | Imported bench rows per pair (without `prototype` rows), filtered by `--type`: `model`, `effort`, `n`, `success_rate` (share of `pass`) and `estimated_cost_usd_per_success` (sum of list-price estimates per pass, or null without a pass or when a row has no estimate). Empty without imported rows. |
 
 ### Example
 

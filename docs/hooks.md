@@ -214,6 +214,7 @@ If an agent has no linked suggestion, its hooks use the main sequence as before.
 If it has a linked suggestion, closure does not send later events back to the main sequence.
 
 - `SubagentStop` reads `<session>/subagents/agent-<agent_id>.jsonl`. spatz preserves message identity before aggregating usage.
+- Claude Code also fires `SubagentStop` for internal helper agents (prompt suggestions, memory extraction, summaries). They have a fresh agent id but never write the transcript file. When that file does not exist, spatz records no parse failure.
 - `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts and no effort, because the `effort.level` in this event belongs to the main session.
 
 Execution evidence supplies the attempt's actual pair. A report can fill unknown fields but cannot replace known fields.

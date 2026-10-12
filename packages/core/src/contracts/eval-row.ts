@@ -151,7 +151,8 @@ export function evalRowError(value: unknown): string | null {
 	if (!isObj(value)) return "not an object";
 	const v: Obj = {
 		...value,
-		criticality: value.criticality ?? "none",
+		// Only an omitted criticality defaults; an explicit null breaks the contract.
+		criticality: value.criticality === undefined ? "none" : value.criticality,
 		estimated_cost_usd: value.estimated_cost_usd ?? null,
 	};
 	const checks: [string, boolean][] = [
@@ -195,7 +196,7 @@ export function parseEvalRow(value: unknown): EvalRow | null {
 	const t = v.tokens as Obj;
 	return {
 		...Object.fromEntries(EVAL_ROW_FIELDS.map((k) => [k, v[k]])),
-		criticality: v.criticality ?? "none",
+		criticality: v.criticality === undefined ? "none" : v.criticality,
 		estimated_cost_usd: v.estimated_cost_usd ?? null,
 		tokens: Object.fromEntries(COUNTERS.map((k) => [k, t[k]])),
 	} as unknown as EvalRow;

@@ -12,6 +12,7 @@ import type {
 	TaskType,
 	TypeStats,
 } from "../contracts/types.ts";
+import { stableModelSql } from "../store/attempt-schema.ts";
 
 export interface StatsOptions {
 	dbPath: string;
@@ -33,15 +34,15 @@ oq AS (
 		CASE WHEN model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE effort END AS effort,
 		quality >= $q AS success, attempt_id, root_id
 	FROM (
-		SELECT suggestion_id, model, effort, quality, NULL AS attempt_id, NULL AS root_id, NULL AS model_version FROM legacy_outcomes
-		UNION ALL SELECT suggestion_id, model, effort, quality, attempt_id, root_id, model_version FROM attempt_outcomes
+		SELECT suggestion_id, ${stableModelSql("model")} AS model, effort, quality, NULL AS attempt_id, NULL AS root_id, NULL AS model_version FROM legacy_outcomes
+		UNION ALL SELECT suggestion_id, ${stableModelSql("model")}, effort, quality, attempt_id, root_id, model_version FROM attempt_outcomes
 	) WHERE quality IS NOT NULL AND ($mv IS NULL OR model_version = $mv)
 ),
 o AS (
 	SELECT s.id AS suggestion_id, s.task_type, ${difficultySql("s.difficulty")} AS difficulty, s.control, s.strategy, s.explored, o.model, o.effort,
 		o.success,
 		(o.attempt_id IS NULL OR o.attempt_id = o.root_id) AS first_attempt,
-		COALESCE(o.model = json_extract(s.ranking, '$[0].model')
+		COALESCE(o.model = ${stableModelSql("json_extract(s.ranking, '$[0].model')")}
 			AND o.effort = json_extract(s.ranking, '$[0].effort'), 0) AS adopted
 	FROM s JOIN oq o ON o.suggestion_id = s.id
 )`;
@@ -158,7 +159,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 		// incomplete cost evidence (cost_usd NULL, lower bounds, or an attempt without usage) count in n_chains but not in the spend.
 		const pairs = rows<PairStats & { task_type: TaskType }>(
 			`, ch AS (
-				SELECT s.task_type, c.model, CASE WHEN c.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE c.effort END AS effort, c.success, c.cost_usd,
+				SELECT s.task_type, ${stableModelSql("c.model")} AS model, CASE WHEN c.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE c.effort END AS effort, c.success, c.cost_usd,
 					COALESCE(c.cost_usd IS NOT NULL AND c.incomplete = 0 AND NOT EXISTS (
 						SELECT 1 FROM attempts a WHERE a.root_id = c.root_id
 						AND NOT EXISTS (SELECT 1 FROM attempt_usage u WHERE u.attempt_id = a.id)), 0) AS known,
@@ -178,11 +179,14 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 					1.0 * COUNT(*) FILTER (WHERE NOT known) / COUNT(*) AS incomplete_share
 				FROM ch GROUP BY task_type, model, effort
 			), ap AS (
-				SELECT s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, AVG(u.cost_usd) AS per_attempt
-				FROM s JOIN attempt_usage u ON u.suggestion_id = s.id
-				LEFT JOIN attempts a ON a.id = u.attempt_id
-				WHERE ($mv IS NULL OR a.model_version = $mv)
-				GROUP BY s.task_type, u.model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END
+				-- One cost per attempt and stable pair first, so dated and stable events of an attempt add up.
+				SELECT task_type, model, effort, AVG(cost) AS per_attempt FROM (
+					SELECT s.task_type, u.attempt_id, ${stableModelSql("u.model")} AS model, CASE WHEN u.model IN (SELECT value FROM json_each($none)) THEN 'none' ELSE u.effort END AS effort, CASE WHEN COUNT(*) = COUNT(u.cost_usd) THEN SUM(u.cost_usd) END AS cost
+					FROM s JOIN attempt_usage u ON u.suggestion_id = s.id
+					LEFT JOIN attempts a ON a.id = u.attempt_id
+					WHERE ($mv IS NULL OR a.model_version = $mv)
+					GROUP BY 1, 2, 3, 4
+				) GROUP BY task_type, model, effort
 			)
 			SELECT o.task_type, o.model, o.effort, COUNT(*) AS n, AVG(o.success) AS success_rate,
 				COALESCE(cs.n_chains, 0) AS n_chains,
@@ -193,7 +197,7 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 				COALESCE(cs.incomplete_share, 0) AS cost_incomplete_share
 			FROM o LEFT JOIN cs ON cs.task_type = o.task_type AND cs.model IS o.model AND cs.effort IS o.effort
 			LEFT JOIN ap ON ap.task_type = o.task_type AND ap.model IS o.model AND ap.effort IS o.effort
-			WHERE o.model IS NOT NULL GROUP BY o.task_type, o.model, o.effort ORDER BY o.model, o.effort`,
+			WHERE o.model IS NOT NULL GROUP BY o.task_type, o.model, o.effort ORDER BY o.model, o.effort IS NULL, o.effort`,
 		);
 		const decisions = rows<Decision>(
 			`SELECT s.task_type, ${difficultySql("s.difficulty")} AS difficulty,
@@ -325,10 +329,10 @@ export async function runStats(options: StatsOptions): Promise<StatsReport> {
 
 		const bench = db
 			.query<BenchPairStats, { type: string | null }>(
-				`SELECT model, effort, COUNT(*) AS n, AVG(result = 'pass') AS success_rate,
+				`SELECT ${stableModelSql("model")} AS model, effort, COUNT(*) AS n, AVG(result = 'pass') AS success_rate,
 				CASE WHEN COUNT(estimated_cost_usd) = COUNT(*) THEN SUM(estimated_cost_usd) / NULLIF(SUM(result = 'pass'), 0) END AS estimated_cost_usd_per_success
-				FROM bench_attempts WHERE $type IS NULL OR task_type = $type
-				GROUP BY model, effort ORDER BY model, effort`,
+				FROM bench_attempts WHERE bench_version != 'prototype' AND ($type IS NULL OR task_type = $type)
+				GROUP BY 1, effort ORDER BY 1, effort IS NULL, effort`,
 			)
 			.all({ type: type ?? null });
 

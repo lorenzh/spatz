@@ -18,7 +18,12 @@ import {
 	type SuggestionRecord,
 	type UsageRecord,
 } from "../contracts/types.ts";
-import { ATTEMPT_SCHEMA, USAGE_COMPLETENESS_SCHEMA } from "./attempt-schema.ts";
+import {
+	ATTEMPT_SCHEMA,
+	stableModel,
+	stableModelSql,
+	USAGE_COMPLETENESS_SCHEMA,
+} from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
 import { BENCH_RUN_SCHEMA, BENCH_SCHEMA, benchStore } from "./bench.ts";
 
@@ -349,13 +354,13 @@ export function openStore(
 		db
 			.query<CellStat, (string | number)[]>(
 				`WITH history AS (
-					SELECT suggestion_id,quality,model,effort,model_version,1 AS live FROM attempt_outcomes
+					SELECT suggestion_id,quality,${stableModelSql("model")} AS model,effort,model_version,1 AS live FROM attempt_outcomes
 					WHERE ${retries ? "ordinal>1 OR attempt_id<>root_id" : "ordinal=1 AND attempt_id=root_id"}
-					${retries ? "" : "UNION ALL SELECT suggestion_id,quality,model,effort,NULL,0 FROM legacy_outcomes"}
+					${retries ? "" : `UNION ALL SELECT suggestion_id,quality,${stableModelSql("model")},effort,NULL,0 FROM legacy_outcomes`}
 				), live AS (
 					-- The newest known version per model; older known versions seed nothing, null matches any.
 					SELECT model, model_version FROM (
-						SELECT a.model, a.model_version, ROW_NUMBER() OVER (PARTITION BY a.model ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
+						SELECT ${stableModelSql("a.model")} AS model, a.model_version, ROW_NUMBER() OVER (PARTITION BY ${stableModelSql("a.model")} ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
 						FROM attempts a JOIN suggestions s ON s.id = a.suggestion_id
 						WHERE a.model_version IS NOT NULL AND s.is_test = 0
 					) WHERE rn = 1
@@ -472,7 +477,7 @@ export function openStore(
 				db
 					.query<{ model: string; model_version: string }, []>(
 						`SELECT model, model_version FROM (
-							SELECT a.model, a.model_version, ROW_NUMBER() OVER (PARTITION BY a.model ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
+							SELECT ${stableModelSql("a.model")} AS model, a.model_version, ROW_NUMBER() OVER (PARTITION BY ${stableModelSql("a.model")} ORDER BY COALESCE(a.opened_at,0) DESC, a.rowid DESC) AS rn
 							FROM attempts a JOIN suggestions s ON s.id = a.suggestion_id
 							WHERE a.model_version IS NOT NULL AND s.is_test = 0
 						) WHERE rn = 1`,
@@ -690,7 +695,7 @@ export function openStore(
 					const effort = noneOnly.has(r.model) ? "none" : r.effort;
 					if (
 						current.model &&
-						(current.model !== r.model ||
+						(stableModel(current.model) !== stableModel(r.model) ||
 							(current.effort && effort && current.effort !== effort))
 					)
 						attempt = ledger.startAttempt({
@@ -701,17 +706,23 @@ export function openStore(
 							effort,
 							at: r.reported_at,
 						}).id;
-					const eventId = `usage:${r.source}:${r.scope_key}:${r.model}`;
+					// Older stores may hold this event under a dated GPT id; continue that history.
 					const previous = db
-						.query<{ revision: number }, [string, string, string, string]>(
-							"SELECT MAX(revision) AS revision FROM attempt_events WHERE harness=? AND session_key=? AND agent_key=? AND event_id=?",
+						.query<
+							{ event_id: string; revision: number },
+							[string, string, string, string, string]
+						>(
+							`SELECT event_id, revision FROM attempt_events WHERE harness=? AND session_key=? AND agent_key=? AND ${stableModelSql("event_id")}=? ORDER BY event_id=? DESC, revision DESC LIMIT 1`,
 						)
 						.get(
 							context.harness,
 							context.session_key,
 							context.agent_key,
-							eventId,
+							stableModel(`usage:${r.source}:${r.scope_key}:${r.model}`),
+							`usage:${r.source}:${r.scope_key}:${r.model}`,
 						);
+					const eventId =
+						previous?.event_id ?? `usage:${r.source}:${r.scope_key}:${r.model}`;
 					ledger.recordAttemptEvents([
 						{
 							...context,
@@ -742,10 +753,14 @@ export function openStore(
 		getUsage(suggestionId, source, scopeKey, model) {
 			if (!store.getSuggestion(suggestionId)?.is_legacy) {
 				const e = db
-					.query<UsageRecord, [string, string]>(
-						`SELECT suggestion_id,model,effort,source,${["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "cost_usd", "cost_source", "tokens_complete", "tokens_schema", "turn_id"].join(",")},agent_key AS agent_id,occurred_at AS reported_at FROM latest_attempt_events WHERE suggestion_id=? AND event_id=?`,
+					.query<UsageRecord, [string, string, string]>(
+						`SELECT suggestion_id,model,effort,source,${["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "cost_usd", "cost_source", "tokens_complete", "tokens_schema", "turn_id"].join(",")},agent_key AS agent_id,occurred_at AS reported_at FROM latest_attempt_events WHERE suggestion_id=? AND ${stableModelSql("event_id")}=? ORDER BY event_id=? DESC LIMIT 1`,
 					)
-					.get(suggestionId, `usage:${source}:${scopeKey}:${model}`);
+					.get(
+						suggestionId,
+						stableModel(`usage:${source}:${scopeKey}:${model}`),
+						`usage:${source}:${scopeKey}:${model}`,
+					);
 				return e
 					? {
 							...e,
@@ -761,9 +776,9 @@ export function openStore(
 					Omit<UsageRecord, "is_sidechain"> & { is_sidechain: number },
 					[string, string, string, string]
 				>(
-					"SELECT * FROM usages WHERE suggestion_id=? AND source=? AND scope_key=? AND model=?",
+					`SELECT * FROM usages WHERE suggestion_id=? AND source=? AND scope_key=? AND ${stableModelSql("model")}=? ORDER BY model=?4 DESC LIMIT 1`,
 				)
-				.get(suggestionId, source, scopeKey, model);
+				.get(suggestionId, source, scopeKey, stableModel(model));
 			return row ? { ...row, is_sidechain: row.is_sidechain === 1 } : null;
 		},
 		outcome(id) {

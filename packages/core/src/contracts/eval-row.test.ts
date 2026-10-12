@@ -150,6 +150,13 @@ test("parseEvalRow drops unknown fields, keeps field order and defaults critical
 	expect(parseEvalRow(noCriticality)?.criticality).toBe("none");
 });
 
+test("an explicit null criticality breaks the contract, as in the JSON schema", () => {
+	expect(evalRowError({ ...row, criticality: null })).toBe(
+		"invalid criticality",
+	);
+	expect(parseEvalRow({ ...row, criticality: null })).toBeNull();
+});
+
 test("estimated_cost_usd is optional and defaults to null", () => {
 	const { estimated_cost_usd: _, ...noEstimate } = row;
 	expect(parseEvalRow(noEstimate)?.estimated_cost_usd).toBeNull();
