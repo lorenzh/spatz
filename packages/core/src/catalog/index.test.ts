@@ -324,3 +324,40 @@ describe("description", () => {
 		expect(c[0]?.description).toBe("constructor, Preisklasse: unbekannt");
 	});
 });
+
+describe("buildCatalog latest model of a family", () => {
+	const ids = (req: string) => [
+		...new Set(
+			buildCatalog(parseModelsArg(req), [], noConfig).map((c) => c.model),
+		),
+	];
+
+	test("Haiku 4.5 and Haiku 5.5 -> only 5.5", () => {
+		expect(ids("claude-haiku-4-5-20251001:none,claude-haiku-5-5:none")).toEqual(
+			["anthropic/claude-haiku-5.5"],
+		);
+	});
+
+	test("gpt-6-sol and gpt-6.1-sol -> only gpt-6.1-sol, other tiers stay", () => {
+		expect(
+			ids(
+				"gpt-6-sol:low,gpt-6.1-sol:low,gpt-6-luna:low,gpt-6-astra:low",
+			).sort(),
+		).toEqual(
+			["openai/gpt-6.1-sol", "openai/gpt-6-luna", "openai/gpt-6-astra"].sort(),
+		);
+	});
+
+	test("list order does not matter and dates are ignored", () => {
+		expect(ids("gpt-6.1-sol:low,gpt-6-sol-2026-01-01:low")).toEqual([
+			"openai/gpt-6.1-sol",
+		]);
+		expect(ids("gpt-6-sol:low,gpt-6.1-sol:low")).toEqual([
+			"openai/gpt-6.1-sol",
+		]);
+	});
+
+	test("different tiers of the same version are separate families", () => {
+		expect(ids("claude-opus-5-5:low,claude-sonnet-5-5:low")).toHaveLength(2);
+	});
+});
