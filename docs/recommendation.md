@@ -126,6 +126,12 @@ The fallback without Jev also goes through steps 3 to 5. It always uses the cell
 
 The ranking shows the recommended candidate and up to two next candidates in cost order. Each entry shows the estimate and `n` of the level that made the decision.
 
+## Latest model of a family
+
+spatz keeps only the latest model of each family as a candidate. The family is the model id without its version numbers. The version is the numbers in the id. `claude-haiku-4-5` and `claude-haiku-5-5` are one family, and 5.5 wins. `gpt-6-sol` and `gpt-6.1-sol` are one family, and 6.1 wins. `gpt-6-luna` is another family and stays. A date suffix does not count as a version.
+
+This holds for every source of the model list, also for `--models`. Recorded outcomes of older models stay in the store. They are not deleted and no longer compete for new suggestions.
+
 ## Cost order
 
 spatz sorts the catalog from cheap to expensive by these keys:
