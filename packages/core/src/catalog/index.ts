@@ -85,6 +85,29 @@ export function resolveModelVersion(
 	return dated.size === 1 ? ([...dated][0] ?? null) : null;
 }
 
+/**
+ * Family and version of a canonical id: numeric dash-tokens ("6", "6.1", "4.5") are the version,
+ * the rest is the family. "openai/gpt-6.1-sol" -> openai/gpt-sol, [6, 1].
+ */
+function familyVersion(model: string): { family: string; version: number[] } {
+	// A date suffix is a revision, not a version ("openai/gpt-6-sol-2026-01-01" stays unstripped by toCanonicalId).
+	const date = modelVersion(model);
+	const tokens = (date ? model.slice(0, -date.length - 1) : model).split("-");
+	const isNum = (t: string) => /^\d+(\.\d+)*$/.test(t);
+	return {
+		family: tokens.filter((t) => !isNum(t)).join("-"),
+		version: tokens.filter(isNum).flatMap((t) => t.split(".").map(Number)),
+	};
+}
+
+const newer = (a: number[], b: number[]): boolean => {
+	for (let i = 0; i < Math.max(a.length, b.length); i++) {
+		const d = (a[i] ?? 0) - (b[i] ?? 0);
+		if (d) return d > 0;
+	}
+	return false;
+};
+
 function priceClass(m: OpenRouterModel | undefined, model: string): string {
 	if (!m) return `${model}, Preisklasse: unbekannt`;
 	const perM = Number((m.price_completion * 1e6).toPrecision(6));
@@ -99,8 +122,20 @@ export function buildCatalog(
 ): Catalog {
 	const byId = new Map(models.map((m) => [m.id, m]));
 	const seen = new Map<CandidateKey, Candidate>();
+	// Only the latest version of each family is a candidate; older outcomes stay in the store.
+	const latest = new Map<string, number[]>();
+	for (const r of requested) {
+		const { family, version } = familyVersion(
+			toCanonicalId(r.requested_id, config.aliases),
+		);
+		const best = latest.get(family);
+		if (!best || newer(version, best)) latest.set(family, version);
+	}
 	for (const r of requested) {
 		const model = toCanonicalId(r.requested_id, config.aliases);
+		const { family, version } = familyVersion(model);
+		const best = latest.get(family) as number[];
+		if (newer(best, version)) continue;
 		const meta = byId.get(model);
 		const supported = meta?.supported_efforts;
 		const efforts =

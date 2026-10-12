@@ -51,8 +51,12 @@ describe("harness presets", () => {
 				{ aliases: {}, descriptions: {} },
 			);
 			const models = BUNDLED_HARNESS_CATALOG.harnesses[harness].models;
+			// Older models of a family (gpt-6-sol next to gpt-6.1-sol) are no candidates.
+			const latest = models.filter(
+				(m) => !(m.id === "gpt-6-sol" && harness === "codex"),
+			);
 			expect(catalog).toHaveLength(
-				models.reduce((n, model) => n + model.efforts.length, 0),
+				latest.reduce((n, model) => n + model.efforts.length, 0),
 			);
 			expect(
 				parseModelsArg(HARNESS_PRESETS[harness]).map((m) => m.requested_id),
