@@ -557,7 +557,7 @@ failures: parse=<count>  hook=<count>  launcher=<count>
 ```
 
 There is one block per task type, with one indented line per used pair. `-` means "no data".
-Each `bench` line is one pair of imported bench rows (see [import-eval](#spatz-import-eval)). `--type` filters them. Bench rows never enter the other lines.
+Each `bench` line is one pair of imported bench rows (see [import-eval](#spatz-import-eval)). Rows with `bench_version` `prototype` are left out, so they do not pool with current rows. `--type` filters them. Bench rows never enter the other lines.
 The `snapshot` line names the [bench snapshot](recommendation.md#bench-prior) that the next suggestion uses: `release` (downloaded and cached) or `bundled` (the copy shipped with this build), its source commit, date and age. It shows `snapshot: off` when `bench.snapshot` is `false`. Stats never download it. JSON has the same data as `snapshot` (`null` when off), with `generated_at` and `fetched_at`.
 The dispatch, fallback and failure lines also appear with `--by scope`.
 
@@ -641,7 +641,7 @@ See [how-it-works.md](how-it-works.md#failure-recording) for storage and [config
 | `dispatches`, `routed_by_mod`, `swapped` | number | Global dispatch counts. Each defaults to zero. See [dispatch counts](#dispatch-counts). |
 | `fallbacks` | object | Global non-test suggestion counts keyed by fallback reason. |
 | `failures` | object | Global `parse`, `hook` and `launcher` counts. Each defaults to zero. |
-| `bench` | array | Imported bench rows per pair, filtered by `--type`: `model`, `effort`, `n`, `success_rate` (share of `pass`) and `estimated_cost_usd_per_success` (sum of list-price estimates per pass, or null without a pass or when a row has no estimate). Empty without imported rows. |
+| `bench` | array | Imported bench rows per pair (without `prototype` rows), filtered by `--type`: `model`, `effort`, `n`, `success_rate` (share of `pass`) and `estimated_cost_usd_per_success` (sum of list-price estimates per pass, or null without a pass or when a row has no estimate). Empty without imported rows. |
 
 ### Example
 
