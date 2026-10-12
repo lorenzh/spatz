@@ -90,7 +90,9 @@ export function resolveModelVersion(
  * the rest is the family. "openai/gpt-6.1-sol" -> openai/gpt-sol, [6, 1].
  */
 function familyVersion(model: string): { family: string; version: number[] } {
-	const tokens = model.split("-");
+	// A date suffix is a revision, not a version ("openai/gpt-6-sol-2026-01-01" stays unstripped by toCanonicalId).
+	const date = modelVersion(model);
+	const tokens = (date ? model.slice(0, -date.length - 1) : model).split("-");
 	const isNum = (t: string) => /^\d+(\.\d+)*$/.test(t);
 	return {
 		family: tokens.filter((t) => !isNum(t)).join("-"),

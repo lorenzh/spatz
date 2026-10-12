@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildCatalog, parseModelsArg } from "../catalog/index.ts";
 import {
 	type Candidate,
 	type Catalog,
@@ -9,6 +10,7 @@ import {
 	type Decision,
 	type Difficulty,
 	type Effort,
+	type OpenRouterModel,
 } from "../contracts/types.ts";
 import {
 	estimate,
@@ -83,6 +85,50 @@ function stat(
 	};
 }
 const pick = (d: Decision) => d.ranking[0];
+
+describe("recommend over buildCatalog: latest model of a family", () => {
+	// The older model is cheaper, so a cost-first pick would choose it if it were a candidate.
+	const or = (id: string, price: number): OpenRouterModel => ({
+		id,
+		name: id,
+		price_prompt: price,
+		price_completion: price,
+		price_cache_read: null,
+		price_cache_write: null,
+		context_length: null,
+		supported_efforts: null,
+	});
+	const cases: [string, OpenRouterModel[], string, string][] = [
+		[
+			"claude-haiku-4-5-20251001,claude-haiku-5-5",
+			[
+				or("anthropic/claude-haiku-4.5", 1e-7),
+				or("anthropic/claude-haiku-5.5", 1e-6),
+			],
+			"anthropic/claude-haiku-5.5",
+			"anthropic/claude-haiku-4.5",
+		],
+		[
+			"gpt-6-sol,gpt-6.1-sol",
+			[or("openai/gpt-6-sol", 1e-7), or("openai/gpt-6.1-sol", 1e-6)],
+			"openai/gpt-6.1-sol",
+			"openai/gpt-6-sol",
+		],
+	];
+	for (const [req, models, latest, old] of cases)
+		test(`${req} -> ${latest}`, () => {
+			const catalog = buildCatalog(parseModelsArg(req), models, {
+				aliases: {},
+				descriptions: {},
+			});
+			for (const random of [0, LEARNED, 0.99])
+				for (const criticality of ["none", "high"] as Criticality[]) {
+					const d = recommend(ctx(random, { criticality }), catalog, []);
+					expect(pick(d)?.model).toBe(latest);
+					expect(d.ranking.some((r) => r.model === old)).toBe(false);
+				}
+		});
+});
 const LEARNED = 0.5; // random draw in the 80 % learned band
 
 test("legacy difficulty inputs pool exactly like English and print English reasons", () => {

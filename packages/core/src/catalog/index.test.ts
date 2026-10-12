@@ -357,6 +357,13 @@ describe("buildCatalog latest model of a family", () => {
 		]);
 	});
 
+	test("dates on prefixed ids are no version", () => {
+		for (const date of ["2026-01-01", "20260101"])
+			expect(
+				ids(`openai/gpt-6-sol-${date}:low,openai/gpt-6.1-sol:low`),
+			).toEqual(["openai/gpt-6.1-sol"]);
+	});
+
 	test("different tiers of the same version are separate families", () => {
 		expect(ids("claude-opus-5-5:low,claude-sonnet-5-5:low")).toHaveLength(2);
 	});
