@@ -393,6 +393,8 @@ export interface DispatchRecord {
 	requested_model: string | null;
 	requested_agent_type: string | null;
 	answered_model: string | null;
+	/** The effort the dispatch asked for: `tool_input.effort`, else the agent definition's `effort:`. */
+	requested_effort?: Effort | null;
 	suggestion_id: string | null;
 }
 

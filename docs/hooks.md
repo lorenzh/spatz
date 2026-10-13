@@ -212,10 +212,10 @@ If it has a linked suggestion, closure does not send later events back to the ma
 
 - `SubagentStop` reads `<session>/subagents/agent-<agent_id>.jsonl`. spatz preserves message identity before aggregating usage.
 - Claude Code also fires `SubagentStop` for internal helper agents (prompt suggestions, memory extraction, summaries). They have a fresh agent id but never write the transcript file. When that file does not exist, spatz records no parse failure.
-- `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts and no effort, because the `effort.level` in this event belongs to the main session.
+- `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts. It never takes the `effort.level` of this event, because that belongs to the main session. The subagent effort comes from the sources in [Subagent effort](#subagent-effort).
 
 Execution evidence supplies the attempt's actual pair. A report can fill unknown fields but cannot replace known fields.
-Subagent effort stays null.
+Subagent effort stays null when none of the sources in [Subagent effort](#subagent-effort) names it.
 Claude transcript entries are deduplicated by `message.id` within the session and agent.
 Entry UUIDs and tool-use IDs are not usage message IDs.
 
@@ -224,6 +224,40 @@ An Agent tool call in source order proves delegation.
 Later reports do not retarget this signal choice.
 Main-session orchestration tokens belong to suggestion totals with no attempt ID.
 Main-session self-fixes follow the same fallback unless explicit identity selects an attempt.
+
+### Subagent effort
+
+The `PostToolUse` hook on the `Agent` tool records each dispatch call in the table `dispatch_calls` (schema v15), with the effort that the call requested and the model that answered it. It reads the effort from these sources in order:
+
+1. `tool_input.effort`, the per-call parameter of Claude Code 2.1.292 or later.
+2. The `effort:` frontmatter of the agent definition. The lookup is the same as for `model:` (see Dispatch observations).
+
+A value outside the effort vocabulary is ignored, not an error.
+
+A call goes to an attempt only through the delegation that names it: the `Agent` tool use in the delegating transcript, whose id is the call's `tool_use_id`. spatz does not guess from arrival order.
+
+On the routing skill's path (the agent runs spatz, then dispatches), the `Agent` hook reads the delegating transcript once, and later hooks of the same turn (for example `Stop`) read it again. If a later read finds the delegation, it claims the call and moves the child's waiting events to the child. The requested effort is missing in these cases:
+
+- The `Agent` hook is lost, or no later read finds the delegation (for example, the transcript cannot be read).
+- A forked agent writes no transcript.
+- A resume through `SendMessage` is not a new `Agent` call, so it records no new call and no new effort.
+
+Such an outcome counts only with explicit effort evidence; otherwise it does not count.
+
+- The delegation makes the call's own child attempt and gives it the call's answering model. A resumed agent gets a new attempt for each new call.
+- When the delegating attempt is still implicit and holds no other call, it becomes the child and drops the main effort. Otherwise the child is a separate attempt, so a nested delegation keeps the outer call's attempt.
+- A call belongs to at most one attempt, and an attempt to at most one call. The claim runs in the write transaction of the delegation.
+- A subagent that runs spatz itself, with no delegation that names its call, gets no requested effort. Its outcome counts only with explicit effort evidence.
+
+The requested effort never goes into the attempt. The attempt keeps only explicit evidence: a report, an attempt start or a transcript. Learning and `spatz stats` read the effective effort, which spatz resolves when it reads:
+
+1. The attempt's explicit effort, if it has one.
+2. Else the requested effort of the attempt's own call, if the attempt's answering model offers it in the Claude Code harness catalog. A model that offers only `none` gets `none`.
+3. Else no effort. An unknown answering model gives no effort, so the outcome does not count.
+
+Explicit evidence never conflicts with a requested effort. A PR signal is quality, not execution evidence: on a subagent attempt it keeps the attempt's own model and effort, unknown ones included, and never writes the ranked pair. A dispatch record without a call id fills the model only into attempts that hold no call.
+
+The `SubagentStop` input has an `effort` field, but the Claude Code hooks reference does not say whether it describes the subagent or the main session. spatz does not use it.
 
 ## Dispatch observations
 

@@ -14,6 +14,8 @@ export interface AttemptRecord {
 	effort: Effort | null;
 	/** Dated model revision when the harness exposed one. */
 	model_version?: string | null;
+	session_key?: string;
+	agent_key?: string;
 	root_id: string;
 	opened_at: number | null;
 	closed_at: number | null;
