@@ -216,8 +216,12 @@ export interface CoreDeps {
 	random: RandomFn;
 	/** New suggestion id; default crypto.randomUUID. */
 	newId: () => string;
-	/** Opens the store; tests may return an in-memory or fake store. */
-	openStore: (dbPath: string, noneOnlyModels?: string[]) => Store;
+	/** Opens the store; tests may return an in-memory or fake store. `claudeEfforts`: the Claude Code catalog's efforts per model. */
+	openStore: (
+		dbPath: string,
+		noneOnlyModels?: string[],
+		claudeEfforts?: Record<string, readonly Effort[]>,
+	) => Store;
 	/** Optional preloaded config; when absent the api loads it from files and env. */
 	config?: Config;
 }

@@ -26,7 +26,12 @@ import {
 } from "./attempt-schema.ts";
 import { attemptStore } from "./attempts.ts";
 import { BENCH_RUN_SCHEMA, BENCH_SCHEMA, benchStore } from "./bench.ts";
-import { pairDispatchCalls, recordDispatchCall } from "./dispatch-effort.ts";
+import {
+	attemptEfforts,
+	DISPATCH_CALLS_SCHEMA,
+	pairDispatchCalls,
+	recordDispatchCall,
+} from "./dispatch-effort.ts";
 
 // No column holds task text (spec "Storage", "Privacy").
 const SCHEMA_V1 = `
@@ -251,10 +256,7 @@ const MIGRATIONS = [
 	BENCH_SCHEMA,
 	BENCH_RUN_SCHEMA,
 	["ALTER TABLE suggestions ADD COLUMN label TEXT"],
-	[
-		"ALTER TABLE attempts ADD COLUMN effort_source TEXT",
-		"CREATE TABLE dispatch_calls (session_id TEXT NOT NULL, agent_id TEXT NOT NULL, tool_use_id TEXT NOT NULL, requested_effort TEXT, attempt_id TEXT, PRIMARY KEY (session_id, tool_use_id))",
-	],
+	DISPATCH_CALLS_SCHEMA,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -344,12 +346,17 @@ type SuggestionRow = Omit<
 	is_test: number;
 };
 
-/** Creates the parent dir, opens the db, sets journal_mode=WAL and busy_timeout=5000, migrates, returns the Store. ":memory:" allowed. */
+/**
+ * Creates the parent dir, opens the db, sets journal_mode=WAL and busy_timeout=5000, migrates, returns the Store. ":memory:" allowed.
+ * `claudeEfforts`: the Claude Code catalog's efforts per model, for the requested subagent effort.
+ */
 export function openStore(
 	dbPath: string,
 	noneOnlyModels: string[] = [],
+	claudeEfforts: Record<string, readonly Effort[]> = {},
 ): Store {
 	const db = openDatabase(dbPath);
+	attemptEfforts(db, claudeEfforts);
 	const noneOnly = new Set(noneOnlyModels);
 	const historyStats = (
 		taskType: CellStat["task_type"],
@@ -359,8 +366,8 @@ export function openStore(
 		db
 			.query<CellStat, (string | number)[]>(
 				`WITH history AS (
-					SELECT suggestion_id,quality,${stableModelSql("model")} AS model,effort,model_version,1 AS live FROM attempt_outcomes
-					WHERE ${retries ? "ordinal>1 OR attempt_id<>root_id" : "ordinal=1 AND attempt_id=root_id"}
+					SELECT o.suggestion_id,o.quality,${stableModelSql("o.model")} AS model,e.effort,o.model_version,1 AS live FROM attempt_outcomes o JOIN attempt_efforts e ON e.attempt_id=o.attempt_id
+					WHERE ${retries ? "o.ordinal>1 OR o.attempt_id<>o.root_id" : "o.ordinal=1 AND o.attempt_id=o.root_id"}
 					${retries ? "" : `UNION ALL SELECT suggestion_id,quality,${stableModelSql("model")},effort,NULL,0 FROM legacy_outcomes`}
 				), live AS (
 					-- The newest known version per model; older known versions seed nothing, null matches any.
@@ -395,7 +402,9 @@ export function openStore(
 		...ledger,
 		...benchStore(db, () => store.liveModelVersions()),
 		upsertDispatch(r) {
-			db.query(`INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ($session_id, $agent_id, $tool_use_id,
+			// Immediate: concurrent hooks never credit one call to two attempts.
+			db.transaction(() => {
+				db.query(`INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ($session_id, $agent_id, $tool_use_id,
 				$requested_model, $requested_agent_type, $answered_model, $suggestion_id)
 				ON CONFLICT (session_id, agent_id) DO UPDATE SET
 				tool_use_id = COALESCE(dispatches.tool_use_id, excluded.tool_use_id),
@@ -403,23 +412,25 @@ export function openStore(
 				requested_agent_type = COALESCE(dispatches.requested_agent_type, excluded.requested_agent_type),
 				answered_model = COALESCE(dispatches.answered_model, excluded.answered_model),
 				suggestion_id = COALESCE(dispatches.suggestion_id, excluded.suggestion_id)`).run(
-				{ ...r, attempt_id: r.attempt_id ?? null },
-			);
-			db.query(
-				`UPDATE dispatches SET attempt_id=COALESCE(attempt_id,(SELECT id FROM attempts WHERE session_key=? AND agent_key=? ORDER BY ordinal LIMIT 1)) WHERE session_id=? AND agent_id=?`,
-			).run(r.session_id, r.agent_id, r.session_id, r.agent_id);
-			if (r.answered_model)
+					{ ...r, attempt_id: r.attempt_id ?? null },
+				);
 				db.query(
-					"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=?",
-				).run(r.answered_model, r.session_id, r.agent_id);
-			if (r.tool_use_id && r.requested_effort !== undefined) {
-				recordDispatchCall(db, {
-					...r,
-					tool_use_id: r.tool_use_id,
-					requested_effort: r.requested_effort,
-				});
-				pairDispatchCalls(db, r.session_id, r.agent_id);
-			}
+					`UPDATE dispatches SET attempt_id=COALESCE(attempt_id,(SELECT id FROM attempts WHERE session_key=? AND agent_key=? ORDER BY ordinal LIMIT 1)) WHERE session_id=? AND agent_id=?`,
+				).run(r.session_id, r.agent_id, r.session_id, r.agent_id);
+				if (r.answered_model)
+					db.query(
+						"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=?",
+					).run(r.answered_model, r.session_id, r.agent_id);
+				if (r.tool_use_id) {
+					recordDispatchCall(db, {
+						...r,
+						tool_use_id: r.tool_use_id,
+						requested_effort: r.requested_effort ?? null,
+						recorded_at: r.recorded_at ?? null,
+					});
+					pairDispatchCalls(db, r.session_id, r.agent_id);
+				}
+			}).immediate();
 		},
 		recordFailure(kind, event, at, sessionId, turnId) {
 			db.query("INSERT OR IGNORE INTO failures VALUES (?, ?, ?, ?, ?)").run(

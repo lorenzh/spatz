@@ -62,7 +62,6 @@ const tables = [
 	"usage_scopes",
 	"failures",
 	"outcomes",
-	"dispatches",
 ];
 // Every table and view (outcomes included), so a new table is compared without a list update.
 const snapshot = (db: Database) =>
@@ -74,7 +73,12 @@ const snapshot = (db: Database) =>
 			.all()
 			.map(({ name }) => [
 				name,
-				db.query(`SELECT * FROM "${name}" ORDER BY 1,2,3`).all(),
+				db
+					.query(`SELECT * FROM "${name}"`)
+					.all()
+					.map((row) => JSON.stringify(row))
+					.sort()
+					.map((row) => JSON.parse(row)),
 			]),
 	);
 const rows = (db: Database) =>
@@ -88,18 +92,9 @@ test("previous-schema WAL data is backed up before migration and restores with t
 	expect(db.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION - 1,
 	});
-	db.run(
-		"INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ('s','a1','t1','opus','gp','sonnet',NULL)",
-	);
 	const before = rows(db);
-	expect(before.at(-1)).toContainEqual(
-		expect.objectContaining({ session_id: "s", agent_id: "a1" }),
-	);
 	const migrated = openDatabase(path);
 	handles.push(migrated);
-	expect(
-		migrated.query("SELECT COUNT(*) AS n FROM dispatch_calls").get(),
-	).toEqual({ n: 0 });
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION,
 	});
@@ -838,4 +833,96 @@ test("cost per attempt stays unknown when one event has no cost", async () => {
 	});
 	store.dispose();
 	expect((await pairsOf(path))[0]?.cost_usd_per_attempt).toBeNull();
+});
+
+test("v15 keeps populated v14 attempts and dispatches, backfills their calls, and the backup restores every table", async () => {
+	const dir = directory();
+	const { path, db } = await fixture(dir);
+	const previous = await previousStore(dir);
+	const old = previous.openStore(path);
+	for (const [id, agent] of [
+		["w1", "a1"],
+		["w2", "a2"],
+	] as const)
+		old.insertSuggestion({
+			id,
+			created_at: 1000,
+			session_id: "s",
+			prompt_id: null,
+			agent_id: agent,
+			agent: "claude-code",
+			turn_id: null,
+			scope: null,
+			task_type: "code.bugfix",
+			difficulty: "medium",
+			criticality: "none",
+			probabilities: null,
+			model_ref: null,
+			strategy: "rules",
+			ranking: [{ model: "m/w", effort: "low", estimate: 0.5, n: 0 }],
+			reason: "r",
+			explored: false,
+			control: false,
+			fallback_used: true,
+			fallback_reason: null,
+			is_test: false,
+			last_event_at: 1000,
+			closed_at: null,
+		});
+	old.dispose();
+	// The current upsertDispatch writes v15 tables, so v14 dispatch rows go in as v14 wrote them.
+	for (const [agent, call] of [
+		["a1", "t1"],
+		["a2", "t2"],
+		["a3", null],
+	] as const)
+		db.query(
+			"INSERT INTO dispatches (session_id,agent_id,tool_use_id,answered_model,attempt_id) VALUES ('s',?1,?2,'m/w',(SELECT id FROM attempts WHERE agent_key=?1))",
+		).run(agent, call);
+	expect(db.query("PRAGMA user_version").get()).toEqual({
+		user_version: SCHEMA_VERSION - 1,
+	});
+	const before = snapshot(db);
+	expect(before.attempts).toHaveLength(2);
+	// The fixture's own dispatch plus three.
+	expect(before.dispatches).toHaveLength(4);
+	const migrated = openDatabase(path);
+	handles.push(migrated);
+	const { dispatch_calls, ...after } = snapshot(migrated);
+	expect(after).toEqual(before);
+	const attemptOf = (agent: string) =>
+		(before.attempts as { id: string; agent_key: string }[]).find(
+			(a) => a.agent_key === agent,
+		)?.id;
+	expect(dispatch_calls).toEqual([
+		{
+			session_id: "s",
+			agent_id: "a1",
+			tool_use_id: "t1",
+			requested_effort: null,
+			recorded_at: null,
+			attempt_id: attemptOf("a1"),
+		},
+		{
+			session_id: "s",
+			agent_id: "a2",
+			tool_use_id: "t2",
+			requested_effort: null,
+			recorded_at: null,
+			attempt_id: attemptOf("a2"),
+		},
+		{
+			session_id: "session",
+			agent_id: "child",
+			tool_use_id: "call",
+			requested_effort: null,
+			recorded_at: null,
+			attempt_id: null,
+		},
+	]);
+	const restoredPath = join(dir, "restored.db");
+	copyFileSync(`${path}.bak-v${SCHEMA_VERSION - 1}`, restoredPath);
+	const restored = previous.openDatabase(restoredPath);
+	handles.push(restored);
+	expect(snapshot(restored)).toEqual(before);
 });

@@ -227,6 +227,17 @@ export function createApi(
 			}
 		return byModel;
 	}
+	/** Model -> efforts the Claude Code catalog offers; the requested subagent effort must be one of them. */
+	async function claudeEfforts() {
+		const cfg = await getConfig();
+		const catalog = await cachedHarnessCatalog();
+		return Object.fromEntries(
+			catalog.harnesses["claude-code"].models.map((m) => [
+				toCanonicalId(m.id, cfg.aliases),
+				m.efforts,
+			]),
+		);
+	}
 	const noneOnly = (available: Map<string, Effort[]>) =>
 		[...available]
 			.filter(([, efforts]) => efforts.every((e) => e === "none"))
@@ -249,7 +260,11 @@ export function createApi(
 		fn: (store: Store) => T | Promise<T>,
 	): Promise<T> {
 		const noneOnlyModels = noneOnly(await availableEfforts());
-		const store = deps.openStore(deps.dbPath, noneOnlyModels);
+		const store = deps.openStore(
+			deps.dbPath,
+			noneOnlyModels,
+			await claudeEfforts(),
+		);
 		try {
 			return await fn(store);
 		} finally {
@@ -324,21 +339,16 @@ export function createApi(
 	}
 
 	/**
-	 * The call's `effort` wins over the agent definition's `effort:`. It counts only when the
-	 * answering model offers it; a none-only model always runs at none. Checked here, once, so
-	 * the stored value does not depend on which hook arrives first.
+	 * The call's `effort` wins over the agent definition's `effort:`. Whether the answering model
+	 * offers it is checked when learning reads it (`attempt_efforts`), against the attempt's model.
 	 */
 	async function requestedDispatchEffort(
 		effort: Effort | undefined,
 		agentType: unknown,
-		model: string | null,
 		cwd = deps.cwd,
 	): Promise<Effort | null> {
 		const pinned = effort ?? (await agentDefinition(agentType, cwd))?.effort;
-		const offered = model ? (await availableEfforts()).get(model) : undefined;
-		if (!offered?.length) return null;
-		if (offered.every((e) => e === "none")) return pinned ? "none" : null;
-		return EFFORTS.find((e) => e === pinned && offered.includes(e)) ?? null;
+		return EFFORTS.find((e) => e === pinned) ?? null;
 	}
 
 	const contextOf = (event: HarnessEvent) => ({
@@ -458,14 +468,9 @@ export function createApi(
 					requested_effort: await requestedDispatchEffort(
 						event.requested_effort,
 						event.requested_agent_type,
-						(await dispatchModel(event.answered_model)) ??
-							(await requestedDispatchModel(
-								event.requested_model,
-								event.requested_agent_type,
-								event.cwd,
-							)),
 						event.cwd,
 					),
+					recorded_at: now,
 					suggestion_id: null,
 				});
 			const signal = signalFromToolRun(event);
@@ -1262,6 +1267,7 @@ export function createApi(
 				...(modelVersion && { modelVersion }),
 				successQuality: cfg.tuning.successQuality,
 				noneOnlyModels,
+				claudeEfforts: await claudeEfforts(),
 			});
 			// Fixed markers survive hook wrappers that discard stderr; do not consume them.
 			const launcher = await Bun.file(

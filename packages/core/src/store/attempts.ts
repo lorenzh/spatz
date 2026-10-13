@@ -19,7 +19,11 @@ import {
 	stableModel,
 	stableModelSql,
 } from "./attempt-schema.ts";
-import { claimDispatchCall, pairDispatchCalls } from "./dispatch-effort.ts";
+import {
+	claimDispatchCall,
+	DELEGATE_ATTEMPTS,
+	pairDispatchCalls,
+} from "./dispatch-effort.ts";
 
 const tokenKeys = [
 	"input_tokens",
@@ -73,10 +77,7 @@ export function attemptStore(
 		e: Pick<AttemptEvent, "model" | "effort" | "model_version">,
 	) =>
 		(!e.model || !a.model || stableModel(a.model) === stableModel(e.model)) &&
-		(!e.effort ||
-			!a.effort ||
-			a.effort_source === "requested" ||
-			a.effort === e.effort) &&
+		(!e.effort || !a.effort || a.effort === e.effort) &&
 		(!e.model_version ||
 			!a.model_version ||
 			a.model_version === e.model_version);
@@ -173,8 +174,7 @@ export function attemptStore(
 	) => {
 		if (!compatible(a, e)) throw new Error("attempt pair conflict");
 		db.query(
-			// Explicit effort replaces a requested fallback; the fallback never overrides evidence.
-			"UPDATE attempts SET model=COALESCE(model,?1),effort=CASE WHEN effort_source IS NOT NULL THEN COALESCE(?2,effort) ELSE COALESCE(effort,?2) END,effort_source=CASE WHEN ?2 IS NOT NULL THEN NULL ELSE effort_source END,model_version=COALESCE(model_version,?3) WHERE id=?4",
+			"UPDATE attempts SET model=COALESCE(model,?),effort=COALESCE(effort,?),model_version=COALESCE(model_version,?) WHERE id=?",
 		).run(e.model ?? null, e.effort ?? null, e.model_version ?? null, a.id);
 		if (a.agent_key && a.session_key)
 			pairDispatchCalls(db, a.session_key, a.agent_key);
@@ -304,7 +304,7 @@ export function attemptStore(
 					AttemptRecord,
 					[string, string, string, string, number, number, number]
 				>(
-					`SELECT a.* FROM attempts a JOIN suggestions s ON s.id=a.suggestion_id WHERE a.harness=? AND a.session_key=? AND (a.agent_key=? OR (?='' AND s.agent_id IS NULL AND EXISTS(SELECT 1 FROM dispatches d WHERE d.attempt_id=a.id))) AND s.created_at<=? AND COALESCE(s.closed_at,s.last_event_at+?)>? AND s.is_legacy=0`,
+					`SELECT a.* FROM attempts a JOIN suggestions s ON s.id=a.suggestion_id WHERE a.harness=? AND a.session_key=? AND (a.agent_key=? OR (?='' AND s.agent_id IS NULL AND a.id IN ${DELEGATE_ATTEMPTS})) AND s.created_at<=? AND COALESCE(s.closed_at,s.last_event_at+?)>? AND s.is_legacy=0`,
 				)
 				.all(
 					e.harness,
@@ -395,7 +395,8 @@ export function attemptStore(
 			e = { ...e, effort: null };
 		let suggestion = target?.suggestion_id ?? null;
 		if (e.kind === "delegate" && target && e.call_id) {
-			const dispatch = db
+			// Per call: a resumed agent's later call gets its own attempt, never the first call's.
+			const call = db
 				.query<
 					{
 						agent_id: string;
@@ -404,32 +405,29 @@ export function attemptStore(
 					},
 					[string, string]
 				>(
-					"SELECT agent_id,answered_model,attempt_id FROM dispatches WHERE session_id=? AND tool_use_id=?",
+					"SELECT c.agent_id,d.answered_model,c.attempt_id FROM dispatch_calls c LEFT JOIN dispatches d ON d.session_id=c.session_id AND d.agent_id=c.agent_id WHERE c.session_id=? AND c.tool_use_id=?",
 				)
 				.get(e.session_key, e.call_id);
-			if (dispatch) {
-				let child = dispatch.attempt_id ? get(dispatch.attempt_id) : null;
+			if (call) {
+				let child = call.attempt_id ? get(call.attempt_id) : null;
 				if (!child) {
 					const c = {
 						harness: e.harness,
 						session_key: e.session_key,
-						agent_key: dispatch.agent_id,
+						agent_key: call.agent_id,
 					};
+					const key = `dispatch:${call.agent_id}:${e.call_id}`;
 					if (target.execution_key === "implicit") {
+						// The child runs its own pair: the main session's effort does not carry over.
 						db.query(
-							"UPDATE attempts SET execution_key=?,agent_key=?,model=?,effort=NULL,effort_source=NULL WHERE id=?",
-						).run(
-							`dispatch:${dispatch.agent_id}`,
-							dispatch.agent_id,
-							dispatch.answered_model,
-							target.id,
-						);
+							"UPDATE attempts SET execution_key=?,agent_key=?,model=?,effort=NULL WHERE id=?",
+						).run(key, call.agent_id, call.answered_model, target.id);
 						child = get(target.id);
 					} else
 						child = add(
 							target.suggestion_id,
-							`dispatch:${dispatch.agent_id}`,
-							dispatch.answered_model,
+							key,
+							call.answered_model,
 							null,
 							e.occurred_at ?? target.opened_at ?? 0,
 							c,
@@ -440,16 +438,11 @@ export function attemptStore(
 						...c,
 						attempt_id: child.id,
 						id_kind: "start",
-						external_id: `dispatch:${dispatch.agent_id}`,
+						external_id: key,
 					});
 					db.query(
-						"UPDATE dispatches SET suggestion_id=COALESCE(suggestion_id,?),attempt_id=? WHERE session_id=? AND agent_id=?",
-					).run(
-						target.suggestion_id,
-						child.id,
-						e.session_key,
-						dispatch.agent_id,
-					);
+						"UPDATE dispatches SET suggestion_id=COALESCE(suggestion_id,?),attempt_id=COALESCE(attempt_id,?) WHERE session_id=? AND agent_id=?",
+					).run(target.suggestion_id, child.id, e.session_key, call.agent_id);
 				}
 				target = child ?? target;
 			}
@@ -459,7 +452,7 @@ export function attemptStore(
 		if (!e.requested_attempt_id && e.agent_key === "" && suggestion) {
 			const delegates = db
 				.query<AttemptRecord, [string]>(
-					`SELECT DISTINCT a.* FROM attempts a JOIN dispatches d ON d.attempt_id=a.id WHERE a.suggestion_id=? ORDER BY a.closed_at DESC`,
+					`SELECT a.* FROM attempts a WHERE a.id IN ${DELEGATE_ATTEMPTS} AND a.suggestion_id=? ORDER BY a.closed_at DESC`,
 				)
 				.all(suggestion);
 			const delegateEvidence = db
@@ -713,6 +706,7 @@ export function attemptStore(
 					external_id: s.turn_id,
 				});
 			repair(c, DEFAULT_TUNING.openWindowMs);
+			pairDispatchCalls(db, c.session_key, c.agent_key);
 			for (const { root_id } of db
 				.query<{ root_id: string }, [string | null, string | null, string]>(
 					"SELECT DISTINCT a.root_id FROM attempts a JOIN suggestions s ON s.id=a.suggestion_id WHERE s.session_id=? AND s.agent_id IS ? AND a.harness=?",
@@ -771,7 +765,7 @@ export function attemptStore(
 						a.closed_at === null
 					) {
 						db.query(
-							"UPDATE attempts SET effort_source=NULL,execution_key=?,model=?,effort=?,opened_at=?,harness=?,session_key=?,agent_key=?,owns_usage=? WHERE id=?",
+							"UPDATE attempts SET execution_key=?,model=?,effort=?,opened_at=?,harness=?,session_key=?,agent_key=?,owns_usage=? WHERE id=?",
 						).run(
 							input.key,
 							input.model,
@@ -1064,7 +1058,7 @@ export function attemptStore(
 					reconcile(input, idle, roots);
 					const child = db
 						.query<{ agent_id: string }, [string, string]>(
-							"SELECT agent_id FROM dispatches WHERE session_id=? AND tool_use_id=?",
+							"SELECT agent_id FROM dispatch_calls WHERE session_id=? AND tool_use_id=?",
 						)
 						.get(input.session_key, input.call_id ?? "");
 					if (child)
@@ -1101,7 +1095,7 @@ export function attemptStore(
 						? get(input.attempt_id)
 						: db
 								.query<AttemptRecord, [string, string, string, string | null]>(
-									`SELECT * FROM attempts WHERE suggestion_id=? AND (${stableModelSql("model")}=? OR model IS NULL) AND (effort=? OR effort IS NULL OR effort_source IS NOT NULL) AND (?4 IS NULL OR model_version IS NULL OR model_version=?4) ORDER BY ordinal DESC LIMIT 1`,
+									`SELECT * FROM attempts WHERE suggestion_id=? AND (${stableModelSql("model")}=? OR model IS NULL) AND (effort=? OR effort IS NULL) AND (?4 IS NULL OR model_version IS NULL OR model_version=?4) ORDER BY ordinal DESC LIMIT 1`,
 								)
 								.get(
 									input.suggestion_id,
@@ -1146,16 +1140,29 @@ export function attemptStore(
 						(input.revise ? report.source === source : !correct)
 					)
 						return outcome(a);
+					// A signal is quality, not execution evidence: it never guesses an effort over the
+					// one the attempt's dispatch call requested.
+					const effort =
+						input.revise &&
+						a &&
+						!a.effort &&
+						db
+							.query(
+								"SELECT 1 FROM attempt_efforts WHERE attempt_id=? AND effort IS NOT NULL",
+							)
+							.get(a.id)
+							? null
+							: input.effort;
 					if (!a || (report && !correct))
 						a = add(
 							input.suggestion_id,
 							`report:${crypto.randomUUID()}`,
 							input.model,
-							input.effort,
+							effort,
 							input.at,
 							context(input.suggestion_id),
 						);
-					fill(a, input);
+					fill(a, { ...input, effort });
 					const c = db
 						.query<AttemptContext, [string]>(
 							"SELECT harness,session_key,agent_key FROM attempts WHERE id=?",
@@ -1183,7 +1190,7 @@ export function attemptStore(
 							turn_id: input.turn_id,
 							model: input.model,
 							model_version: input.model_version ?? null,
-							effort: input.effort,
+							effort,
 							value: REPORT_VALUES[input.result],
 							weight: 1,
 							occurred_at: input.at,

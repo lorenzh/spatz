@@ -15,6 +15,7 @@ import type {
 import {
 	type Config,
 	DEFAULT_TUNING,
+	type Effort,
 	type ReportResult,
 	type StatsReport,
 } from "../contracts/types.ts";
@@ -820,6 +821,16 @@ describe("stats", () => {
 				type: "review",
 				successQuality: 0.8,
 				noneOnlyModels: ["anthropic/claude-haiku-4.5"],
+				claudeEfforts: expect.objectContaining({
+					"anthropic/claude-haiku-4.5": ["none"],
+					"anthropic/claude-opus-5.5": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max",
+					],
+				}),
 			},
 		]);
 	});
@@ -1970,7 +1981,7 @@ describe("dispatch effort", () => {
 		s: ReturnType<typeof setup>,
 		agent: string,
 		toolInput: Record<string, unknown>,
-		resolvedModel = "claude-opus-5-5",
+		resolvedModel: string | null = "claude-opus-5-5",
 	) =>
 		s.api.handleHook(
 			"PostToolUse",
@@ -1982,7 +1993,10 @@ describe("dispatch effort", () => {
 				tool_name: "Agent",
 				tool_use_id: `call-${agent}`,
 				tool_input: toolInput,
-				tool_response: { agentId: agent, resolvedModel },
+				tool_response: {
+					agentId: agent,
+					...(resolvedModel && { resolvedModel }),
+				},
 			}),
 		);
 	const stored = (s: ReturnType<typeof setup>) => {
@@ -1996,6 +2010,63 @@ describe("dispatch effort", () => {
 		} finally {
 			db.close();
 		}
+	};
+	/** A store with the catalog efforts the api passes; none-only normalization off, so the view alone decides. */
+	const withCatalog = () => {
+		let efforts: Record<string, readonly Effort[]> = {};
+		const s = setup({
+			openStore: (path, none, claude) => {
+				efforts = claude ?? {};
+				return openStore(path, none, claude);
+			},
+		});
+		const learned = () => {
+			const store = openStore(s.deps.dbPath, [], efforts);
+			try {
+				return store
+					.cellStats("other", 0.8)
+					.map((c) => `${c.model}:${c.effort}:${c.n}`);
+			} finally {
+				store.dispose();
+			}
+		};
+		return { s, learned };
+	};
+	/** The worker's own suggestion, a passing test in its transcript, and its SubagentStop. */
+	const subagentWork = async (s: ReturnType<typeof setup>, model: string) => {
+		const { suggestion_id } = await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			agentId: "worker",
+		});
+		const path = join(dir, "sub.jsonl");
+		const row = JSON.parse(assistant("m1", model, 10));
+		row.message.content = [{ type: "tool_use", id: "call1", name: "Bash" }];
+		await Bun.write(
+			path,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				JSON.stringify(row),
+			].join("\n"),
+		);
+		const context = base({
+			transcript_path: path,
+			agent_id: "worker",
+			agent_transcript_path: path,
+		});
+		for (const event of [
+			{
+				...context,
+				hook_event_name: "PostToolUse",
+				tool_name: "Bash",
+				tool_use_id: "call1",
+				tool_input: { command: "bun test" },
+				tool_response: { stdout: "ok" },
+			},
+			{ ...context, hook_event_name: "SubagentStop" },
+		])
+			await s.api.handleHook(event.hook_event_name, JSON.stringify(event));
+		return suggestion_id;
 	};
 
 	test("tool_input.effort beats the definition; the session effort is never used", async () => {
@@ -2012,7 +2083,7 @@ describe("dispatch effort", () => {
 		]);
 	});
 
-	test("the agent definition's effort applies without a call parameter; invalid values are ignored", async () => {
+	test("the agent definition's effort applies without a call parameter; values outside the vocabulary are ignored", async () => {
 		const s = setup({ openStore });
 		await Bun.write(
 			join(dir, ".claude/agents/pinned.md"),
@@ -2030,94 +2101,83 @@ describe("dispatch effort", () => {
 		]);
 	});
 
-	test("efforts the answering model does not offer are ignored; none-only models store none", async () => {
-		const s = setup({ openStore });
-		await dispatch(s, "a-ultra", { effort: "ultra" });
-		await dispatch(s, "b-none", { effort: "none" });
-		await dispatch(s, "c-haiku", { effort: "high" }, "claude-haiku-4-5");
-		await dispatch(s, "d-unknown", { effort: "high" }, "claude-mystery-1");
-		expect(stored(s)).toEqual([
-			{ agent_id: "a-ultra", requested_effort: null },
-			{ agent_id: "b-none", requested_effort: null },
-			{ agent_id: "c-haiku", requested_effort: "none" },
-			{ agent_id: "d-unknown", requested_effort: null },
-		]);
+	// [answering model, requested effort, learning cell or null when the outcome must not count]
+	const learning = [
+		["claude-opus-5-5", "medium", "anthropic/claude-opus-5.5:medium:1"],
+		["claude-opus-5-5", "ultra", null],
+		["claude-haiku-4-5", "high", "anthropic/claude-haiku-4.5:none:1"],
+		["claude-mystery-1", "high", null],
+	] as const;
+	for (const [model, requested, cell] of learning)
+		for (const source of ["call", "definition"] as const)
+			for (const dispatchFirst of [true, false])
+				test(`learning counts ${cell ?? "nothing"} for ${model} requesting ${requested} by ${source} (dispatch first: ${dispatchFirst})`, async () => {
+					const { s, learned } = withCatalog();
+					await Bun.write(
+						join(dir, ".claude/agents/pinned.md"),
+						`---\neffort: ${requested}\n---\n`,
+					);
+					const send = () =>
+						dispatch(
+							s,
+							"worker",
+							source === "call"
+								? { effort: requested }
+								: { subagent_type: "pinned" },
+							model,
+						);
+					if (dispatchFirst) await send();
+					await subagentWork(s, model);
+					if (!dispatchFirst) await send();
+					expect(learned()).toEqual(cell ? [cell] : []);
+				});
+
+	test("spatz stats lists the subagent pair at its requested effort", async () => {
+		const { s } = withCatalog();
+		await dispatch(s, "worker", { effort: "medium" });
+		await subagentWork(s, "claude-opus-5-5");
+		const report = await s.api.stats({});
+		expect(
+			report.by_type.flatMap((t) =>
+				t.pairs.map((p) => `${p.model}:${p.effort}:${p.n}`),
+			),
+		).toEqual(["anthropic/claude-opus-5.5:medium:1"]);
 	});
 
-	const learning = [
-		["call", "claude-opus-5-5", "medium", "medium"],
-		["definition", "claude-opus-5-5", "medium", "medium"],
-		["call", "claude-haiku-4-5", "high", "none"],
-	] as const;
-	for (const [source, model, requested, effort] of learning)
-		for (const dispatchFirst of [true, false]) {
-			test(`a hooks-only subagent outcome (${model}, effort from ${source}) counts for learning (dispatch first: ${dispatchFirst})`, async () => {
-				const s = setup({ openStore });
-				await Bun.write(
-					join(dir, ".claude/agents/pinned.md"),
-					`---\neffort: ${requested}\n---\n`,
-				);
-				await s.api.suggest({
-					...suggestInput(),
-					session: SESSION,
-					agentId: "worker",
-				});
-				const path = join(dir, "sub.jsonl");
-				const row = JSON.parse(assistant("m1", model, 10));
-				row.message.content = [{ type: "tool_use", id: "call1", name: "Bash" }];
-				await Bun.write(
-					path,
-					[
-						JSON.stringify({ type: "user", promptId: PROMPT }),
-						JSON.stringify(row),
-					].join("\n"),
-				);
-				const context = base({
-					transcript_path: path,
-					agent_id: "worker",
-					agent_transcript_path: path,
-				});
-				const subagentWork = async () => {
-					for (const event of [
-						{
-							...context,
-							hook_event_name: "PostToolUse",
-							tool_name: "Bash",
-							tool_use_id: "call1",
-							tool_input: { command: "bun test" },
-							tool_response: { stdout: "ok" },
-						},
-						{ ...context, hook_event_name: "SubagentStop" },
-					])
-						await s.api.handleHook(
-							event.hook_event_name,
-							JSON.stringify(event),
-						);
-				};
-				const send = () =>
-					dispatch(
-						s,
-						"worker",
-						source === "call"
-							? { effort: requested }
-							: { subagent_type: "pinned" },
-						model,
-					);
-				if (dispatchFirst) await send();
-				await subagentWork();
-				if (!dispatchFirst) await send();
-				const store = openStore(s.deps.dbPath);
-				try {
-					const cells = store
-						.cellStats("other", 0.8)
-						.filter((c) => c.effort !== null);
-					expect(cells).toHaveLength(1);
-					expect(cells[0]).toMatchObject({ effort, n: 1, successes: 1 });
-				} finally {
-					store.dispose();
-				}
-			});
-		}
+	test("the answering model validates the requested effort, not the requested model", async () => {
+		const { s, learned } = withCatalog();
+		await dispatch(s, "worker", { model: "opus", effort: "high" }, null);
+		await subagentWork(s, "claude-mystery-1");
+		expect(learned()).toEqual([]);
+	});
+
+	test("a PR signal keeps the requested effort out of the attempt, so a later correction does not conflict", async () => {
+		const { s, learned } = withCatalog();
+		await dispatch(s, "worker", { effort: "low" });
+		const id = await subagentWork(s, "claude-opus-5-5");
+		const signals = createApi(s.deps, {
+			fetchPr: async () => ({
+				state: "MERGED",
+				body: `Spatz-Suggestion: ${id}`,
+				commits: [],
+				checks: ["SUCCESS"],
+			}),
+		});
+		await signals.signalPr({ url: "u" });
+		expect(learned()).toEqual(["anthropic/claude-opus-5.5:low:1"]);
+		const store = openStore(s.deps.dbPath);
+		const attempt = store.outcome(id)?.attempt_id ?? undefined;
+		store.dispose();
+		await s.api.report({
+			suggestionId: id,
+			model: "claude-opus-5-5",
+			effort: "high",
+			result: "pass",
+			attempt,
+			correct: true,
+		});
+		expect(learned()).toEqual(["anthropic/claude-opus-5.5:high:1"]);
+	});
 });
 
 describe("dispatch observations", () => {

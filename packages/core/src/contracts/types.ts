@@ -395,6 +395,8 @@ export interface DispatchRecord {
 	answered_model: string | null;
 	/** The effort the dispatch asked for: `tool_input.effort`, else the agent definition's `effort:`. */
 	requested_effort?: Effort | null;
+	/** When the dispatch hook recorded the call (it fires when the call ends). */
+	recorded_at?: number | null;
 	suggestion_id: string | null;
 }
 
