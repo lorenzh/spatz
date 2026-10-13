@@ -2,7 +2,7 @@
 title: spatz CLI reference
 description: Every spatz command with its flags, defaults, the --models grammar, text and JSON output fields, exit codes and examples.
 tags: [cli, reference, spatz]
-keywords: [import-eval, bench, eval row, run_id, dry-run, pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, binding, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, n_chains, chains, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, link, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, usage, scope, session, turn, agent, version]
+keywords: [import-eval, bench, eval row, run_id, dry-run, pending, signal pr, Spatz-Suggestion, unknown outcome, coverage_by_source, attempt, retry, correct, chain, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, cost_usd, n_chains, chains, tokens_complete, tokens_schema, fallback, failures, launcher, diagnostics, command line, commands, flags, options, models, effort, json output, exit code, suggest, report, stats, hook, scope, session, turn, agent, version]
 ---
 
 # spatz CLI reference
@@ -12,9 +12,7 @@ Each spatz command calls the `@spatz/core` API and formats the result. The CLI h
 ```text
 spatz --version
 spatz "<task>" [--label <text>] [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>] [--retry-of <suggestion_id>]
-spatz report <suggestion_id> | --label <text> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
-spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--json]
-spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
+spatz report <suggestion_id> | --label <text> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct] [--rounds <n>] [--note <t>] [--json]
 spatz discard <suggestion_id> [--json]
 spatz import-rollout <file> --suggestion <id> [--json]
 spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
@@ -47,12 +45,12 @@ This command recommends a pair of model and effort for one task. spatz classifie
 | `--dry-run` | boolean | `false` | Mark the suggestion as a test (`is_test: true`). A test suggestion never counts for learning or for `spatz stats`. |
 | `--retry-of <suggestion_id>` | string | none | Join the named suggestion's recovery chain. |
 | `--scope <scope>` | string | `null` | Store `step`, `turn`, `subagent`, `session` or `escalate`. This labels the routing decision. |
-| `--session <id>` | string | env | Link the suggestion at creation. This does not need a Bash hook. Without the flag, spatz reads the session from `CLAUDE_CODE_SESSION_ID` (Claude Code), then `CODEX_SESSION_ID` or `CODEX_THREAD_ID` (Codex). An explicit flag wins. With `--source claude-code-mod`, you must also give `--turn` or `--agent-id`. Otherwise the call fails. |
+| `--session <id>` | string | env | Link the suggestion at creation. This does not need a Bash hook. Without the flag, spatz reads the session from `CLAUDE_CODE_SESSION_ID` (Claude Code), then `CODEX_SESSION_ID` or `CODEX_THREAD_ID` (Codex). An explicit flag wins. |
 | `--label <text>` | string | `null` | A name for this suggestion, stored as typed. `spatz report --label` resolves the one pending suggestion with this name. Do not put secrets or private text in it, same as `--note`. An empty label fails. |
 | `--turn <id>` | string | `null` | Store the initial turn id. |
 | `--agent-id <id>` | string | `null` | Store the subagent id. Without it, the suggestion uses the main window. |
-| `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code`, `claude-code-mod` or `codex`. |
-| `--requested <model\|->` | string | `null` | Store the original model before mod routing. `-` means no explicit model. Known Claude aliases and model ids are normalized. |
+| `--source <agent>` | string | `null` | Store provenance in `suggestions.agent`: `claude-code` or `codex`. Old rows can also hold `claude-code-mod`. |
+| `--requested <model\|->` | string | `null` | Store the model the caller first asked for. `-` means no explicit model. Known Claude aliases and model ids are normalized. |
 | `--requested-agent <type>` | string | — | Read the named Claude agent's frontmatter `model:` when `--requested` is absent, `-` or `inherit`. |
 
 These fields stay in SQLite. The suggestion JSON keeps its existing fields.
@@ -61,7 +59,7 @@ The CLI stores the scope label. The caller chooses the decision points.
 ```sh
 spatz "Review the parser" --models claude-sonnet-5-5:high \
   --scope subagent --session session-1 --turn turn-1 \
-  --agent-id agent-1 --source claude-code-mod --json
+  --agent-id agent-1 --source claude-code --json
 ```
 
 `spatz suggest "<task>"` is the explicit form of the same command.
@@ -194,8 +192,6 @@ It closes the attempt and suggestion window. Late evidence can still bind by sou
 | `--note <t>` | string | none | A short note. spatz stores it in the database. |
 | `--label <text>` | string | none | Report the pending suggestion with this label instead of giving its id. spatz needs exactly one pending match: no match or several matches fail without writing. The label is stored as typed, like `--note`. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
-| `--turn <id>` | string | none | Identify a direct report's turn. Needs `--source claude-code-mod`. |
-| `--source claude-code-mod` | string | none | Identify a direct mod report. Needs `--turn`. |
 
 Without `--attempt`, the report selects the highest compatible ordinal.
 An unused implicit attempt also qualifies. If no attempt matches, spatz creates one.
@@ -244,101 +240,9 @@ $ spatz report 3b257996-110b-48c4-b61d-79761ad7400b --model claude-sonnet-5-5 --
 To correct that verdict, repeat the report with `--attempt <attempt-uuid> --correct`.
 To route more work in the same recovery chain, use `spatz suggest "Retry the task" --retry-of <suggestion_id>`.
 
-## spatz attempt
-
-The mod uses these commands to register execution identity. The routing skill does not need them.
-
-```sh
-spatz attempt start <suggestion_id> --key <turnId:index> --model <m> \
-  [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--model-version <v>] [--owns-usage] [--json]
-spatz attempt bind <attempt_id> --call <tool_use_id> --session <id> [--agent-id <id>]
-spatz attempt finalize --session <id> [--agent-id <id>]
-```
-
-`start` registers a segment before execution. A repeated start key returns the same attempt.
-Unknown effort stays null. `--owns-usage` marks mod usage ownership for this context.
-`--model-version` stores the model revision the caller knows. Without it, start takes the date of a dated `--model`, or the revision the harness catalog lists for an undated alias. Otherwise the version stays null.
+## Stored model keys
 
 Stores from spatz 0.4 and older can hold dated GPT keys such as `openai/gpt-5-2025-08-07`. spatz leaves these rows as they are. Learning, stats and attempt matching treat a dated key as its stable key (`openai/gpt-5`), so a replay or report with the stable key finds the old attempt.
-`bind` connects a hook/mod tool-call ID to the active attempt.
-`finalize` closes observed execution without inventing a successful verdict.
-The main session omits `--agent-id`. Each subagent supplies its own ID.
-
-## spatz usage
-
-This command stores direct token usage without reading a transcript.
-It does not create a success signal or close the suggestion.
-
-| Flag | Default | Effect |
-| --- | --- | --- |
-| `<suggestion_id>` | required | The existing suggestion id. |
-| `--model <m>` | required | The model used. spatz applies its model-id rules. |
-| `--attempt <id>` | absent | Bind the measurement to this attempt. |
-| `--key <turnId:index>` | absent | Stable identity of a disjoint mod step measurement. |
-| `--session <id>` | absent | Session context for explicit attempt measurements. |
-| `--agent-id <id>` | absent | Subagent context for explicit attempt measurements. |
-| `--effort <e>` | `null` | `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. `none` is rejected for catalog models with real efforts; unknown models still accept it. Missing or supplied efforts are stored as `none` for catalog models whose only effort is `none`. |
-| `--input <n>` | required | Uncached input tokens. |
-| `--output <n>` | required | Output tokens. |
-| `--cache-read <n>` | required | Input tokens read from cache. |
-| `--cache-creation <n>` | required | Input tokens written to cache. |
-| `--turn <id>` | required | The run's turn id. Also stored as `scope_key`. |
-| `--source claude-code-mod` | required | The direct usage source. |
-| `--cost-usd <n>` | absent | Optional harness-reported USD cost. Must be a finite non-negative decimal. The CLI accepts scientific notation. It rejects empty values, whitespace and hexadecimal values. |
-| `--json` | `false` | Print the stored usage record. |
-
-All token counts must be non-negative safe integers.
-Step measurements use `--attempt`, `--key` and `--session` with the actual sent effort.
-Replaying the same measurement does not add its tokens twice.
-Each step keeps separate counts even when its pair matches another step.
-The command also accepts direct turn measurements without step identity.
-For a linked subagent, mod usage replaces hook estimates by session and agent id.
-Later hook replays cannot add those estimates again.
-
-```sh
-spatz usage <suggestion_id> --model claude-sonnet-5-5 --effort high \
-  --input 10 --output 20 --cache-read 60 --cache-creation 30 \
-  --turn turn-1 --source claude-code-mod --json
-```
-
-Text output is `usage recorded: <suggestion_id>  turn: <turn_id>`.
-JSON contains `suggestion_id`, `model`, `effort`, `source`, `scope_key`, `turn_id` and `agent_id`.
-It also contains the four token counts with snake_case names.
-`input_tokens` means uncached input. `output_tokens` includes reasoning tokens once.
-JSON also includes `cost_usd`, `cost_source`, `tokens_complete` and `tokens_schema`.
-`cost_source` is `reported`, `priced` or `unavailable`. Unavailable cost is `null`.
-If all four counters are known, `tokens_complete` is `1`. Otherwise it is `0`.
-New rows use `tokens_schema = 2`. See [cost storage](how-it-works.md#normalized-tokens-and-cost).
-The remaining fields are `is_sidechain`, `rounds`, `note` and `reported_at`.
-`rounds` and `note` are `null`. `reported_at` is epoch milliseconds.
-If the suggestion has an agent id, `is_sidechain` is true.
-
-If completion has no usage, do not submit invented zero counts.
-The mod records disjoint step measurements with their actual pairs.
-It does not submit a mixed turn total against the last response model.
-
-## spatz link
-
-A subagent has no id when its suggestion is made. `spatz link` adds the agent id and the session afterwards.
-Until then, the suggestion has no session and sits in no session window, so it cannot close the window of the main session.
-
-| Flag | Default | Effect |
-| --- | --- | --- |
-| `<suggestion_id>` | required | The existing suggestion id. |
-| `--agent-id <id>` | required | The real agent id. |
-| `--session <id>` | required | The session of the agent. |
-| `--json` | `false` | Print `suggestion_id` and `agent_id`. |
-
-The command is idempotent. A second call with the same agent id changes nothing.
-A call with another agent or session id fails with exit code 1.
-For mod suggestions, linking also merges the original requested model into `dispatches`.
-After the link, the suggestion joins the window sequence of that agent.
-
-```sh
-spatz link <suggestion_id> --agent-id agent-1 --session session-1
-```
-
-Text output is `linked: <suggestion_id>  agent: <agent_id>`.
 
 ## spatz discard
 
@@ -346,7 +250,7 @@ Text output is `linked: <suggestion_id>  agent: <agent_id>`.
 spatz discard <suggestion_id> [--json]
 ```
 
-Marks a suggestion unknown. The Claude Code mod calls it when it decides a pick but does not use it, so the row does not stay pending. A later outcome for the same suggestion still wins. A repeated call does nothing. The call fails for an unknown id.
+Marks a suggestion unknown. Use it when you decide a pick but do not use it, so the row does not stay pending. A later outcome for the same suggestion still wins. A repeated call does nothing. The call fails for an unknown id.
 
 Session-only links inside a subagent (no agent id yet) close at the session end, not at the subagent's end. The subagent's end is too early: a result can still arrive for that agent after it stops. A later outcome still wins.
 
@@ -467,7 +371,7 @@ This command lists suggestions that have neither an outcome nor an `unknown` mar
 | `--older-than <n>s\|m\|h\|d` | duration | `0s` | List only suggestions at least this old. Another format gives exit code 2. |
 | `--json` | boolean | `false` | Print a JSON array. |
 
-Each text line shows the id, the creation time, `label` (as typed with `--label`), `pair` (the chosen model and effort), `scope`, `age` (minutes, hours or days), `source` (`claude-code-mod`, `claude-code`, `codex` or `cli`), `session`, `agent` and `task_type`.
+Each text line shows the id, the creation time, `label` (as typed with `--label`), `pair` (the chosen model and effort), `scope`, `age` (minutes, hours or days), `source` (`claude-code`, `codex`, `cli` or the legacy `claude-code-mod`), `session`, `agent` and `task_type`.
 
 ## spatz signal pr
 
@@ -494,7 +398,7 @@ This command shows how well each pair worked, per task type. It reads the databa
 | `--model-version <v>` | string | all versions | Show only outcomes recorded under this model version, for example `20250929`. Also filters the per-attempt cost. |
 | `--json` | boolean | `false` | Print one JSON object instead of text. |
 
-Text output ends with one `outcome coverage <source>` line per source (`claude-code-mod`, `claude-code`, `codex`, `cli`). Coverage is the share of suggestions with an outcome or an explicit `unknown`. A source below 80 % shows a warning. JSON has the same data as `coverage_by_source`.
+Text output ends with one `outcome coverage <source>` line per source (`claude-code`, `codex`, `cli`, and the legacy `claude-code-mod` for old rows). Coverage is the share of suggestions with an outcome or an explicit `unknown`. A source below 80 % shows a warning. JSON has the same data as `coverage_by_source`.
 
 `--by scope` adds `by_scope` to the JSON response. Text output shows one line per recorded scope.
 Suggestions without a scope appear as `unscoped` in text and `scope: null` in JSON.
@@ -532,7 +436,6 @@ A chain with any usage excluded from cost has a null cost, including for cost-pe
 Token totals keep lower-bound estimates and historical rows. Null counters contribute zero.
 Hooks-only Claude subagent transcripts have `tokens_complete = 0`, even when all four counters are present.
 When `incomplete` is positive, text output notes that costs exclude rows and token totals may be lower bounds.
-Mod measurements replace hook estimates for the same session and agent. Replaced rows no longer enter `incomplete`.
 Historical Codex input totals can include cached tokens. These totals are not normalized retroactively.
 Stats do not measure routing latency.
 
@@ -569,11 +472,11 @@ Neither `--type` nor `--by scope` filters them.
 | Field | Meaning |
 | --- | --- |
 | `dispatches` | Observed session/agent pairs, including dispatches without a suggestion. |
-| `routed_by_mod` | Dispatches linked to a mod suggestion. This includes `show` mode and does not prove that a rewrite occurred. |
+| `routed_by_mod` | Dispatches linked to a legacy `claude-code-mod` suggestion. New data leaves it at 0. |
 | `swapped` | Dispatches whose known requested and answering model ids differ. |
 
 A linked dry-run suggestion excludes its dispatch from all three counts.
-Hook and mod observations of one spawn count once.
+Observations of one spawn count once.
 Unknown requested or answering models do not count as swaps.
 A named agent supplies its requested model through the definition's frontmatter `model:`.
 Core checks the project's `.claude/agents` before `$CLAUDE_CONFIG_DIR/agents` (default `~/.claude/agents`).
@@ -583,7 +486,7 @@ With a requested Opus model and a Sonnet answer, `swapped` increases by one.
 A preserved Opus request and answer adds no swap.
 
 The counts start with observations recorded by schema v7. Historical dispatches are not inferred.
-See [hook storage](hooks.md#dispatch-observations) and [mod tracking](claude-mod.md#dispatch-tracking).
+See [hook storage](hooks.md#dispatch-observations).
 
 ### Fallbacks and failures
 

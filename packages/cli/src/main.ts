@@ -28,15 +28,10 @@ const USAGE = `usage:
   spatz --version
   spatz "<task>" [--label <text>] [--models <list>] [--family <claude|gpt>] [--json] [--dry-run] [--scope <scope>] [--session <id>] [--turn <id>] [--agent-id <id>] [--source <agent>] [--requested <model|->] [--requested-agent <type>]
   spatz suggest "<task>" [--retry-of <suggestion_id>] [suggestion options]
-  spatz attempt start <suggestion_id> --key <turn:index> --model <m> [--effort <e>] --session <id> [--agent-id <id>] [--turn <id>] [--model-version <v>] [--owns-usage] [--json]
-  spatz attempt bind <attempt_id> --call <id> --session <id> [--agent-id <id>]
-  spatz attempt finalize --session <id> [--agent-id <id>]
-  spatz report <suggestion_id> | --label <text> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--turn <id> --source claude-code-mod] [--json]
-  spatz usage <suggestion_id> --model <m> [--effort <e>] --input <n> --output <n> --cache-read <n> --cache-creation <n> --turn <id> --source claude-code-mod [--attempt <id>] [--key <turn:index>] [--session <id>] [--agent-id <id>] [--cost-usd <n>] [--json]
+  spatz report <suggestion_id> | --label <text> --model <m> --effort <e> --result pass|partial|fail [--attempt <id>] [--correct | --confirm] [--rounds <n>] [--note <t>] [--json]
   spatz import-rollout <file> --suggestion <id> [--json]
   spatz import-eval <rows.jsonl | runs-dir>... [--dry-run] [--json]
   spatz hook <event> [--agent codex]
-  spatz link <suggestion_id> --agent-id <id> --session <id> [--json]
   spatz discard <suggestion_id> [--json]
   spatz signal pr <url> [--review approve|changes|blocker] [--json]
   spatz pending [--older-than <n>s|m|h|d] [--json]
@@ -171,10 +166,8 @@ function parse(argv: string[]) {
 				attempt: { type: "string" },
 				correct: { type: "boolean" },
 				confirm: { type: "boolean" },
-				key: { type: "string" },
-				call: { type: "string" },
-				"owns-usage": { type: "boolean" },
 				suggestion: { type: "string" },
+				"model-version": { type: "string" },
 				version: { type: "boolean" },
 				json: { type: "boolean" },
 				models: { type: "string" },
@@ -193,13 +186,7 @@ function parse(argv: string[]) {
 				turn: { type: "string" },
 				"agent-id": { type: "string" },
 				source: { type: "string" },
-				input: { type: "string" },
-				output: { type: "string" },
-				"cache-read": { type: "string" },
-				"cache-creation": { type: "string" },
-				"cost-usd": { type: "string" },
 				by: { type: "string" },
-				"model-version": { type: "string" },
 				label: { type: "string" },
 			},
 		});
@@ -243,55 +230,7 @@ export async function main(
 			return 0;
 		}
 		json = v.json ?? false;
-		if (cmd === "attempt") {
-			const context = {
-				session: required(v.session, "--session"),
-				...(v["agent-id"] !== undefined && {
-					agentId: required(v["agent-id"], "--agent-id"),
-				}),
-			};
-			if (rest[0] === "start") {
-				const input = {
-					...context,
-					suggestionId: required(rest[1], "<suggestion_id>"),
-					key: required(v.key, "--key"),
-					model: required(v.model, "--model"),
-					...(v.effort !== undefined && {
-						effort: required(v.effort, "--effort"),
-					}),
-					...(v.turn !== undefined && { turn: required(v.turn, "--turn") }),
-					...(v["model-version"] !== undefined && {
-						modelVersion: required(v["model-version"], "--model-version"),
-					}),
-					ownsUsage: v["owns-usage"] ?? false,
-				};
-				run = async () => {
-					const result = await api.startAttempt(input);
-					return { result, text: () => `attempt_id: ${result.id}` };
-				};
-			} else if (rest[0] === "bind") {
-				const input = {
-					...context,
-					attempt: required(rest[1], "<attempt_id>"),
-					call: required(v.call, "--call"),
-				};
-				run = async () => {
-					await api.bindAttempt(input);
-					return {
-						result: { attempt_id: input.attempt },
-						text: () => `bound: ${input.attempt}`,
-					};
-				};
-			} else if (rest[0] === "finalize") {
-				run = async () => {
-					await api.finalizeAttempts(context);
-					return {
-						result: { session_id: context.session },
-						text: () => `finalized: ${context.session}`,
-					};
-				};
-			} else throw new UsageError("attempt needs start, bind or finalize");
-		} else if (cmd === "import-rollout") {
+		if (cmd === "import-rollout") {
 			const input = {
 				file: required(rest[0], "<file>"),
 				suggestionId: required(v.suggestion, "--suggestion"),
@@ -311,58 +250,6 @@ export async function main(
 				const result = await api.importEval(input);
 				return { result, text: () => formatImportEval(result) };
 			};
-		} else if (cmd === "usage") {
-			if (v.source !== "claude-code-mod")
-				throw new UsageError("--source must be claude-code-mod");
-			const input = {
-				suggestionId: required(rest[0], "<suggestion_id>"),
-				model: required(v.model, "--model"),
-				...(v.attempt !== undefined && {
-					attempt: required(v.attempt, "--attempt"),
-				}),
-				...(v.key !== undefined && { key: required(v.key, "--key") }),
-				...(v.session !== undefined && {
-					session: required(v.session, "--session"),
-				}),
-				...(v["agent-id"] !== undefined && {
-					agentId: required(v["agent-id"], "--agent-id"),
-				}),
-				...(v.effort !== undefined && { effort: v.effort }),
-				input: toInt(required(v.input, "--input"), "--input"),
-				output: toInt(required(v.output, "--output"), "--output"),
-				cacheRead: toInt(
-					required(v["cache-read"], "--cache-read"),
-					"--cache-read",
-				),
-				cacheCreation: toInt(
-					required(v["cache-creation"], "--cache-creation"),
-					"--cache-creation",
-				),
-				...(v["cost-usd"] !== undefined && { costUsd: toCost(v["cost-usd"]) }),
-				turn: required(v.turn, "--turn"),
-				source: "claude-code-mod" as const,
-			};
-			run = async () => ({
-				result: await api.usage(input),
-				text: () =>
-					`usage recorded: ${input.suggestionId}  turn: ${input.turn}`,
-			});
-		} else if (cmd === "link") {
-			const input = {
-				suggestionId: required(rest[0], "<suggestion_id>"),
-				agentId: required(v["agent-id"], "--agent-id"),
-				session: required(v.session, "--session"),
-			};
-			run = async () => {
-				await api.link(input);
-				return {
-					result: {
-						suggestion_id: input.suggestionId,
-						agent_id: input.agentId,
-					},
-					text: () => `linked: ${input.suggestionId}  agent: ${input.agentId}`,
-				};
-			};
 		} else if (cmd === "discard") {
 			const suggestionId = required(rest[0], "<suggestion_id>");
 			run = async () => {
@@ -380,15 +267,7 @@ export async function main(
 			const result = required(v.result, "--result");
 			if (!RESULTS.includes(result))
 				throw new UsageError("--result must be pass, partial or fail");
-			if (
-				(v.source !== undefined || v.turn !== undefined) &&
-				(v.source !== "claude-code-mod" || !v.turn?.trim())
-			)
-				throw new UsageError(
-					"direct report needs --turn and --source claude-code-mod",
-				);
 			const input = {
-				...(v.source && { source: "claude-code-mod" as const, turn: v.turn }),
 				...(v.attempt !== undefined && {
 					attempt: required(v.attempt, "--attempt"),
 				}),
@@ -530,16 +409,5 @@ function toInt(s: string, flag = "--rounds"): number {
 	const n = Number(s);
 	if (!/^\d+$/.test(s) || !Number.isSafeInteger(n))
 		throw new UsageError(`${flag} must be a non-negative safe integer`);
-	return n;
-}
-
-function toCost(s: string): number {
-	const n = Number(s);
-	if (
-		!/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(s) ||
-		s.trim() !== s ||
-		!Number.isFinite(n)
-	)
-		throw new UsageError("--cost-usd must be a finite non-negative decimal");
 	return n;
 }

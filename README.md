@@ -108,7 +108,7 @@ These suggestions never count toward learning or statistics.
 4. You or your agent choose a pair and run the task.
 5. Hooks or `spatz report` record the outcome for future recommendations.
 
-The CLI recommends pairs. The optional Claude Code mod can apply them automatically.
+The CLI recommends pairs. Your agent applies them, guided by the routing skill.
 See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recommendation.md) for the decision process.
 
 ## Agent integrations
@@ -117,17 +117,12 @@ See [How it works](docs/how-it-works.md) and [Recommendation rules](docs/recomme
 | --- | --- | --- |
 | Claude Code `spatz` plugin | Record task signals and model usage. | [Hooks guide](docs/hooks.md) |
 | Codex `spatz` plugin | Record shell results and model usage. | [Hooks guide](docs/hooks.md) |
-| Claude Code `spatz-mod` plugin (mod) | Show recommendations or apply model and effort choices. | [Mod guide](docs/claude-mod.md) |
 | Other agents | Request recommendations and report outcomes through the CLI. | [CLI reference](docs/cli.md) |
-
-The Claude Code mod supports `step`, `turn`, `subagent`, `session`, and `escalate` routing scopes.
-Hooks and the mod can run together. With `record: auto`, the mod records step usage and hooks record signals.
 
 ### Install for Claude Code
 
 Use macOS or Linux with a POSIX shell (see [Platform support](docs/installation.md#platform-support)).
 The plugins run the CLI through a bundled launcher: an installed `spatz` on `PATH` wins, otherwise it uses Bun or npx from the `PATH` Claude Code starts with.
-The mod needs Claude Code 2.1.287 or newer.
 
 1. Start Claude Code. Add the marketplace and install the hooks:
 
@@ -138,26 +133,8 @@ The mod needs Claude Code 2.1.287 or newer.
 
    The hooks record test/build results and model usage. They do not switch models.
 
-2. Optional: install the mod for automatic recommendations:
-
-   ```text
-   /plugin install spatz-mod@spatz
-   ```
-
-   The mod defaults to `show` mode. To apply recommendations to subagents, run:
-
-   ```text
-   /spatz mode apply
-   /spatz status
-   ```
-
-   When you install both plugins, keep `record: auto`. Hooks record signals. The mod owns usage for its registered execution segments.
-   To apply recommendations to the main session too, enable `/spatz main on`.
-
-3. Remove any manual `spatz hook` entries from `~/.claude/settings.json` and project settings.
+2. Remove any manual `spatz hook` entries from `~/.claude/settings.json` and project settings.
    Keep unrelated hooks. This avoids duplicate records.
-
-See the [Claude Code mod guide](docs/claude-mod.md) for routing scopes and persistent configuration.
 
 ### Install for Codex CLI
 
@@ -190,7 +167,7 @@ Keep the suggestion output unfiltered so the hooks can read its ID.
 After the task, ask the agent to report the actual pair and result with `spatz report`.
 Run `spatz stats` to see recorded outcomes.
 
-Every plugin ships the `routing` skill (`/spatz:routing`, `/spatz-mod:routing`, or `spatz:routing` in Codex). The mod's `/spatz` command checks status and changes mode or scope. You do not need to edit your agent instructions.
+Every plugin ships the `routing` skill (`/spatz:routing` in Claude Code, or `spatz:routing` in Codex). You do not need to edit your agent instructions.
 Every plugin can run without a global CLI through its bundled launcher using Bun or npx.
 The first run downloads about 60 MB. Codex hooks time out after 10 seconds.
 For this setup, warm the launcher before the first session with `"<plugin root>/bin/spatz" --version`.
@@ -283,7 +260,6 @@ See [Contributing](CONTRIBUTING.md) for the full development setup.
 | [Measurements](docs/measurements.md) | Benchmark results for model and effort selection. |
 | [Bench rows](docs/bench.md) | The `spatz-eval-row/1` format for benchmark results and how `spatz import-eval` stores them. |
 | [Hooks](docs/hooks.md) | Claude Code and Codex CLI setup and recorded signals. |
-| [Claude Code mod](docs/claude-mod.md) | Modes, routing scopes, and `/spatz` commands. |
 | [Configuration](docs/configuration.md) | Environment variables and local files. |
 | [Privacy](docs/privacy.md) | Network requests, stored data, and deletion. |
 

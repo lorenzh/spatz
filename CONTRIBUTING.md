@@ -60,7 +60,6 @@ Lefthook runs two Git hooks:
 | `packages/core` (`@spatz/core`) | All logic: `classify`, `catalog`, `recommend`, `signals`, `store`, `report`, `api`, `contracts`. |
 | `packages/cli` (`@spatz/cli`) | The thin CLI. It parses arguments, calls `@spatz/core` and formats the output. |
 | `packages/claude-hooks` | Claude Code `spatz` plugin (hooks). |
-| `packages/claude-mod` | Claude Code `spatz-mod` plugin (mod). |
 | `packages/codex-hooks` | Codex `spatz` plugin (hooks). |
 | `scripts/` | Release, npm package and plugin build scripts, with their tests. |
 | `skills/routing` | Source of the routing skill. |

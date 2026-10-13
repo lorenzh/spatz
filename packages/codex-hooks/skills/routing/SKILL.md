@@ -7,8 +7,6 @@ description: Spatz model and effort selection. Use when an agent is about to dis
 
 **Before every dispatch you route yourself, get a fresh ranking and use its first pair.** Task size, urgency, and a previous ranking do not replace this call.
 
-When the spatz Claude Code mod is installed (the `/spatz-mod:routing` skill is available), do not call spatz for Claude Code subagents; the mod routes them. `/spatz` is the mod's command for checking status and changing mode or scope. Still use this skill for other dispatches, such as Codex runs or other harnesses, and report outcomes as usual.
-
 ## Run the CLI
 
 Use `spatz` when it is on PATH. Otherwise use this plugin's `bin/spatz`, resolved from the installed skill directory as `../../bin/spatz`. Quote the absolute launcher path. It tries PATH, then Bun, then npx.
@@ -41,11 +39,14 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
 
    Take `strategy` from the response and `n` from the selected ranking entry. Require the agent to report the model actually answering. Check available runtime evidence against the pick. If the selected model is unavailable, say so and stop that dispatch. Do not silently substitute another pair or claim an independent review.
 
+   In Claude Code, pass both `model` and `effort` on the Agent call (Claude Code 2.1.292 or later accepts a per-invocation `effort`). Or use a pinned agent whose `model:` and `effort:` frontmatter match the pick.
+
    Efforts are `none`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`. Use only efforts offered by the selected harness model.
    For Codex CLI, map `ultra` to `-c model_reasoning_effort=ultra` (for example, `SPATZ_SUGGESTION_ID=<suggestion_id> codex exec -m gpt-6-sol -c model_reasoning_effort=ultra "<task>"`). Claude Code has no `ultra`.
    Prefix every Codex dispatch with `SPATZ_SUGGESTION_ID=<suggestion_id> codex exec ...`, using the ID from this ranking. Codex inherits the environment; the spatz Codex hooks record the run's tokens and test/build results against that suggestion.
    If hooks are not installed or trusted, run `spatz import-rollout <rollout.jsonl> --suggestion <suggestion_id>` after the run. Use the rollout from that Codex run. Reimporting the same turns does not add their tokens twice. Still report the verified result below.
    Give the dispatched agent its suggestion ID (in its brief, or in `SPATZ_SUGGESTION_ID` for Codex). The hooks then close its suggestion when the agent ends: with test/build evidence as an outcome, otherwise as `unknown`. Hooks cannot judge the result, so still report from the agent's verified result. `spatz pending` lists suggestions that have neither.
+   If a verified result fails, escalate: run `spatz "<task>" --retry-of <suggestion_id>` and dispatch the returned pair.
    For `none`, set only the model and leave the harness effort setting untouched. Report the effort as `none`.
 
    Done when the dispatch uses the selected pair and its answering model is recorded, or its unavailability is disclosed.

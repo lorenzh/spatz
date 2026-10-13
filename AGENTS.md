@@ -13,7 +13,6 @@
 | Lint / fix | `bun run lint` / `bun run format` |
 | Run the CLI | `HOME=$(mktemp -d) SPATZ_NO_JEV=1 bun packages/cli/src/cli.ts "<task>" --dry-run --json` |
 | Validate plugins | `claude plugin validate .` |
-| Mod tests | `claude plugin test packages/claude-mod` |
 | Regenerate plugin skills + launchers | `bun scripts/plugin-assets.ts` |
 | Update harness catalog | `bun scripts/harness-catalog.ts` |
 
@@ -24,7 +23,7 @@
 
 ## Code Layout
 - Domain logic goes in `packages/core`; `packages/cli` only parses, calls core and formats.
-- Plugins: `packages/claude-hooks` (`spatz`), `packages/claude-mod` (`spatz-mod`), `packages/codex-hooks` (Codex `spatz`).
+- Plugins: `packages/claude-hooks` (`spatz`), `packages/codex-hooks` (Codex `spatz`).
 - Tests live next to the code as `*.test.ts`; write the failing test first.
 
 ## Generated Files — do not edit by hand
@@ -59,4 +58,4 @@
 | Settings and env vars | `docs/configuration.md` |
 | Recommendation logic | `docs/recommendation.md` |
 | Architecture and data flow | `docs/how-it-works.md` |
-| Hooks and mod | `docs/hooks.md`, `docs/claude-mod.md` |
+| Hooks | `docs/hooks.md` |

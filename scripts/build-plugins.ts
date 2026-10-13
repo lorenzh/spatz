@@ -29,24 +29,14 @@ export async function buildPlugins(
 			throw new Error(
 				`Version mismatch for ${plugin.name}; run release-version.ts`,
 			);
-		const name =
-			plugin.name === "spatz-mod"
-				? "spatz-claude-plugin"
-				: "spatz-claude-hooks";
-		const archive = join(out, `${name}-${version.replaceAll("+", "-")}.zip`);
+		const archive = join(
+			out,
+			`spatz-claude-hooks-${version.replaceAll("+", "-")}.zip`,
+		);
 		// zip updates existing files; remove an old archive so deleted files cannot survive.
 		await rm(archive, { force: true });
 		const pack = Bun.spawn(
-			[
-				"zip",
-				"-qr",
-				archive,
-				".",
-				"-x",
-				"node_modules/*",
-				".claude-plugin/types/*",
-				"tsconfig.json",
-			],
+			["zip", "-qr", archive, ".", "-x", "node_modules/*"],
 			{ cwd: dir, stdout: "inherit", stderr: "inherit" },
 		);
 		if (await pack.exited)
