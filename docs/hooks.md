@@ -231,25 +231,27 @@ Main-session self-fixes follow the same fallback unless explicit identity select
 
 ### Subagent effort
 
-The `PostToolUse` hook on the `Agent` tool records each dispatch call in the table `dispatch_calls` (schema v15), with the effort that the call requested. It reads these sources in order:
+The `PostToolUse` hook on the `Agent` tool records each dispatch call in the table `dispatch_calls` (schema v15), with the effort that the call requested and the model that answered it. It reads the effort from these sources in order:
 
 1. `tool_input.effort`, the per-call parameter of Claude Code 2.1.292 or later.
 2. The `effort:` frontmatter of the agent definition. The lookup is the same as for `model:` (see Dispatch observations).
 
 A value outside the effort vocabulary is ignored, not an error.
 
-A call belongs to at most one attempt, and an attempt to at most one call. spatz records a call and claims it in one write transaction, so two hook processes cannot give one call to two attempts.
+A call goes to an attempt only through the delegation that names it: the `Agent` tool use in the delegating transcript, whose id is the call's `tool_use_id`. The same hook reads that transcript, so on the routing skill's path (the agent runs spatz, then dispatches) the evidence is always there. spatz does not guess from arrival order.
 
-- When the delegating transcript names the call, the call goes to the attempt of that delegation. A resumed agent gets a new attempt for each new call. When a main attempt becomes the child attempt, it drops the main effort.
-- Otherwise spatz pairs the agent's unclaimed calls in arrival order with the agent's unclaimed attempts. Only the first attempt of each suggestion qualifies, and only if it opened before the call was recorded. The hook fires when the call ends. A resumed call without its own suggestion stays unclaimed; its work counts for the earlier call.
+- The delegation makes the call's own child attempt and gives it the call's answering model. A resumed agent gets a new attempt for each new call.
+- When the delegating attempt is still implicit and holds no other call, it becomes the child and drops the main effort. Otherwise the child is a separate attempt, so a nested delegation keeps the outer call's attempt.
+- A call belongs to at most one attempt, and an attempt to at most one call. The claim runs in the write transaction of the delegation.
+- A subagent that runs spatz itself, with no delegation that names its call, gets no requested effort. Its outcome counts only with explicit effort evidence.
 
-The requested effort never goes into the attempt. The attempt keeps only explicit evidence: a report, an attempt start, a mod step or a transcript. Learning, `spatz stats` and the PR signal read the effective effort, which spatz resolves when it reads:
+The requested effort never goes into the attempt. The attempt keeps only explicit evidence: a report, an attempt start, a mod step or a transcript. Learning and `spatz stats` read the effective effort, which spatz resolves when it reads:
 
 1. The attempt's explicit effort, if it has one.
 2. Else the requested effort of the attempt's own call, if the attempt's answering model offers it in the Claude Code harness catalog. A model that offers only `none` gets `none`.
 3. Else no effort. An unknown answering model gives no effort, so the outcome does not count.
 
-Explicit evidence never conflicts with a requested effort. A PR signal does not write the requested effort or a ranked effort into an attempt that has a requested effort.
+Explicit evidence never conflicts with a requested effort. A PR signal is quality, not execution evidence: it writes no effort onto an attempt that holds a dispatch call, even when the requested effort does not resolve.
 
 The `SubagentStop` input has an `effort` field, but the Claude Code hooks reference does not say whether it describes the subagent or the main session. spatz does not use it.
 

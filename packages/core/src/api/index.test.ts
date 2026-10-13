@@ -1982,6 +1982,7 @@ describe("dispatch effort", () => {
 		agent: string,
 		toolInput: Record<string, unknown>,
 		resolvedModel: string | null = "claude-opus-5-5",
+		transcript?: string,
 	) =>
 		s.api.handleHook(
 			"PostToolUse",
@@ -1990,6 +1991,7 @@ describe("dispatch effort", () => {
 				session_id: SESSION,
 				cwd: dir,
 				effort: { level: "max" },
+				...(transcript && { transcript_path: transcript, prompt_id: PROMPT }),
 				tool_name: "Agent",
 				tool_use_id: `call-${agent}`,
 				tool_input: toolInput,
@@ -2032,15 +2034,30 @@ describe("dispatch effort", () => {
 		};
 		return { s, learned };
 	};
-	/** The worker's own suggestion, a passing test in its transcript, and its SubagentStop. */
+	/**
+	 * The routing skill's path: the main turn runs spatz, then its transcript holds the Agent call
+	 * that the dispatch hook reports. Returns the suggestion id and the main transcript.
+	 */
+	const routed = async (s: ReturnType<typeof setup>) => {
+		const id = await linked(s);
+		const transcript = join(dir, "main.jsonl");
+		const row = JSON.parse(assistant("main1", "claude-fable-5-1", 10));
+		row.message.content = [
+			{ type: "tool_use", id: "call-worker", name: "Agent" },
+		];
+		await Bun.write(
+			transcript,
+			[
+				JSON.stringify({ type: "user", promptId: PROMPT }),
+				JSON.stringify(row),
+			].join("\n"),
+		);
+		return { id, transcript };
+	};
+	/** The worker's transcript with a passing test, its test hook and its SubagentStop. */
 	const subagentWork = async (s: ReturnType<typeof setup>, model: string) => {
-		const { suggestion_id } = await s.api.suggest({
-			...suggestInput(),
-			session: SESSION,
-			agentId: "worker",
-		});
 		const path = join(dir, "sub.jsonl");
-		const row = JSON.parse(assistant("m1", model, 10));
+		const row = JSON.parse(assistant("m1", model, 10, {}, T0 + 2000));
 		row.message.content = [{ type: "tool_use", id: "call1", name: "Bash" }];
 		await Bun.write(
 			path,
@@ -2066,7 +2083,21 @@ describe("dispatch effort", () => {
 			{ ...context, hook_event_name: "SubagentStop" },
 		])
 			await s.api.handleHook(event.hook_event_name, JSON.stringify(event));
-		return suggestion_id;
+	};
+	/** Main suggestion, dispatch hook (with the delegating transcript) and subagent work, in either order. */
+	const run = async (
+		s: ReturnType<typeof setup>,
+		toolInput: Record<string, unknown>,
+		model: string | null,
+		transcriptModel: string,
+		dispatchFirst = true,
+	) => {
+		const { id, transcript } = await routed(s);
+		const send = () => dispatch(s, "worker", toolInput, model, transcript);
+		if (dispatchFirst) await send();
+		await subagentWork(s, transcriptModel);
+		if (!dispatchFirst) await send();
+		return id;
 	};
 
 	test("tool_input.effort beats the definition; the session effort is never used", async () => {
@@ -2117,25 +2148,33 @@ describe("dispatch effort", () => {
 						join(dir, ".claude/agents/pinned.md"),
 						`---\neffort: ${requested}\n---\n`,
 					);
-					const send = () =>
-						dispatch(
-							s,
-							"worker",
-							source === "call"
-								? { effort: requested }
-								: { subagent_type: "pinned" },
-							model,
-						);
-					if (dispatchFirst) await send();
-					await subagentWork(s, model);
-					if (!dispatchFirst) await send();
+					await run(
+						s,
+						source === "call"
+							? { effort: requested }
+							: { subagent_type: "pinned" },
+						model,
+						model,
+						dispatchFirst,
+					);
 					expect(learned()).toEqual(cell ? [cell] : []);
 				});
 
-	test("spatz stats lists the subagent pair at its requested effort", async () => {
-		const { s } = withCatalog();
+	test("a subagent's own suggestion without a delegation naming the call does not count", async () => {
+		const { s, learned } = withCatalog();
+		await s.api.suggest({
+			...suggestInput(),
+			session: SESSION,
+			agentId: "worker",
+		});
 		await dispatch(s, "worker", { effort: "medium" });
 		await subagentWork(s, "claude-opus-5-5");
+		expect(learned()).toEqual([]);
+	});
+
+	test("spatz stats lists the subagent pair at its requested effort", async () => {
+		const { s } = withCatalog();
+		await run(s, { effort: "medium" }, "claude-opus-5-5", "claude-opus-5-5");
 		const report = await s.api.stats({});
 		expect(
 			report.by_type.flatMap((t) =>
@@ -2146,24 +2185,29 @@ describe("dispatch effort", () => {
 
 	test("the answering model validates the requested effort, not the requested model", async () => {
 		const { s, learned } = withCatalog();
-		await dispatch(s, "worker", { model: "opus", effort: "high" }, null);
-		await subagentWork(s, "claude-mystery-1");
+		await run(s, { model: "opus", effort: "high" }, null, "claude-mystery-1");
 		expect(learned()).toEqual([]);
 	});
 
-	test("a PR signal keeps the requested effort out of the attempt, so a later correction does not conflict", async () => {
-		const { s, learned } = withCatalog();
-		await dispatch(s, "worker", { effort: "low" });
-		const id = await subagentWork(s, "claude-opus-5-5");
-		const signals = createApi(s.deps, {
+	const signal = (s: ReturnType<typeof setup>, id: string) =>
+		createApi(s.deps, {
 			fetchPr: async () => ({
 				state: "MERGED",
 				body: `Spatz-Suggestion: ${id}`,
 				commits: [],
 				checks: ["SUCCESS"],
 			}),
-		});
-		await signals.signalPr({ url: "u" });
+		}).signalPr({ url: "u" });
+
+	test("a PR signal keeps the requested effort out of the attempt, so a later correction does not conflict", async () => {
+		const { s, learned } = withCatalog();
+		const id = await run(
+			s,
+			{ effort: "low" },
+			"claude-opus-5-5",
+			"claude-opus-5-5",
+		);
+		await signal(s, id);
 		expect(learned()).toEqual(["anthropic/claude-opus-5.5:low:1"]);
 		const store = openStore(s.deps.dbPath);
 		const attempt = store.outcome(id)?.attempt_id ?? undefined;
@@ -2177,6 +2221,19 @@ describe("dispatch effort", () => {
 			correct: true,
 		});
 		expect(learned()).toEqual(["anthropic/claude-opus-5.5:high:1"]);
+	});
+
+	test("a PR signal invents no effort for a subagent whose requested effort does not resolve", async () => {
+		const { s, learned } = withCatalog();
+		const id = await run(
+			s,
+			{ effort: "ultra" },
+			"claude-opus-5-5",
+			"claude-opus-5-5",
+		);
+		expect(learned()).toEqual([]);
+		await signal(s, id);
+		expect(learned()).toEqual([]);
 	});
 });
 

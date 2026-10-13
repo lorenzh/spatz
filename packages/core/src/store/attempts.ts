@@ -19,11 +19,7 @@ import {
 	stableModel,
 	stableModelSql,
 } from "./attempt-schema.ts";
-import {
-	claimDispatchCall,
-	DELEGATE_ATTEMPTS,
-	pairDispatchCalls,
-} from "./dispatch-effort.ts";
+import { claimDispatchCall, DELEGATE_ATTEMPTS } from "./dispatch-effort.ts";
 
 const tokenKeys = [
 	"input_tokens",
@@ -176,8 +172,6 @@ export function attemptStore(
 		db.query(
 			"UPDATE attempts SET model=COALESCE(model,?),effort=COALESCE(effort,?),model_version=COALESCE(model_version,?) WHERE id=?",
 		).run(e.model ?? null, e.effort ?? null, e.model_version ?? null, a.id);
-		if (a.agent_key && a.session_key)
-			pairDispatchCalls(db, a.session_key, a.agent_key);
 	};
 	const chain = (root: string) => {
 		const success = db
@@ -395,7 +389,7 @@ export function attemptStore(
 			e = { ...e, effort: null };
 		let suggestion = target?.suggestion_id ?? null;
 		if (e.kind === "delegate" && target && e.call_id) {
-			// Per call: a resumed agent's later call gets its own attempt, never the first call's.
+			// Per call: a resumed agent's later call gets its own attempt and its own answering model.
 			const call = db
 				.query<
 					{
@@ -405,7 +399,7 @@ export function attemptStore(
 					},
 					[string, string]
 				>(
-					"SELECT c.agent_id,d.answered_model,c.attempt_id FROM dispatch_calls c LEFT JOIN dispatches d ON d.session_id=c.session_id AND d.agent_id=c.agent_id WHERE c.session_id=? AND c.tool_use_id=?",
+					"SELECT c.agent_id,c.answered_model,c.attempt_id FROM dispatch_calls c WHERE c.session_id=? AND c.tool_use_id=?",
 				)
 				.get(e.session_key, e.call_id);
 			if (call) {
@@ -417,13 +411,28 @@ export function attemptStore(
 						agent_key: call.agent_id,
 					};
 					const key = `dispatch:${call.agent_id}:${e.call_id}`;
-					if (target.execution_key === "implicit") {
+					child =
+						db
+							.query<AttemptRecord, [string, string]>(
+								"SELECT * FROM attempts WHERE suggestion_id=? AND execution_key=?",
+							)
+							.get(target.suggestion_id, key) ?? null;
+					if (child) {
+						// Replayed delegation: the child exists already.
+					} else if (
+						target.execution_key === "implicit" &&
+						!db
+							.query("SELECT 1 FROM dispatch_calls WHERE attempt_id=?")
+							.get(target.id)
+					) {
 						// The child runs its own pair: the main session's effort does not carry over.
 						db.query(
 							"UPDATE attempts SET execution_key=?,agent_key=?,model=?,effort=NULL WHERE id=?",
 						).run(key, call.agent_id, call.answered_model, target.id);
 						child = get(target.id);
-					} else
+					}
+					// An attempt that holds another call (nested delegation) keeps it: the child is separate.
+					else
 						child = add(
 							target.suggestion_id,
 							key,
@@ -433,16 +442,17 @@ export function attemptStore(
 							c,
 						);
 					if (!child) throw new Error("missing dispatch attempt");
-					claimDispatchCall(db, e.session_key, e.call_id, child.id);
-					alias({
-						...c,
-						attempt_id: child.id,
-						id_kind: "start",
-						external_id: key,
-					});
-					db.query(
-						"UPDATE dispatches SET suggestion_id=COALESCE(suggestion_id,?),attempt_id=COALESCE(attempt_id,?) WHERE session_id=? AND agent_id=?",
-					).run(target.suggestion_id, child.id, e.session_key, call.agent_id);
+					if (claimDispatchCall(db, e.session_key, e.call_id, child.id)) {
+						alias({
+							...c,
+							attempt_id: child.id,
+							id_kind: "start",
+							external_id: key,
+						});
+						db.query(
+							"UPDATE dispatches SET suggestion_id=COALESCE(suggestion_id,?),attempt_id=COALESCE(attempt_id,?) WHERE session_id=? AND agent_id=?",
+						).run(target.suggestion_id, child.id, e.session_key, call.agent_id);
+					} else child = null;
 				}
 				target = child ?? target;
 			}
@@ -706,7 +716,6 @@ export function attemptStore(
 					external_id: s.turn_id,
 				});
 			repair(c, DEFAULT_TUNING.openWindowMs);
-			pairDispatchCalls(db, c.session_key, c.agent_key);
 			for (const { root_id } of db
 				.query<{ root_id: string }, [string | null, string | null, string]>(
 					"SELECT DISTINCT a.root_id FROM attempts a JOIN suggestions s ON s.id=a.suggestion_id WHERE s.session_id=? AND s.agent_id IS ? AND a.harness=?",
@@ -1140,16 +1149,14 @@ export function attemptStore(
 						(input.revise ? report.source === source : !correct)
 					)
 						return outcome(a);
-					// A signal is quality, not execution evidence: it never guesses an effort over the
-					// one the attempt's dispatch call requested.
+					// A signal is quality, not execution evidence: it never writes a guessed effort onto an
+					// attempt that holds a dispatch call, whether or not the call's effort resolves.
 					const effort =
 						input.revise &&
 						a &&
 						!a.effort &&
 						db
-							.query(
-								"SELECT 1 FROM attempt_efforts WHERE attempt_id=? AND effort IS NOT NULL",
-							)
+							.query("SELECT 1 FROM dispatch_calls WHERE attempt_id=?")
 							.get(a.id)
 							? null
 							: input.effort;

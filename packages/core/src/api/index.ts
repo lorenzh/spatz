@@ -470,7 +470,6 @@ export function createApi(
 						event.requested_agent_type,
 						event.cwd,
 					),
-					recorded_at: now,
 					suggestion_id: null,
 				});
 			const signal = signalFromToolRun(event);

@@ -29,7 +29,6 @@ import { BENCH_RUN_SCHEMA, BENCH_SCHEMA, benchStore } from "./bench.ts";
 import {
 	attemptEfforts,
 	DISPATCH_CALLS_SCHEMA,
-	pairDispatchCalls,
 	recordDispatchCall,
 } from "./dispatch-effort.ts";
 
@@ -402,7 +401,7 @@ export function openStore(
 		...ledger,
 		...benchStore(db, () => store.liveModelVersions()),
 		upsertDispatch(r) {
-			// Immediate: concurrent hooks never credit one call to two attempts.
+			// Immediate: a call and its dispatch row are written together.
 			db.transaction(() => {
 				db.query(`INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ($session_id, $agent_id, $tool_use_id,
 				$requested_model, $requested_agent_type, $answered_model, $suggestion_id)
@@ -417,19 +416,21 @@ export function openStore(
 				db.query(
 					`UPDATE dispatches SET attempt_id=COALESCE(attempt_id,(SELECT id FROM attempts WHERE session_key=? AND agent_key=? ORDER BY ordinal LIMIT 1)) WHERE session_id=? AND agent_id=?`,
 				).run(r.session_id, r.agent_id, r.session_id, r.agent_id);
-				if (r.answered_model)
-					db.query(
-						"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=?",
-					).run(r.answered_model, r.session_id, r.agent_id);
 				if (r.tool_use_id) {
 					recordDispatchCall(db, {
 						...r,
 						tool_use_id: r.tool_use_id,
 						requested_effort: r.requested_effort ?? null,
-						recorded_at: r.recorded_at ?? null,
 					});
-					pairDispatchCalls(db, r.session_id, r.agent_id);
-				}
+					// A call's answering model belongs to that call's attempt only: a resumed agent can answer with another model.
+					if (r.answered_model)
+						db.query(
+							"UPDATE attempts SET model=COALESCE(model,?) WHERE id=(SELECT attempt_id FROM dispatch_calls WHERE session_id=? AND tool_use_id=?)",
+						).run(r.answered_model, r.session_id, r.tool_use_id);
+				} else if (r.answered_model)
+					db.query(
+						"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=?",
+					).run(r.answered_model, r.session_id, r.agent_id);
 			}).immediate();
 		},
 		recordFailure(kind, event, at, sessionId, turnId) {

@@ -900,7 +900,7 @@ test("v15 keeps populated v14 attempts and dispatches, backfills their calls, an
 			agent_id: "a1",
 			tool_use_id: "t1",
 			requested_effort: null,
-			recorded_at: null,
+			answered_model: "m/w",
 			attempt_id: attemptOf("a1"),
 		},
 		{
@@ -908,7 +908,7 @@ test("v15 keeps populated v14 attempts and dispatches, backfills their calls, an
 			agent_id: "a2",
 			tool_use_id: "t2",
 			requested_effort: null,
-			recorded_at: null,
+			answered_model: "m/w",
 			attempt_id: attemptOf("a2"),
 		},
 		{
@@ -916,7 +916,7 @@ test("v15 keeps populated v14 attempts and dispatches, backfills their calls, an
 			agent_id: "child",
 			tool_use_id: "call",
 			requested_effort: null,
-			recorded_at: null,
+			answered_model: "B",
 			attempt_id: null,
 		},
 	]);
