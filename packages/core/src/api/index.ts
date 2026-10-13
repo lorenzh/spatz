@@ -323,15 +323,22 @@ export function createApi(
 		return dispatchModel((await agentDefinition(agentType, cwd))?.model);
 	}
 
-	/** The call's `effort` wins over the agent definition's `effort:`; an unknown level is ignored. */
+	/**
+	 * The call's `effort` wins over the agent definition's `effort:`. It counts only when the
+	 * answering model offers it; a none-only model always runs at none. Checked here, once, so
+	 * the stored value does not depend on which hook arrives first.
+	 */
 	async function requestedDispatchEffort(
 		effort: Effort | undefined,
 		agentType: unknown,
+		model: string | null,
 		cwd = deps.cwd,
 	): Promise<Effort | null> {
-		if (effort) return effort;
-		const pinned = (await agentDefinition(agentType, cwd))?.effort;
-		return EFFORTS.find((e) => e === pinned) ?? null;
+		const pinned = effort ?? (await agentDefinition(agentType, cwd))?.effort;
+		const offered = model ? (await availableEfforts()).get(model) : undefined;
+		if (!offered?.length) return null;
+		if (offered.every((e) => e === "none")) return pinned ? "none" : null;
+		return EFFORTS.find((e) => e === pinned && offered.includes(e)) ?? null;
 	}
 
 	const contextOf = (event: HarnessEvent) => ({
@@ -451,6 +458,12 @@ export function createApi(
 					requested_effort: await requestedDispatchEffort(
 						event.requested_effort,
 						event.requested_agent_type,
+						(await dispatchModel(event.answered_model)) ??
+							(await requestedDispatchModel(
+								event.requested_model,
+								event.requested_agent_type,
+								event.cwd,
+							)),
 						event.cwd,
 					),
 					suggestion_id: null,

@@ -231,12 +231,16 @@ Main-session self-fixes follow the same fallback unless explicit identity select
 
 ### Subagent effort
 
-The `PostToolUse` hook on the `Agent` tool stores the subagent effort in `dispatches.requested_effort` (schema v15). It reads these sources in order:
+The `PostToolUse` hook on the `Agent` tool records the subagent effort per dispatch call in the table `dispatch_calls` (schema v15). It reads these sources in order:
 
 1. `tool_input.effort`, the per-call parameter of Claude Code 2.1.292 or later.
 2. The `effort:` frontmatter of the agent definition. The lookup is the same as for `model:` (see Dispatch observations).
 
-spatz ignores any value that is not a known effort. The attempt of that subagent takes the stored effort when its own events carry none, whichever hook arrives first. The `SubagentStop` input has an `effort` field, but the Claude Code hooks reference does not say whether it describes the subagent or the main session. spatz does not use it.
+spatz keeps the value only when the answering model offers it in the harness catalog. A model that offers only `none` always gets `none`. Anything else is ignored, not an error. The check runs when the hook arrives, so the result does not depend on the order of hooks.
+
+An attempt of that subagent takes the effort of its own call as a fallback, marked `effort_source = 'requested'`. A resumed agent keeps one effort per call, and a later call never reuses an earlier one. When the delegating transcript names the call, that call is used. Otherwise spatz pairs the calls and attempts of the agent in arrival order. Explicit evidence (a report, an attempt start or a mod step) replaces the fallback and never conflicts with it. When a main attempt becomes the child attempt of a delegation, it drops the main effort first.
+
+The `SubagentStop` input has an `effort` field, but the Claude Code hooks reference does not say whether it describes the subagent or the main session. spatz does not use it.
 
 ## Dispatch observations
 
@@ -244,7 +248,7 @@ Schema v7 adds one `dispatches` row per `(session_id, agent_id)`.
 The Agent hook reads the child id from `tool_response.agentId`.
 The hook's own `agent_id` can identify the parent and is not the child key.
 It stores the requested model, `tool_input.subagent_type` and `tool_response.resolvedModel`.
-The column names are `requested_model`, `requested_agent_type`, `answered_model` and `requested_effort`.
+The column names are `requested_model`, `requested_agent_type` and `answered_model`.
 It also stores `tool_use_id`. Unknown fields remain null.
 
 A hook observation needs no open suggestion.

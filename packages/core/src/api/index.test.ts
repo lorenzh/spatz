@@ -1970,6 +1970,7 @@ describe("dispatch effort", () => {
 		s: ReturnType<typeof setup>,
 		agent: string,
 		toolInput: Record<string, unknown>,
+		resolvedModel = "claude-opus-5-5",
 	) =>
 		s.api.handleHook(
 			"PostToolUse",
@@ -1981,7 +1982,7 @@ describe("dispatch effort", () => {
 				tool_name: "Agent",
 				tool_use_id: `call-${agent}`,
 				tool_input: toolInput,
-				tool_response: { agentId: agent, resolvedModel: "claude-opus-5-5" },
+				tool_response: { agentId: agent, resolvedModel },
 			}),
 		);
 	const stored = (s: ReturnType<typeof setup>) => {
@@ -1989,7 +1990,7 @@ describe("dispatch effort", () => {
 		try {
 			return db
 				.query(
-					"SELECT agent_id, requested_effort FROM dispatches ORDER BY agent_id",
+					"SELECT agent_id, requested_effort FROM dispatch_calls ORDER BY agent_id",
 				)
 				.all();
 		} finally {
@@ -2029,62 +2030,94 @@ describe("dispatch effort", () => {
 		]);
 	});
 
-	for (const dispatchFirst of [true, false]) {
-		test(`a hooks-only subagent outcome with known model and effort counts for learning (dispatch first: ${dispatchFirst})`, async () => {
-			const s = setup({ openStore });
-			await s.api.suggest({
-				...suggestInput(),
-				session: SESSION,
-				agentId: "worker",
+	test("efforts the answering model does not offer are ignored; none-only models store none", async () => {
+		const s = setup({ openStore });
+		await dispatch(s, "a-ultra", { effort: "ultra" });
+		await dispatch(s, "b-none", { effort: "none" });
+		await dispatch(s, "c-haiku", { effort: "high" }, "claude-haiku-4-5");
+		await dispatch(s, "d-unknown", { effort: "high" }, "claude-mystery-1");
+		expect(stored(s)).toEqual([
+			{ agent_id: "a-ultra", requested_effort: null },
+			{ agent_id: "b-none", requested_effort: null },
+			{ agent_id: "c-haiku", requested_effort: "none" },
+			{ agent_id: "d-unknown", requested_effort: null },
+		]);
+	});
+
+	const learning = [
+		["call", "claude-opus-5-5", "medium", "medium"],
+		["definition", "claude-opus-5-5", "medium", "medium"],
+		["call", "claude-haiku-4-5", "high", "none"],
+	] as const;
+	for (const [source, model, requested, effort] of learning)
+		for (const dispatchFirst of [true, false]) {
+			test(`a hooks-only subagent outcome (${model}, effort from ${source}) counts for learning (dispatch first: ${dispatchFirst})`, async () => {
+				const s = setup({ openStore });
+				await Bun.write(
+					join(dir, ".claude/agents/pinned.md"),
+					`---\neffort: ${requested}\n---\n`,
+				);
+				await s.api.suggest({
+					...suggestInput(),
+					session: SESSION,
+					agentId: "worker",
+				});
+				const path = join(dir, "sub.jsonl");
+				const row = JSON.parse(assistant("m1", model, 10));
+				row.message.content = [{ type: "tool_use", id: "call1", name: "Bash" }];
+				await Bun.write(
+					path,
+					[
+						JSON.stringify({ type: "user", promptId: PROMPT }),
+						JSON.stringify(row),
+					].join("\n"),
+				);
+				const context = base({
+					transcript_path: path,
+					agent_id: "worker",
+					agent_transcript_path: path,
+				});
+				const subagentWork = async () => {
+					for (const event of [
+						{
+							...context,
+							hook_event_name: "PostToolUse",
+							tool_name: "Bash",
+							tool_use_id: "call1",
+							tool_input: { command: "bun test" },
+							tool_response: { stdout: "ok" },
+						},
+						{ ...context, hook_event_name: "SubagentStop" },
+					])
+						await s.api.handleHook(
+							event.hook_event_name,
+							JSON.stringify(event),
+						);
+				};
+				const send = () =>
+					dispatch(
+						s,
+						"worker",
+						source === "call"
+							? { effort: requested }
+							: { subagent_type: "pinned" },
+						model,
+					);
+				if (dispatchFirst) await send();
+				await subagentWork();
+				if (!dispatchFirst) await send();
+				const store = openStore(s.deps.dbPath);
+				try {
+					const cells = store
+						.cellStats("other", 0.8)
+						.filter((c) => c.effort !== null);
+					expect(cells).toHaveLength(1);
+					expect(cells[0]).toMatchObject({ effort, n: 1, successes: 1 });
+				} finally {
+					store.dispose();
+				}
 			});
-			const path = join(dir, "sub.jsonl");
-			const row = JSON.parse(assistant("m1", "claude-opus-5-5", 10));
-			row.message.content = [{ type: "tool_use", id: "call1", name: "Bash" }];
-			await Bun.write(
-				path,
-				[
-					JSON.stringify({ type: "user", promptId: PROMPT }),
-					JSON.stringify(row),
-				].join("\n"),
-			);
-			const context = base({
-				transcript_path: path,
-				agent_id: "worker",
-				agent_transcript_path: path,
-			});
-			const subagentWork = async () => {
-				for (const event of [
-					{
-						...context,
-						hook_event_name: "PostToolUse",
-						tool_name: "Bash",
-						tool_use_id: "call1",
-						tool_input: { command: "bun test" },
-						tool_response: { stdout: "ok" },
-					},
-					{ ...context, hook_event_name: "SubagentStop" },
-				])
-					await s.api.handleHook(event.hook_event_name, JSON.stringify(event));
-			};
-			if (dispatchFirst) await dispatch(s, "worker", { effort: "medium" });
-			await subagentWork();
-			if (!dispatchFirst) await dispatch(s, "worker", { effort: "medium" });
-			const db = new Database(s.deps.dbPath, { readonly: true });
-			try {
-				expect(
-					db
-						.query(
-							"SELECT quality, model, effort FROM outcomes WHERE model IS NOT NULL AND effort IS NOT NULL",
-						)
-						.all(),
-				).toEqual([
-					{ quality: 1, model: "anthropic/claude-opus-5.5", effort: "medium" },
-				]);
-			} finally {
-				db.close();
-			}
-		});
-	}
+		}
 });
 
 describe("dispatch observations", () => {

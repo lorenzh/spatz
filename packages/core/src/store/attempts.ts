@@ -19,6 +19,7 @@ import {
 	stableModel,
 	stableModelSql,
 } from "./attempt-schema.ts";
+import { claimDispatchCall, pairDispatchCalls } from "./dispatch-effort.ts";
 
 const tokenKeys = [
 	"input_tokens",
@@ -72,7 +73,10 @@ export function attemptStore(
 		e: Pick<AttemptEvent, "model" | "effort" | "model_version">,
 	) =>
 		(!e.model || !a.model || stableModel(a.model) === stableModel(e.model)) &&
-		(!e.effort || !a.effort || a.effort === e.effort) &&
+		(!e.effort ||
+			!a.effort ||
+			a.effort_source === "requested" ||
+			a.effort === e.effort) &&
 		(!e.model_version ||
 			!a.model_version ||
 			a.model_version === e.model_version);
@@ -169,8 +173,11 @@ export function attemptStore(
 	) => {
 		if (!compatible(a, e)) throw new Error("attempt pair conflict");
 		db.query(
-			"UPDATE attempts SET model=COALESCE(model,?),effort=COALESCE(effort,?,(SELECT requested_effort FROM dispatches WHERE session_id=attempts.session_key AND agent_id=attempts.agent_key)),model_version=COALESCE(model_version,?) WHERE id=?",
+			// Explicit effort replaces a requested fallback; the fallback never overrides evidence.
+			"UPDATE attempts SET model=COALESCE(model,?1),effort=CASE WHEN effort_source IS NOT NULL THEN COALESCE(?2,effort) ELSE COALESCE(effort,?2) END,effort_source=CASE WHEN ?2 IS NOT NULL THEN NULL ELSE effort_source END,model_version=COALESCE(model_version,?3) WHERE id=?4",
 		).run(e.model ?? null, e.effort ?? null, e.model_version ?? null, a.id);
+		if (a.agent_key && a.session_key)
+			pairDispatchCalls(db, a.session_key, a.agent_key);
 	};
 	const chain = (root: string) => {
 		const success = db
@@ -393,12 +400,11 @@ export function attemptStore(
 					{
 						agent_id: string;
 						answered_model: string | null;
-						requested_effort: AttemptRecord["effort"];
 						attempt_id: string | null;
 					},
 					[string, string]
 				>(
-					"SELECT agent_id,answered_model,requested_effort,attempt_id FROM dispatches WHERE session_id=? AND tool_use_id=?",
+					"SELECT agent_id,answered_model,attempt_id FROM dispatches WHERE session_id=? AND tool_use_id=?",
 				)
 				.get(e.session_key, e.call_id);
 			if (dispatch) {
@@ -411,12 +417,11 @@ export function attemptStore(
 					};
 					if (target.execution_key === "implicit") {
 						db.query(
-							"UPDATE attempts SET execution_key=?,agent_key=?,model=?,effort=COALESCE(effort,?) WHERE id=?",
+							"UPDATE attempts SET execution_key=?,agent_key=?,model=?,effort=NULL,effort_source=NULL WHERE id=?",
 						).run(
 							`dispatch:${dispatch.agent_id}`,
 							dispatch.agent_id,
 							dispatch.answered_model,
-							dispatch.requested_effort,
 							target.id,
 						);
 						child = get(target.id);
@@ -425,11 +430,12 @@ export function attemptStore(
 							target.suggestion_id,
 							`dispatch:${dispatch.agent_id}`,
 							dispatch.answered_model,
-							dispatch.requested_effort,
+							null,
 							e.occurred_at ?? target.opened_at ?? 0,
 							c,
 						);
 					if (!child) throw new Error("missing dispatch attempt");
+					claimDispatchCall(db, e.session_key, e.call_id, child.id);
 					alias({
 						...c,
 						attempt_id: child.id,
@@ -765,7 +771,7 @@ export function attemptStore(
 						a.closed_at === null
 					) {
 						db.query(
-							"UPDATE attempts SET execution_key=?,model=?,effort=?,opened_at=?,harness=?,session_key=?,agent_key=?,owns_usage=? WHERE id=?",
+							"UPDATE attempts SET effort_source=NULL,execution_key=?,model=?,effort=?,opened_at=?,harness=?,session_key=?,agent_key=?,owns_usage=? WHERE id=?",
 						).run(
 							input.key,
 							input.model,
@@ -1095,7 +1101,7 @@ export function attemptStore(
 						? get(input.attempt_id)
 						: db
 								.query<AttemptRecord, [string, string, string, string | null]>(
-									`SELECT * FROM attempts WHERE suggestion_id=? AND (${stableModelSql("model")}=? OR model IS NULL) AND (effort=? OR effort IS NULL) AND (?4 IS NULL OR model_version IS NULL OR model_version=?4) ORDER BY ordinal DESC LIMIT 1`,
+									`SELECT * FROM attempts WHERE suggestion_id=? AND (${stableModelSql("model")}=? OR model IS NULL) AND (effort=? OR effort IS NULL OR effort_source IS NOT NULL) AND (?4 IS NULL OR model_version IS NULL OR model_version=?4) ORDER BY ordinal DESC LIMIT 1`,
 								)
 								.get(
 									input.suggestion_id,

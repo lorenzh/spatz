@@ -62,6 +62,7 @@ const tables = [
 	"usage_scopes",
 	"failures",
 	"outcomes",
+	"dispatches",
 ];
 // Every table and view (outcomes included), so a new table is compared without a list update.
 const snapshot = (db: Database) =>
@@ -87,9 +88,18 @@ test("previous-schema WAL data is backed up before migration and restores with t
 	expect(db.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION - 1,
 	});
+	db.run(
+		"INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ('s','a1','t1','opus','gp','sonnet',NULL)",
+	);
 	const before = rows(db);
+	expect(before.at(-1)).toContainEqual(
+		expect.objectContaining({ session_id: "s", agent_id: "a1" }),
+	);
 	const migrated = openDatabase(path);
 	handles.push(migrated);
+	expect(
+		migrated.query("SELECT COUNT(*) AS n FROM dispatch_calls").get(),
+	).toEqual({ n: 0 });
 	expect(migrated.query("PRAGMA user_version").get()).toEqual({
 		user_version: SCHEMA_VERSION,
 	});
