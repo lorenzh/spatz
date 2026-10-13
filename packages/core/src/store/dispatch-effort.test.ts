@@ -477,3 +477,56 @@ test("a call holds one attempt and an attempt one call", () => {
 	db.close();
 	store.dispose();
 });
+
+// What signalPr sends for a quality-only signal: the attempt's own pair, else the ranked one.
+const signal = (store: Store, attempt: string) =>
+	store.reportAttempt({
+		suggestion_id: "s1",
+		attempt_id: attempt,
+		model: "m/worker",
+		effort: "high",
+		result: "pass",
+		at: 5000,
+		revise: true,
+	});
+
+test("review 4, finding 1: a PR signal keeps a subagent attempt's unknown answering model unknown", () => {
+	const { store } = open();
+	// No resolvedModel and no readable worker transcript: the claimed child has no model.
+	const a = dispatched(store, "s1", 1000, call("c1", "low", null));
+	signal(store, a);
+	expect(store.outcome("s1")).toMatchObject({ model: null, quality: 1 });
+	expect(learned(store)).toEqual([]);
+	store.dispose();
+});
+
+test("review 4, finding 2: a PR signal invents no effort for a subagent attempt without a claimed call", () => {
+	const { store } = open();
+	store.insertSuggestion(suggestion({ agent_id: "worker" }));
+	store.upsertDispatch(call("c1", "low"));
+	const a = attemptOf(store, "s1");
+	pass(store, a, "m/worker");
+	signal(store, a);
+	expect(store.outcome("s1")).toMatchObject({ effort: null });
+	expect(learned(store)).toEqual([]);
+	store.dispose();
+});
+
+test("review 4, finding 3: a dispatch without a call id never fills the model of an attempt that holds a call", () => {
+	const { store } = open();
+	const a = dispatched(store, "s1", 1000, call("c1", "low", null));
+	// A later execution of the same worker, reported by the mod's usage path (no tool_use_id).
+	store.upsertDispatch({ ...call("unused", null), tool_use_id: null });
+	expect(store.outcome("s1")).toMatchObject({ attempt_id: a, model: null });
+	pass(store, a, null);
+	expect(learned(store)).toEqual([]);
+	store.dispose();
+});
+
+test("a PR signal on a main-session attempt still fills the ranked pair", () => {
+	const { store } = open();
+	store.insertSuggestion(suggestion({}));
+	signal(store, attemptOf(store, "s1"));
+	expect(learned(store)).toEqual(["m/worker:high:1"]);
+	store.dispose();
+});

@@ -429,7 +429,8 @@ export function openStore(
 						).run(r.answered_model, r.session_id, r.tool_use_id);
 				} else if (r.answered_model)
 					db.query(
-						"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=?",
+						// Never into an attempt that holds a call: its model comes from that call only.
+						"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=? AND id NOT IN (SELECT attempt_id FROM dispatch_calls WHERE attempt_id IS NOT NULL)",
 					).run(r.answered_model, r.session_id, r.agent_id);
 			}).immediate();
 		},

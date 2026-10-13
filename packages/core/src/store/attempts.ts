@@ -1149,27 +1149,22 @@ export function attemptStore(
 						(input.revise ? report.source === source : !correct)
 					)
 						return outcome(a);
-					// A signal is quality, not execution evidence: it never writes a guessed effort onto an
-					// attempt that holds a dispatch call, whether or not the call's effort resolves.
-					const effort =
-						input.revise &&
-						a &&
-						!a.effort &&
-						db
-							.query("SELECT 1 FROM dispatch_calls WHERE attempt_id=?")
-							.get(a.id)
-							? null
-							: input.effort;
+					// A signal is quality, not execution evidence. On a subagent attempt it keeps the
+					// attempt's own pair, unknown parts included, instead of the ranked guess.
+					// Main-session attempts keep the ranked fallback.
+					const own = input.revise && a?.agent_key ? a : null;
+					const model = own ? own.model : input.model;
+					const effort = own ? own.effort : input.effort;
 					if (!a || (report && !correct))
 						a = add(
 							input.suggestion_id,
 							`report:${crypto.randomUUID()}`,
-							input.model,
+							model,
 							effort,
 							input.at,
 							context(input.suggestion_id),
 						);
-					fill(a, { ...input, effort });
+					fill(a, { ...input, model, effort });
 					const c = db
 						.query<AttemptContext, [string]>(
 							"SELECT harness,session_key,agent_key FROM attempts WHERE id=?",
@@ -1195,7 +1190,7 @@ export function attemptStore(
 							rounds: input.rounds,
 							note: input.note,
 							turn_id: input.turn_id,
-							model: input.model,
+							model,
 							model_version: input.model_version ?? null,
 							effort,
 							value: REPORT_VALUES[input.result],
