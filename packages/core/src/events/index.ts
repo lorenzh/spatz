@@ -9,7 +9,7 @@ import type {
 	CodexHookInput,
 	HookInput,
 } from "../contracts/hooks.ts";
-import { type Effort, SIGNAL_WEIGHTS } from "../contracts/types.ts";
+import { EFFORTS, type Effort, SIGNAL_WEIGHTS } from "../contracts/types.ts";
 import {
 	detectCommandKind,
 	effortFromHook,
@@ -58,6 +58,7 @@ export type HarnessEvent = HarnessEventBase &
 				child_agent_id?: string;
 				requested_model?: string;
 				requested_agent_type?: string;
+				requested_effort?: Effort;
 				answered_model?: string;
 		  }
 		| { type: "subagent_start" }
@@ -137,6 +138,7 @@ export function fromClaudeHook(input: HookInput): HarnessEvent | null {
 				const requested = input.tool_input as {
 					model?: unknown;
 					subagent_type?: unknown;
+					effort?: unknown;
 				} | null;
 				const response = input.tool_response as AgentToolResponse | null;
 				return {
@@ -149,6 +151,10 @@ export function fromClaudeHook(input: HookInput): HarnessEvent | null {
 					}),
 					...(str(requested?.subagent_type) && {
 						requested_agent_type: requested?.subagent_type as string,
+					}),
+					// Not `base.effort`: on this event it is the calling session's effort.
+					...(EFFORTS.find((e) => e === requested?.effort) && {
+						requested_effort: requested?.effort as Effort,
 					}),
 					...(str(response?.resolvedModel) && {
 						answered_model: response?.resolvedModel,

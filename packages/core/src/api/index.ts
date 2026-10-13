@@ -275,14 +275,11 @@ export function createApi(
 			: toCanonicalId(alias?.id ?? model, cfg.aliases);
 	}
 
-	/** Resolve the caller's pin before routing; project definitions override user definitions. */
-	async function requestedDispatchModel(
-		model: unknown,
+	/** The named agent's frontmatter: project definition first, then user. The first readable file wins; null when missing or invalid. */
+	async function agentDefinition(
 		agentType: unknown,
 		cwd = deps.cwd,
-	): Promise<string | null> {
-		const explicit = await dispatchModel(model);
-		if (explicit) return explicit;
+	): Promise<Record<string, unknown> | null> {
 		// ponytail: local agent files only; add plugin discovery when plugin pins are needed.
 		if (typeof agentType !== "string" || !/^[a-zA-Z0-9_-]+$/.test(agentType))
 			return null;
@@ -305,16 +302,36 @@ export function createApi(
 				)?.[1];
 				if (header === undefined) return null;
 				const definition = Bun.YAML.parse(header);
-				return await dispatchModel(
-					definition && typeof definition === "object" && "model" in definition
-						? definition.model
-						: null,
-				);
+				return definition && typeof definition === "object"
+					? (definition as Record<string, unknown>)
+					: null;
 			} catch {
 				return null;
 			}
 		}
 		return null;
+	}
+
+	/** Resolve the caller's pin before routing; project definitions override user definitions. */
+	async function requestedDispatchModel(
+		model: unknown,
+		agentType: unknown,
+		cwd = deps.cwd,
+	): Promise<string | null> {
+		const explicit = await dispatchModel(model);
+		if (explicit) return explicit;
+		return dispatchModel((await agentDefinition(agentType, cwd))?.model);
+	}
+
+	/** The call's `effort` wins over the agent definition's `effort:`; an unknown level is ignored. */
+	async function requestedDispatchEffort(
+		effort: Effort | undefined,
+		agentType: unknown,
+		cwd = deps.cwd,
+	): Promise<Effort | null> {
+		if (effort) return effort;
+		const pinned = (await agentDefinition(agentType, cwd))?.effort;
+		return EFFORTS.find((e) => e === pinned) ?? null;
 	}
 
 	const contextOf = (event: HarnessEvent) => ({
@@ -431,6 +448,11 @@ export function createApi(
 					),
 					requested_agent_type: event.requested_agent_type ?? null,
 					answered_model: await dispatchModel(event.answered_model),
+					requested_effort: await requestedDispatchEffort(
+						event.requested_effort,
+						event.requested_agent_type,
+						event.cwd,
+					),
 					suggestion_id: null,
 				});
 			const signal = signalFromToolRun(event);

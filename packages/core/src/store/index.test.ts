@@ -1271,6 +1271,7 @@ test("dispatch upsert only fills missing fields and isolates sessions", () => {
 			db.query("SELECT * FROM dispatches WHERE session_id = 's'").get(),
 		).toEqual({
 			attempt_id: null,
+			requested_effort: null,
 			...first,
 			answered_model: "sonnet",
 			tool_use_id: "call",

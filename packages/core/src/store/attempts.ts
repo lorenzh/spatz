@@ -169,7 +169,7 @@ export function attemptStore(
 	) => {
 		if (!compatible(a, e)) throw new Error("attempt pair conflict");
 		db.query(
-			"UPDATE attempts SET model=COALESCE(model,?),effort=COALESCE(effort,?),model_version=COALESCE(model_version,?) WHERE id=?",
+			"UPDATE attempts SET model=COALESCE(model,?),effort=COALESCE(effort,?,(SELECT requested_effort FROM dispatches WHERE session_id=attempts.session_key AND agent_id=attempts.agent_key)),model_version=COALESCE(model_version,?) WHERE id=?",
 		).run(e.model ?? null, e.effort ?? null, e.model_version ?? null, a.id);
 	};
 	const chain = (root: string) => {
@@ -393,11 +393,12 @@ export function attemptStore(
 					{
 						agent_id: string;
 						answered_model: string | null;
+						requested_effort: AttemptRecord["effort"];
 						attempt_id: string | null;
 					},
 					[string, string]
 				>(
-					"SELECT agent_id,answered_model,attempt_id FROM dispatches WHERE session_id=? AND tool_use_id=?",
+					"SELECT agent_id,answered_model,requested_effort,attempt_id FROM dispatches WHERE session_id=? AND tool_use_id=?",
 				)
 				.get(e.session_key, e.call_id);
 			if (dispatch) {
@@ -410,11 +411,12 @@ export function attemptStore(
 					};
 					if (target.execution_key === "implicit") {
 						db.query(
-							"UPDATE attempts SET execution_key=?,agent_key=?,model=? WHERE id=?",
+							"UPDATE attempts SET execution_key=?,agent_key=?,model=?,effort=COALESCE(effort,?) WHERE id=?",
 						).run(
 							`dispatch:${dispatch.agent_id}`,
 							dispatch.agent_id,
 							dispatch.answered_model,
+							dispatch.requested_effort,
 							target.id,
 						);
 						child = get(target.id);
@@ -423,7 +425,7 @@ export function attemptStore(
 							target.suggestion_id,
 							`dispatch:${dispatch.agent_id}`,
 							dispatch.answered_model,
-							null,
+							dispatch.requested_effort,
 							e.occurred_at ?? target.opened_at ?? 0,
 							c,
 						);

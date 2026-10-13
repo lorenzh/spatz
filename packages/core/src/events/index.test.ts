@@ -145,6 +145,25 @@ describe("Claude adapter: one test per event kind", () => {
 		});
 		expect(claudeEvent(agent(null))).not.toHaveProperty("child_agent_id");
 	});
+	test("agent_dispatch reads the subagent effort from tool_input, never the session effort", () => {
+		const agent = (effort: unknown): PostToolUseInput => ({
+			...hook,
+			effort: { level: "low" },
+			hook_event_name: "PostToolUse",
+			tool_name: "Agent",
+			tool_use_id: "t2",
+			tool_input: { subagent_type: "gp-x", effort },
+			tool_response: { agentId: "a1" },
+		});
+		expect(claudeEvent(agent("xhigh"))).toMatchObject({
+			requested_effort: "xhigh",
+			effort: "low",
+		});
+		expect(claudeEvent(agent("turbo"))).not.toHaveProperty("requested_effort");
+		expect(claudeEvent(agent(undefined))).not.toHaveProperty(
+			"requested_effort",
+		);
+	});
 	test("subagent_end reads the subagent transcript; session_end the main one", () => {
 		expect(
 			claudeEvent({

@@ -215,10 +215,10 @@ If it has a linked suggestion, closure does not send later events back to the ma
 
 - `SubagentStop` reads `<session>/subagents/agent-<agent_id>.jsonl`. spatz preserves message identity before aggregating usage.
 - Claude Code also fires `SubagentStop` for internal helper agents (prompt suggestions, memory extraction, summaries). They have a fresh agent id but never write the transcript file. When that file does not exist, spatz records no parse failure.
-- `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts and no effort, because the `effort.level` in this event belongs to the main session.
+- `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts. It never takes the `effort.level` of this event, because that belongs to the main session. The subagent effort comes from the sources in [Subagent effort](#subagent-effort).
 
 Execution evidence supplies the attempt's actual pair. A report can fill unknown fields but cannot replace known fields.
-Subagent effort stays null unless the mod supplies it.
+Subagent effort stays null when none of the sources in [Subagent effort](#subagent-effort) names it and the mod does not supply it.
 Main-hook effort is usable only when a mod does not rewrite the main steps.
 Claude transcript entries are deduplicated by `message.id` within the session and agent.
 Entry UUIDs and tool-use IDs are not usage message IDs.
@@ -229,13 +229,22 @@ Later reports do not retarget this signal choice.
 Main-session orchestration tokens belong to suggestion totals with no attempt ID.
 Main-session self-fixes follow the same fallback unless explicit identity selects an attempt.
 
+### Subagent effort
+
+The `PostToolUse` hook on the `Agent` tool stores the subagent effort in `dispatches.requested_effort` (schema v15). It reads these sources in order:
+
+1. `tool_input.effort`, the per-call parameter of Claude Code 2.1.292 or later.
+2. The `effort:` frontmatter of the agent definition. The lookup is the same as for `model:` (see Dispatch observations).
+
+spatz ignores any value that is not a known effort. The attempt of that subagent takes the stored effort when its own events carry none, whichever hook arrives first. The `SubagentStop` input has an `effort` field, but the Claude Code hooks reference does not say whether it describes the subagent or the main session. spatz does not use it.
+
 ## Dispatch observations
 
 Schema v7 adds one `dispatches` row per `(session_id, agent_id)`.
 The Agent hook reads the child id from `tool_response.agentId`.
 The hook's own `agent_id` can identify the parent and is not the child key.
 It stores the requested model, `tool_input.subagent_type` and `tool_response.resolvedModel`.
-The column names are `requested_model`, `requested_agent_type` and `answered_model`.
+The column names are `requested_model`, `requested_agent_type`, `answered_model` and `requested_effort`.
 It also stores `tool_use_id`. Unknown fields remain null.
 
 A hook observation needs no open suggestion.

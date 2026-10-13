@@ -250,6 +250,7 @@ const MIGRATIONS = [
 	BENCH_SCHEMA,
 	BENCH_RUN_SCHEMA,
 	["ALTER TABLE suggestions ADD COLUMN label TEXT"],
+	["ALTER TABLE dispatches ADD COLUMN requested_effort TEXT"],
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -390,15 +391,20 @@ export function openStore(
 		...ledger,
 		...benchStore(db, () => store.liveModelVersions()),
 		upsertDispatch(r) {
-			db.query(`INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,suggestion_id) VALUES ($session_id, $agent_id, $tool_use_id,
-				$requested_model, $requested_agent_type, $answered_model, $suggestion_id)
+			db.query(`INSERT INTO dispatches (session_id,agent_id,tool_use_id,requested_model,requested_agent_type,answered_model,requested_effort,suggestion_id) VALUES ($session_id, $agent_id, $tool_use_id,
+				$requested_model, $requested_agent_type, $answered_model, $requested_effort, $suggestion_id)
 				ON CONFLICT (session_id, agent_id) DO UPDATE SET
 				tool_use_id = COALESCE(dispatches.tool_use_id, excluded.tool_use_id),
 				requested_model = COALESCE(dispatches.requested_model, excluded.requested_model),
 				requested_agent_type = COALESCE(dispatches.requested_agent_type, excluded.requested_agent_type),
 				answered_model = COALESCE(dispatches.answered_model, excluded.answered_model),
+				requested_effort = COALESCE(dispatches.requested_effort, excluded.requested_effort),
 				suggestion_id = COALESCE(dispatches.suggestion_id, excluded.suggestion_id)`).run(
-				{ ...r, attempt_id: r.attempt_id ?? null },
+				{
+					...r,
+					attempt_id: r.attempt_id ?? null,
+					requested_effort: r.requested_effort ?? null,
+				},
 			);
 			db.query(
 				`UPDATE dispatches SET attempt_id=COALESCE(attempt_id,(SELECT id FROM attempts WHERE session_key=? AND agent_key=? ORDER BY ordinal LIMIT 1)) WHERE session_id=? AND agent_id=?`,
@@ -407,6 +413,10 @@ export function openStore(
 				db.query(
 					"UPDATE attempts SET model=COALESCE(model,?) WHERE session_key=? AND agent_key=?",
 				).run(r.answered_model, r.session_id, r.agent_id);
+			if (r.requested_effort)
+				db.query(
+					"UPDATE attempts SET effort=COALESCE(effort,?) WHERE session_key=? AND agent_key=?",
+				).run(r.requested_effort, r.session_id, r.agent_id);
 		},
 		recordFailure(kind, event, at, sessionId, turnId) {
 			db.query("INSERT OR IGNORE INTO failures VALUES (?, ?, ?, ?, ?)").run(
