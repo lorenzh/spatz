@@ -189,6 +189,14 @@ describe("detectCommandKind", () => {
 	});
 
 	test.each([
+		'spatz "usage" --json',
+		'spatz "link" --json',
+		'spatz "attempt" --json',
+	])("a removed subcommand name is task text: %p", (cmd) => {
+		expect(detectCommandKind(cmd)).toBe("spatz-suggest");
+	});
+
+	test.each([
 		'npx -y @spatz/cli-extra "fix bug"',
 		'npx -y @other/cli "fix bug"',
 		'bunx spatz "fix bug"',
@@ -200,7 +208,6 @@ describe("detectCommandKind", () => {
 		"npx -y @spatz/cli report id",
 		"bunx @spatz/cli hook Stop",
 		'"/plugins/bin/spatz" stats --json',
-		"spatz link id --session s",
 		"spatz --version",
 		'spatz "report" id',
 	])("launcher lookalike or subcommand: %p", (cmd) => {

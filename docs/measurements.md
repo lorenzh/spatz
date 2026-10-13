@@ -178,9 +178,9 @@ These are analytic plug-in estimates pooling both model families, not measured c
 
 1. **Personal skills leak into Codex runs.** Codex uses hook scripts from the host. Presence of personal skills (e.g., `spatz:ponytail`) alters available tools and can change task outcomes.
 
-2. **Router hooks and mod must be off.** Running with enabled router hooks or mod changes which model serves the run, invalidating isolation.
+2. **Spatz hooks and the routing skill must be off.** An enabled routing skill can steer the agent to dispatch other models, and hooks add records to the run. Both break the isolation of a measured run.
 
-3. **Mod swaps pinned models.** If a mod pin is active, the actual model differs from the recorded model.
+3. **Agent definitions can pin models.** If a dispatched agent pins another model, the actual model differs from the recorded model.
 
 4. **Prompt-test mismatches on a few tasks.** Two easy-set tasks were confirmed to have prompt/test mismatches. One bench2 task with very low pass rates is suspected of a mismatch, but it is unconfirmed.
 
@@ -202,7 +202,7 @@ To run the benchmark suite:
 
 1. **Isolation setup.** Claude: use `env -i` preserving `HOME` and `PATH`, with `claude -p --safe-mode`. Codex: use `env -i` with temporary `HOME` and `CODEX_HOME`, filtering `GIT_*` and `CODEX_*`.
 2. **Execute.** Run each task 4–5 times per model × effort pair. Record wall time, token counts, and pass/fail result.
-3. **Exclude contaminated runs.** Remove attempts from sessions with leaked tools or active hooks/mod.
+3. **Exclude contaminated runs.** Remove attempts from sessions with leaked tools or active spatz hooks or the routing skill.
 
 To implement the learned rule:
 

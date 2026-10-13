@@ -1164,24 +1164,6 @@ describe("direct mod attribution", () => {
 	});
 });
 
-test("usage command output never relinks a suggestion through Bash detection", async () => {
-	const s = setup();
-	const { suggestion_id } = await s.api.suggest({
-		...suggestInput(),
-		session: "original",
-		turn: "t",
-		source: "claude-code-mod",
-	});
-	await s.api.handleHook(
-		"PostToolUse",
-		bash(
-			`spatz usage ${suggestion_id} --model m --turn t --source claude-code-mod --json`,
-			JSON.stringify({ suggestion_id }),
-		),
-	);
-	expect(s.store.getSuggestion(suggestion_id)?.session_id).toBe("original");
-});
-
 test("Bash links inside subagents retain agent identity and leave main open", async () => {
 	const s = setup();
 	const main = await linked(s);
