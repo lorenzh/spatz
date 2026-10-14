@@ -119,15 +119,15 @@ test("plugin asset sync rejects invalid versions before writing launchers", asyn
 		await Bun.write(join(root, "skills/routing/SKILL.md"), "skill\n");
 		const manifest = join(
 			root,
-			"packages/claude-mod/.claude-plugin/plugin.json",
+			"packages/claude-hooks/.claude-plugin/plugin.json",
 		);
-		await mkdir(join(root, "packages/claude-mod/.claude-plugin"), {
+		await mkdir(join(root, "packages/claude-hooks/.claude-plugin"), {
 			recursive: true,
 		});
 		await Bun.write(manifest, '{"version":"latest"}');
 		await expect(syncPluginAssets(root)).rejects.toThrow("Invalid release tag");
 		expect(
-			await Bun.file(join(root, "packages/claude-mod/bin/spatz")).exists(),
+			await Bun.file(join(root, "packages/claude-hooks/bin/spatz")).exists(),
 		).toBe(false);
 	} finally {
 		await rm(root, { recursive: true, force: true });

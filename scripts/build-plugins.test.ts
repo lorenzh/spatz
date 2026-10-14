@@ -13,7 +13,6 @@ test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 		try {
 			for (const path of [
 				".claude-plugin",
-				"packages/claude-mod",
 				"packages/claude-hooks",
 				"packages/codex-hooks",
 				"packages/cli/package.json",
@@ -32,13 +31,12 @@ test.skipIf(process.platform === "win32" || !Bun.which("zip"))(
 				const file = await buildPlugins(version, tag, out, root);
 				const marketplace = await Bun.file(file).json();
 				expect(marketplace.name).toBe("spatz");
-				expect(marketplace.plugins).toHaveLength(2);
+				expect(marketplace.plugins).toHaveLength(1);
 				for (const plugin of marketplace.plugins) {
-					const name =
-						plugin.name === "spatz-mod"
-							? "spatz-claude-plugin"
-							: "spatz-claude-hooks";
-					const archive = join(out, `${name}-9.8.7-rc.1-build-test.zip`);
+					const archive = join(
+						out,
+						"spatz-claude-hooks-9.8.7-rc.1-build-test.zip",
+					);
 					const sha256 = createHash("sha256")
 						.update(await Bun.file(archive).bytes())
 						.digest("hex");

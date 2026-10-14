@@ -226,7 +226,7 @@ They do not change the learning cell or its thresholds.
 
 Session windows use `(session_id, agent_id)`. Each subagent can keep an independent open suggestion.
 The main sequence uses a null agent id.
-A suggestion can cover several turns. Mod usage keeps each step separate.
+A suggestion can cover several turns.
 Direct usage has no success value. Explicit reports or test/build signals supply that value.
 Each scored attempt has its own outcome. Usage alone supplies no quality.
 See [how-it-works.md](how-it-works.md#direct-attribution) for the fields and migration.

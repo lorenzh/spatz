@@ -18,7 +18,7 @@ For the decision rule, read [recommendation.md](recommendation.md). For data tha
 | Candidate | One pair of model and effort, for example `anthropic/claude-opus-5.5:high`. |
 | Catalog | All candidates from the `--models` argument of one call, sorted by cost. spatz recommends only candidates from this list. |
 | Suggestion | The result of one `spatz "<task>"` call: an id, a ranking of 1 to 3 candidates, a reason and the classification. |
-| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz usage`, `spatz report` or Claude Code and Codex CLI transcripts. |
+| Usage | A record of which model ran for a suggestion, with its effort and token counts. It comes from `spatz report`, `spatz import-rollout` or Claude Code and Codex CLI transcripts. |
 | Signal | One observed result for a suggestion: a report value, a test run or a build run. |
 | Attempt | One execution by an actual model/effort pair. It has a UUID and an ordinal within its suggestion. |
 | Outcome | The quality of one attempt (0 to 1), computed from its signals, plus its actual pair. |
@@ -219,7 +219,6 @@ Missing counters stay `null`. If any counter is null, `tokens_complete` is `0`.
 Claude subagent transcript `output_tokens` are stale streaming snapshots.
 Hooks store these estimates with `tokens_complete = 0`, even when all four counters are present.
 Main-session transcripts keep the counter-based check.
-Mod measurements replace hook estimates for the same session and agent.
 Reports and Agent tool events do not measure tokens. Their counters are null.
 
 Suggestions capture four OpenRouter rates per candidate model in `price_snapshot`.
@@ -227,7 +226,7 @@ Suggestions capture four OpenRouter rates per candidate model in `price_snapshot
 Catalog price changes do not alter the snapshot.
 Each `usages` row stores `cost_usd` and `cost_source`:
 
-- `reported`: the caller supplied a harness cost through `spatz usage --cost-usd`.
+- `reported`: a stored row carries a harness-reported cost.
 - `priced`: spatz multiplied the four counters by the model's stored rates and summed them.
 - `unavailable`: no usable price snapshot or required rate exists. `cost_usd` is null.
 
@@ -254,7 +253,7 @@ See [CLI stats](cli.md#spatz-stats) for the current totals.
 
 ### Migrations
 
-`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz usage`, `spatz link`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through a read-only bun:sqlite connection.
+`PRAGMA user_version` holds the schema version. Each time spatz opens the store, it applies the missing migrations in order. `spatz "<task>"`, `spatz report` and `spatz hook` open the store. `spatz stats` opens the store to run migrations, then reads it through a read-only bun:sqlite connection.
 
 All pending migrations run in one `IMMEDIATE` transaction. spatz reads the version again inside the transaction, so two processes cannot apply the same migration twice.
 
@@ -336,7 +335,7 @@ See [configuration.md](configuration.md#launcher-failures) for retention and wri
 | Suggestion field | Values and meaning |
 | --- | --- |
 | `scope` | `step`, `turn`, `subagent`, `session`, `escalate` or `null`. The caller's routing decision scope. |
-| `agent` | `claude-code`, `claude-code-mod`, `codex` or `null`. The caller's provenance. |
+| `agent` | `claude-code`, `codex` or `null`. The caller's provenance. Old rows can hold `claude-code-mod`. |
 | `turn_id` | The initial turn id, or `null`. A suggestion can cover later turns too. |
 | `agent_id` | The subagent id, or `null` for the main window. |
 
@@ -345,7 +344,6 @@ The Bash hook remains available for calls without explicit linking.
 No task text enters these fields.
 
 Direct recorders preserve source identity before adding usage.
-The mod registers each execution segment before the request starts.
 Start replay returns the same attempt. A changed pair starts a new attempt.
 Direct reports select an attempt rather than replacing a suggestion-wide outcome.
 Usage alone never creates quality evidence.

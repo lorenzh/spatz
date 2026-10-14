@@ -78,7 +78,7 @@ Nightly builds therefore carry the last released version plus the date, for exam
 
 - [ ] CI is green on the release branch, and the release workflow passed for the last candidate.
 - [ ] `npm i -g @spatz/cli@next` installs and `spatz --version` prints the candidate.
-- [ ] The plugins from `release/<minor>` load. Claude Code: `/spatz status` answers (mod). Codex: the hooks appear in `/hooks` and a shell command creates no error.
+- [ ] The plugins from `release/<minor>` load. Claude Code: the `spatz` hooks plugin loads and `/spatz:routing` is listed. Codex: the hooks appear in `/hooks` and a shell command creates no error.
 - [ ] Docs describe every user-visible change of the release.
 - [ ] `catalog/bench-snapshot.json` comes from `bun scripts/bench-snapshot.ts` on the release branch.
 - [ ] npm shows the final version (`latest` for the newest minor), and only then is the release branch merged back into `main`.
@@ -97,7 +97,7 @@ This gate covers [#78](https://github.com/lorenzh/spatz/issues/78).
 - [ ] Test migration rollback on failure and concurrent writers. Keep the backup when migration fails.
 - [ ] For [#67](https://github.com/lorenzh/spatz/issues/67), check `tokens_schema` in every cost query. Exclude legacy Codex rows (`tokens_schema = 1`) from USD comparisons.
 - [ ] Check normalized input and cache counters across Claude and Codex fixtures ([#60](https://github.com/lorenzh/spatz/issues/60)).
-- [ ] Run compatibility fixtures for hooks, mod and skill against the candidate CLI output and strategy strings: `default`, `retry`, `learned-fallback`.
+- [ ] Run compatibility fixtures for hooks and skill against the candidate CLI output and strategy strings: `default`, `retry`, `learned-fallback`.
 - [ ] Check requested-versus-answered dispatch fields ([#66](https://github.com/lorenzh/spatz/issues/66)) and unknown-model errors ([#71](https://github.com/lorenzh/spatz/issues/71)).
 - [ ] Check taxonomy values and CLI filters ([#72](https://github.com/lorenzh/spatz/issues/72)). Check stats JSON consumers after [#44](https://github.com/lorenzh/spatz/issues/44).
 - [ ] Run the legacy and delayed-event fixtures for [#34](https://github.com/lorenzh/spatz/issues/34) and [#35](https://github.com/lorenzh/spatz/issues/35). Use the [attempt design](docs/design/attempts.md#implementation-checks).
@@ -222,18 +222,16 @@ See [configuration](docs/configuration.md#harness-catalog) for cache and offline
 
 ## Claude Code plugins
 
-The shared build workflow packs all three plugin directories once on Linux for releases and nightlies:
+The shared build workflow packs both plugin directories once on Linux for releases and nightlies:
 
-- `spatz-claude-plugin-<version>.zip`: the `spatz-mod` plugin.
 - `spatz-claude-hooks-<version>.zip`: the `spatz` command hooks.
 - `spatz-codex-hooks-<version>.zip`: the Codex `spatz` plugin.
 - `marketplace.json`: the release marketplace with HTTPS archive URLs and SHA-256 pins.
 
-These archive filenames remain stable across the plugin ID rename.
 
 Each file has a `.sha256` companion and an entry in `SHA256SUMS`.
 Asset filenames replace `+` with `-`. Versions inside manifests keep the original SemVer string.
-The build excludes generated mod types, local `tsconfig.json` and `node_modules` from ZIPs.
+The build excludes `node_modules` from ZIPs.
 Plugin launchers download the pinned CLI when needed.
 
 The repository marketplace keeps relative sources for installation from Git.

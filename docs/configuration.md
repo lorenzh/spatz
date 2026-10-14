@@ -171,7 +171,6 @@ Set `models` to a string in `<cwd>/.spatz.json` or `~/.spatz/config.json`:
 
 Use only models and efforts that your harness can dispatch.
 For example, Claude Code users who dispatch GPT through Codex can configure both families.
-The mod continues to pass its own `models` userConfig as `--models`.
 
 Precedence: `--models` > `SPATZ_MODELS` > project `models` > user `models` > harness preset.
 All values use the [CLI model grammar](cli.md#the---models-grammar).

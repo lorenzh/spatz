@@ -2,7 +2,7 @@
 title: Claude Code hooks for spatz
 description: How to connect spatz to Claude Code hooks, which hook events give which signals and token usage, how a suggestion links to a session, and the limits of the hooks.
 tags: [hooks, claude-code, signals, spatz]
-keywords: [unknown outcome, coverage, events, adapters, attempt, retry, binding, pending, identity, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, claude-code-mod, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
+keywords: [unknown outcome, coverage, events, adapters, attempt, retry, binding, pending, identity, dispatch, dispatches, requested_model, swapped, import-rollout, rollout, codex exec, SPATZ_SUGGESTION_ID, cost, tokens, tokens_complete, tokens_schema, settings.json, PostToolUse, PostToolUseFailure, Stop, SubagentStop, test detection, build detection, rtk, subagent, time window, session, async, scope, turn, agent, record, Codex, plugin, marketplace, spatz, SPATZ_DEBUG, diagnostics]
 ---
 
 # Claude Code hooks for spatz
@@ -33,13 +33,10 @@ No separate CLI install is needed when either package runner is available.
 The first run downloads about 60 MB. Package runners use the plugin's version.
 Remove hand-written `spatz hook` entries from `~/.claude/settings.json` and project settings to avoid duplicate calls.
 Keep unrelated hooks.
-With both plugins, leave `record: auto`. Hooks record signals. The mod owns usage for the execution segments it registers.
 
 ### Manual settings
 
 If you do not install the hooks plugin, use these settings instead.
-Manual hooks use the same explicit usage ownership as plugin hooks.
-With `record: off`, the mod registers no usage-owning starts. Hooks then record transcript usage.
 
 1. Make sure that `spatz` is on the `PATH` of a non-interactive shell. A shell alias is not enough. The [README](../README.md) shows a small wrapper script.
 2. Select the settings file:
@@ -126,7 +123,7 @@ Rules:
 ## Link a suggestion to a session
 
 `--session` links a suggestion when the CLI creates it.
-The caller can also pass `--turn`, `--agent-id`, `--scope` and `--source claude-code-mod`.
+The caller can also pass `--turn`, `--agent-id` and `--scope`.
 See [cli.md](cli.md) for the flags.
 
 Without explicit linking, the `PostToolUse` hook makes the link:
@@ -218,8 +215,7 @@ If it has a linked suggestion, closure does not send later events back to the ma
 - `PostToolUse` on the `Agent` tool records the subagent model from `resolvedModel`. This record has null token counts. It never takes the `effort.level` of this event, because that belongs to the main session. The subagent effort comes from the sources in [Subagent effort](#subagent-effort).
 
 Execution evidence supplies the attempt's actual pair. A report can fill unknown fields but cannot replace known fields.
-Subagent effort stays null when none of the sources in [Subagent effort](#subagent-effort) names it and the mod does not supply it.
-Main-hook effort is usable only when a mod does not rewrite the main steps.
+Subagent effort stays null when none of the sources in [Subagent effort](#subagent-effort) names it.
 Claude transcript entries are deduplicated by `message.id` within the session and agent.
 Entry UUIDs and tool-use IDs are not usage message IDs.
 
@@ -253,13 +249,13 @@ Such an outcome counts only with explicit effort evidence; otherwise it does not
 - A call belongs to at most one attempt, and an attempt to at most one call. The claim runs in the write transaction of the delegation.
 - A subagent that runs spatz itself, with no delegation that names its call, gets no requested effort. Its outcome counts only with explicit effort evidence.
 
-The requested effort never goes into the attempt. The attempt keeps only explicit evidence: a report, an attempt start, a mod step or a transcript. Learning and `spatz stats` read the effective effort, which spatz resolves when it reads:
+The requested effort never goes into the attempt. The attempt keeps only explicit evidence: a report, an attempt start or a transcript. Learning and `spatz stats` read the effective effort, which spatz resolves when it reads:
 
 1. The attempt's explicit effort, if it has one.
 2. Else the requested effort of the attempt's own call, if the attempt's answering model offers it in the Claude Code harness catalog. A model that offers only `none` gets `none`.
 3. Else no effort. An unknown answering model gives no effort, so the outcome does not count.
 
-Explicit evidence never conflicts with a requested effort. A PR signal is quality, not execution evidence: on a subagent attempt it keeps the attempt's own model and effort, unknown ones included, and never writes the ranked pair. A dispatch record without a call id (the mod's usage path) fills the model only into attempts that hold no call.
+Explicit evidence never conflicts with a requested effort. A PR signal is quality, not execution evidence: on a subagent attempt it keeps the attempt's own model and effort, unknown ones included, and never writes the ranked pair. A dispatch record without a call id fills the model only into attempts that hold no call.
 
 The `SubagentStop` input has an `effort` field, but the Claude Code hooks reference does not say whether it describes the subagent or the main session. spatz does not use it.
 
@@ -273,7 +269,6 @@ The column names are `requested_model`, `requested_agent_type` and `answered_mod
 It also stores `tool_use_id`. Unknown fields remain null.
 
 A hook observation needs no open suggestion.
-The mod's linked suggestion fills `suggestion_id` and the original requested model.
 An insert with the same session and agent fills only missing columns.
 Replays and conflicting later values do not replace known values.
 Model comparison uses canonical ids and known Claude aliases.
@@ -283,42 +278,23 @@ It then checks `($CLAUDE_CONFIG_DIR or ~/.claude)/agents/<type>.md`.
 The first readable definition takes precedence, including one with `model: inherit`.
 Missing or unreadable definitions, invalid frontmatter and absent or inherited pins leave the requested model null.
 Plugin-qualified types (`plugin:name`) remain unresolved.
-The mod passes `--requested-agent <type>` through the CLI to the same core resolver.
 Claude aliases use the newest matching model in the cached harness catalog, with the bundled catalog as fallback.
 The agent type is preserved as given. Core reads definitions without changing them.
 No prompt text or tool output is stored.
 
-The identity fixtures confirm that `agent_id` joins hook and mod observations.
-Agent tool calls also share `tool_use_id`.
-Mod `turnId` and hook `prompt_id` are different ids.
+Agent tool calls share `tool_use_id`, and `agent_id` joins the observations.
 The ledger links a dispatch to its attempt by `(session_id, agent_id)`.
 See [dispatch counts](cli.md#dispatch-counts) for the stats fields.
 
-## Mod and hooks together
-
-The core accepts explicitly linked `claude-code-mod` suggestions in hook windows.
-It does not exclude them by provenance. This supports separate routing and recording roles.
-The mod routes through the CLI. Hooks can record signals and transcript usage for those suggestions.
-Direct `spatz usage` records tokens without a transcript.
-
-With `record: auto`, the mod registers usage ownership and records each step for main sessions and routed subagents.
-Hooks keep test/build signals but skip usage covered by those ownership bindings.
-The mod supplies the answering model and sent effort for each disjoint step.
-It never attributes a mixed turn total to the last pair.
-With `record: off`, the mod registers no usage-owning starts. Hooks resume turn-level transcript recording.
+## Subagent token estimates
 
 Subagent transcripts undercount output tokens ([#86](https://github.com/lorenzh/spatz/issues/86)).
-The mod's measurements replace hook estimates for the same session and agent.
-Later hook replays cannot add those estimates again.
 Hooks-only subagent totals remain lower-bound estimates.
 Claude `Stop` and `SubagentStop` store subagent transcript usage with `tokens_complete = 0`.
 Main-session transcript usage keeps its counter-based completeness check.
 Stats exclude incomplete usage from cost and count it in `incomplete`.
 Token totals retain these estimates with a note in text output.
-Complete mod measurements remove the replaced hook estimates from this count.
 See [stats fields](cli.md#spatz-stats).
-Explicit bindings connect hook tool-use IDs to mod tool-call IDs.
-They never assume that mod `turnId` equals hook `prompt_id`.
 When installing the plugin, remove equivalent hand-written hook entries.
 
 ## Limits

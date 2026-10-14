@@ -17,17 +17,15 @@ An attempt is work by one actual model/effort pair toward a result. Each attempt
 
 `spatz suggest` opens attempt 1 implicitly and its suggestion window. Its actual pair stays null until execution evidence or a report supplies it. The first execution fills this implicit attempt. The recommended pair does not prove execution. A new attempt starts only on explicit start, pair switch, new dispatch, or new work after a report. A report closes the suggestion window as in v4; later work needs a new suggestion. A failed test followed by a fix stays inside the attempt. The latest test/build wins.
 
-Claude hooks and Codex record at turn granularity or coarser. Only the mod splits a turn into step segments. Stop/SubagentStop closes observed execution and finalizes turn evidence without implying success. Same-pair follow-up work keeps the attempt unless a listed boundary applies. A report closes the attempt and suggestion window. Late evidence can still bind to closed attempts.
+Claude hooks and Codex record at turn granularity or coarser. Stop/SubagentStop closes observed execution and finalizes turn evidence without implying success. Same-pair follow-up work keeps the attempt unless a listed boundary applies. A report closes the attempt and suggestion window. Late evidence can still bind to closed attempts.
 
 ```text
 spatz suggest <task> [--retry-of <suggestion_id>]
 spatz report <suggestion_id> --model <m> --effort <e> --result pass|partial|fail
              [--attempt <id>] [--correct | --confirm]
-# Mod only; context also supplies harness, session and agent:
-spatz attempt start <suggestion_id> --key <turnId:index> --model <m> --effort <e>
 ```
 
-The skill propagates suggestion IDs. It needs no start call or attempt ID. The mod registers each segment before execution. Hooks replay dispatch/turn boundaries in source order using stable IDs. Start replay returns the existing attempt. Allocate ordinals and insert bindings in one `IMMEDIATE` transaction.
+The skill propagates suggestion IDs. It needs no start call or attempt ID. Hooks replay dispatch/turn boundaries in source order using stable IDs. Start replay returns the existing attempt. Allocate ordinals and insert bindings in one `IMMEDIATE` transaction.
 
 Report selection also runs in that transaction:
 
@@ -51,27 +49,22 @@ close selected/new attempt; return its outcome
 
 | Recorder | Identity and actual pair | Usage |
 | --- | --- | --- |
-| Claude hooks | `prompt_id`, `agent_id`, `tool_use_id`. Model from transcript `message.model` or Agent `resolvedModel`. `effort.level` is available on main-session hooks only. | Preserve message identity before summing. Subagent effort stays null unless the mod sets it. |
-| Claude mod | `turn.step`: `turnId`, `index`, `agentId`, model and sent effort. `tool.call` has `tool_use_id`, but `TurnStepResult.toolUses` has no ID. | Record `TurnStepResult.usage` per step with its answering model and step effort. Join tool calls by `tool_use_id` and agent identity by `agent_id`. |
+| Claude hooks | `prompt_id`, `agent_id`, `tool_use_id`. Model from transcript `message.model` or Agent `resolvedModel`. `effort.level` is available on main-session hooks only. | Preserve message identity before summing. Subagent effort stays null. |
 | Codex | `turn_context` gives turn ID, model and effort. Legacy calls/results bind by `call_id`; completed `CommandExecution` events bind by `item.id`. Hook `tool_use_id = exec-placeholder` is not identity. | Keep the last cumulative snapshot per turn. Never sum snapshots. |
 
-With hooks plus mod, bind `tool.call.e.tool_use_id` to hook `tool_use_id`; this also joins the Agent call to `agent.spawn.e.tool_use_id`. Bind subagent identity by `agent_id`/`agentId`. Do not assume mod `turnId` equals hook `prompt_id`: they are different UUIDs, and `turn.start` carries only text and `turnId`. Hooks write signals only; the mod writes per-step usage because it knows the model and sent effort. Hooks skip usage only for sessions whose mod start bindings are flagged as owning usage. The mod sets that flag only when it also writes usage: with hooks present, `record: auto` therefore means "on" for the mod, and `record: off` suppresses mod starts so hooks fall back to turn-level usage. This splits ownership by data type, avoids double counting, and never loses usage.
+Bind subagent identity by `agent_id`. Hook `tool_use_id` also joins the Agent call to the spawn. Hooks write signals and transcript usage at turn level.
 
-Do not assign the mod's mixed turn total to its last pair. Use disjoint step measurements. For Codex, an in-turn pair change without separate counters leaves pair cost incomplete. Keep its measured total once in suggestion totals with a null attempt. Never invent a split or a `root_hint`.
+Do not assign a mixed turn total to its last pair. For Codex, an in-turn pair change without separate counters leaves pair cost incomplete. Keep its measured total once in suggestion totals with a null attempt. Never invent a split or a `root_hint`.
 
-The fixture spike is in `packages/core/src/signals/fixtures/`. Trust the mod's `turn.step` sent effort per step and Codex `turn_context.payload.effort`. Trust main-hook `effort.level` only when no mod rewrites main steps: the spike confirms main hooks carry the field, but does not establish that it still matches the effort sent by a rewriting mod. `SubagentStart`, `SubagentStop`, and subagent `PostToolUse` have no effort in the captured session. Subagent effort stays null unless the mod sets it. `tool.call.e.tool_use_id` matches `PostToolUse.tool_use_id`, including subagent calls; `TurnStepResult.toolUses` has no ID. Filter the extra `UserPromptSubmit` whose prompt starts `<agent-message` and `PostToolUse` named `SubagentHandback`.
+The fixture spike is in `packages/core/src/signals/fixtures/`. Trust Codex `turn_context.payload.effort` and main-hook `effort.level`. `SubagentStart`, `SubagentStop`, and subagent `PostToolUse` have no effort in the captured session. Subagent effort stays null. Filter the extra `UserPromptSubmit` whose prompt starts `<agent-message` and `PostToolUse` named `SubagentHandback`.
 
 Subagent transcript `output_tokens` are stale streaming snapshots ([#86](https://github.com/lorenzh/spatz/issues/86)).
-The fixture's transcript counts of 3 and 2 correspond to mod counts of 156 and 116.
-The mod is authoritative for subagent usage. Hooks-only totals are lower-bound estimates.
+Hooks-only totals are lower-bound estimates.
 Schema v7 dispatch tracking merges observations by `(session_id, agent_id)`.
 It preserves `tool_use_id` and fills missing fields only.
-The current store removes hook subagent usage when mod usage arrives for the same session and agent.
-The attempt ledger still needs per-step attribution and explicit main-session ownership.
 
-The mod's sent effort records the requested value. The spike does not confirm that the API received or applied it.
 
-The sanitized `main-identity-transcript.jsonl` and `subagent-identity-transcript.jsonl` excerpts each contain two assistant entries from one API message. Their entry `uuid`s differ but their `message.id` and usage repeat. Deduplicate usage by `message.id` within the session and agent transcript. Do not use the entry `uuid` or `tool_use` block ID as the message deduplication key. The block's `id` matches hook/mod `tool_use_id` and binds the tool call. The fixture tests check both transcript variants through the production usage parsers.
+The sanitized `main-identity-transcript.jsonl` and `subagent-identity-transcript.jsonl` excerpts each contain two assistant entries from one API message. Their entry `uuid`s differ but their `message.id` and usage repeat. Deduplicate usage by `message.id` within the session and agent transcript. Do not use the entry `uuid` or `tool_use` block ID as the message deduplication key. The block's `id` matches hook `tool_use_id` and binds the tool call. The fixture tests check both transcript variants through the production usage parsers.
 
 `codex-exec-identity.json` captures both rollout formats for one `codex exec` turn. The legacy call/output share `call_yLMKZWo1O7DKBsXwzCrZpUge`. The completed command has `item.id = exec-bec398ff-1a9f-4445-997e-664871e34504`. These IDs differ and the captured completed item has no `call_id` link. Keep their ID namespaces separate; a shared turn does not prove an exact call binding. `parseCodexRollout` prefers completed commands and deduplicates them by `item.id`, suppressing legacy mirrors. This capture's legacy output wraps `exit_code` in JSON; the parser also reads this structured result when completed events are absent. The tests serialize the records as JSONL and check the parsed model, effort, command and `token_usage_record.turn_token_usage`.
 
@@ -120,7 +113,7 @@ CREATE TABLE attempt_events (
 );
 ```
 
-Prompt/turn bindings can name several mod segments. Exact call/message/start bindings name one attempt. Internal event IDs identify reports or measurements. Revisions replace snapshots and corrections. Equal identity/revision with different payloads is an error. Older revisions cannot replace newer ones.
+Prompt/turn bindings can name several attempts. Exact call/message/start bindings name one attempt. Internal event IDs identify reports or measurements. Revisions replace snapshots and corrections. Equal identity/revision with different payloads is an error. Older revisions cannot replace newer ones.
 
 Enable foreign keys. Check token ranges, pair values, source ownership and matching suggestion/attempt IDs. A new chain root references itself. Other members copy an existing root without changing it. No `predecessor_id` or cycle checks are needed.
 
@@ -245,7 +238,7 @@ R1 denotes the first review of [#59](https://github.com/lorenzh/spatz/pull/59). 
 | R1.5: malformed or timestamp-less input goes uncounted | Parse diagnostics move to [#39](https://github.com/lorenzh/spatz/issues/39). Known IDs can still bind without time. |
 | R1.6: intermediate pairs pay escalation costs | Charge chain cost once to the root pair. |
 | R1.7: README describes suggestion-wide overrides | Implementation updates README and CLI/hooks references to attempt-local reports. |
-| R2.1: model-less hooks inherit the latest report pair | Bind hooks to execution identity. Fill only that attempt's unknown pair. Mod always registers pair metadata. |
+| R2.1: model-less hooks inherit the latest report pair | Bind hooks to execution identity. Fill only that attempt's unknown pair. |
 | R2.2: A→B→A overwrites first A | Three UUIDs/ordinals preserve all outcomes and the first pair. |
 | R2.3: migration splits reports across turns | Unchanged legacy view and frozen legacy writes preserve exact v4 aggregation. |
 | R2.4: known p1 falls through to p2's window | Existing bindings restrict candidates. Only unbound IDs can use a new window. |
@@ -255,11 +248,11 @@ Conflicts log locally without raw input. Hooks still exit successfully. Full par
 
 ## Implementation checks
 
-Write failing fixtures first for both Claude transcript variants and both Codex rollout formats. Cover skill reports, main-session verification, mod-only recording and hooks plus mod. Check:
+Write failing fixtures first for both Claude transcript variants and both Codex rollout formats. Cover skill reports, main-session verification and hooks. Check:
 
 - Same-pair retries, `--correct`, A→B→A and a TDD red-to-green loop.
 - Unbound follow-up prompts; known p1 inside p2; delayed links; missing time/transcripts; duplicate snapshots; window repair.
-- Low-effort 100/high-effort 200 usage; mod step attribution; Codex unsplittable totals; root cost 10/20/70; failed and review chains.
+- Low-effort 100/high-effort 200 usage; Codex unsplittable totals; root cost 10/20/70; failed and review chains.
 - Stats coverage without duplicated rows, all four token totals, latest `outcome(id)` and the selected report's JSON.
 
 Use one temporary SQLite race test for ordinal allocation and start replay. Keep transaction rollback checks for combined signal/usage repair. Compare a frozen v4 fixture before and after migration: outcome multisets, learning, tokens, coverage, adoption, learned/control and scope statistics. Include the three-report example, null effort, equal times, dry runs, usage-only suggestions and open legacy sessions.

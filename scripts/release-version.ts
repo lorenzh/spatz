@@ -24,7 +24,6 @@ export async function setReleaseVersion(
 	const release = releaseVersion(tag);
 	for (const path of [
 		"packages/cli/package.json",
-		"packages/claude-mod/.claude-plugin/plugin.json",
 		"packages/claude-hooks/.claude-plugin/plugin.json",
 		"packages/codex-hooks/.codex-plugin/plugin.json",
 		".claude-plugin/marketplace.json",

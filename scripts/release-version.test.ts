@@ -32,7 +32,6 @@ test("release versions stamp the CLI, all plugins and marketplace entries", asyn
 	const root = await mkdtemp(join(tmpdir(), "spatz-version-"));
 	const paths = [
 		"packages/cli/package.json",
-		"packages/claude-mod/.claude-plugin/plugin.json",
 		"packages/claude-hooks/.claude-plugin/plugin.json",
 		"packages/codex-hooks/.codex-plugin/plugin.json",
 		".claude-plugin/marketplace.json",
@@ -56,17 +55,17 @@ test("release versions stamp the CLI, all plugins and marketplace entries", asyn
 				expect(before[index]?.split("\n").length).toBe(
 					(await Bun.file(join(root, path)).text()).split("\n").length,
 				);
-			for (const path of paths.slice(0, 4))
+			for (const path of paths.slice(0, 3))
 				expect((await Bun.file(join(root, path)).json()).version).toBe(
 					tag.slice(1),
 				);
-			for (const name of ["claude-mod", "claude-hooks", "codex-hooks"]) {
+			for (const name of ["claude-hooks", "codex-hooks"]) {
 				const launcher = await Bun.file(
 					join(root, `packages/${name}/bin/spatz`),
 				).text();
 				expect(launcher).toContain(`@spatz/cli@${tag.slice(1)}`);
 			}
-			const marketplace = await Bun.file(join(root, paths[4])).json();
+			const marketplace = await Bun.file(join(root, paths[3])).json();
 			expect(
 				marketplace.plugins.map(
 					(p: { name: string; version: string; source: string }) => [
@@ -75,10 +74,7 @@ test("release versions stamp the CLI, all plugins and marketplace entries", asyn
 						p.source,
 					],
 				),
-			).toEqual([
-				["spatz-mod", tag.slice(1), "./packages/claude-mod"],
-				["spatz", tag.slice(1), "./packages/claude-hooks"],
-			]);
+			).toEqual([["spatz", tag.slice(1), "./packages/claude-hooks"]]);
 		}
 		await expect(setReleaseVersion("vnot-semver", root)).rejects.toThrow(
 			"Invalid release tag",

@@ -2,11 +2,7 @@ import { chmod, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { releaseVersion } from "./release-version.ts";
 
-export const pluginNames = [
-	"claude-mod",
-	"claude-hooks",
-	"codex-hooks",
-] as const;
+export const pluginNames = ["claude-hooks", "codex-hooks"] as const;
 
 /** Keep Git installs and release archives self-contained, without symlinks. */
 export async function syncPluginAssets(root = resolve(import.meta.dir, "..")) {
