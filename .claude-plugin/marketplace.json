@@ -6,7 +6,7 @@
 		{
 			"name": "spatz",
 			"source": "./packages/claude-hooks",
-			"version": "0.4.1",
+			"version": "0.5.0-rc.1",
 			"description": "Record test and build outcomes and token usage with the spatz CLI."
 		}
 	]
