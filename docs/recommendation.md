@@ -30,6 +30,7 @@ Only some outcomes count:
 - Suggestions from `--dry-run` do not count.
 - An outcome counts for the pair that was actually used, not for the recommended pair.
 - An outcome counts only when spatz knows both the model and the effort of the used pair.
+- For a Claude Code subagent without explicit effort evidence, the effort that its dispatch call requested counts, if the answering model offers it. See [Subagent effort](hooks.md#subagent-effort).
 - Outcomes of models that are not in the current `--models` list do not count.
 - Old outcomes do not decay.
 
