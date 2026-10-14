@@ -31,7 +31,7 @@
 		},
 		"anthropic/claude-sonnet-5.5": {
 			"input": 2,
-			"cache_read": 0.2,
+			"cache_read": 0.1,
 			"cache_write": 4,
 			"output": 10,
 			"source": "https://platform.claude.com/docs/en/about-claude/pricing",
