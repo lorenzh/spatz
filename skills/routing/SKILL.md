@@ -15,7 +15,16 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
 
 ## Select and dispatch
 
-1. Write one task sentence without secrets or customer data. The sentence is sent to TypeSafe AI for classification. Run this command through the shell tool before the dispatch:
+1. Find the models you can use now. Take names only from the live lists below, never from memory or from earlier runs:
+
+   - Codex: `CODEX_HOME="$(mktemp -d)" codex debug models | jq -r '.models[] | [.slug, .visibility, ([.supported_reasoning_levels[].effort] | join(","))] | @tsv'`. Use `list` entries only. The empty `CODEX_HOME` avoids the account's settings. Do not add `--bundled`: it prints the copy shipped with the binary, not the current list.
+   - Claude Code: the binary's catalog is a package default, so it does not prove access. Check the account with a probe: `claude -p --model <model> --effort <effort> --output-format json "reply OK"`. A model is usable when its key appears in the result's `modelUsage`. Probe only the candidates from the catalog that you plan to use.
+
+   Pass only the usable models and efforts in `--models`, or set them in config. A dispatch to a model that fails the check is reported as unavailable in step 3.
+
+   Done when the usable pairs are known, or the failed check is disclosed.
+
+2. Write one task sentence without secrets or customer data. The sentence is sent to TypeSafe AI for classification. Run this command through the shell tool before the dispatch:
 
    ```sh
    spatz "<the task in one sentence>" --json
@@ -31,7 +40,7 @@ If the launcher is unavailable, use `npx -y @spatz/cli@<version>`. Read `<versio
 
    Done when the full output contains a ranking and suggestion ID, or the fallback is disclosed.
 
-2. Dispatch `ranking[0]` at its selected effort through the harness's dispatch tool. Show the choice in this format:
+3. Dispatch `ranking[0]` at its selected effort through the harness's dispatch tool. Show the choice in this format:
 
    ```text
    spatz: <model> [<effort>] (<strategy>, n=<n>) · <suggestion_id>
