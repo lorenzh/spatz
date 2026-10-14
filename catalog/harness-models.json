@@ -1,9 +1,9 @@
 {
 	"schema": 1,
-	"updated": "2026-10-05",
+	"updated": "2026-10-14",
 	"harnesses": {
 		"claude-code": {
-			"version": "2.1.289",
+			"version": "2.1.299",
 			"models": [
 				{
 					"id": "claude-fable-5-1",
@@ -16,9 +16,13 @@
 					]
 				},
 				{
-					"id": "claude-haiku-4-5-20251001",
+					"id": "claude-haiku-5-5",
 					"efforts": [
-						"none"
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
 					]
 				},
 				{
@@ -44,7 +48,7 @@
 			]
 		},
 		"codex": {
-			"version": "0.160.1",
+			"version": "0.162.1",
 			"models": [
 				{
 					"id": "gpt-6-astra",
