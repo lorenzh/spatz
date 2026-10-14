@@ -4,6 +4,10 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	BUNDLED_HARNESS_CATALOG,
+	type HarnessCatalog,
+} from "../catalog/harness.ts";
 import { BUNDLED_SNAPSHOT, SNAPSHOT_URL } from "../catalog/snapshot.ts";
 import type {
 	CoreDeps,
@@ -165,6 +169,20 @@ beforeEach(() => {
 afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
+
+/** Cache a harness catalog with a none-only Claude model, so tests do not rely on the live catalog having one. */
+async function cacheNoneOnlyHaiku(edit?: (catalog: HarnessCatalog) => void) {
+	const catalog = structuredClone(BUNDLED_HARNESS_CATALOG);
+	catalog.harnesses["claude-code"].models.push({
+		id: "claude-haiku-4-5-20251001",
+		efforts: ["none"],
+	});
+	edit?.(catalog);
+	await Bun.write(
+		join(dir, ".spatz", "harness-models.json"),
+		JSON.stringify({ fetched_at: T0, catalog }),
+	);
+}
 
 function setup(over: Partial<CoreDeps> = {}) {
 	const { store, calls } = spyStore();
@@ -807,6 +825,7 @@ describe("stats", () => {
 			failures: { parse: 0, hook: 0, launcher: 0 },
 		};
 		const seen: unknown[] = [];
+		await cacheNoneOnlyHaiku();
 		const s = setup();
 		const api = createApi(s.deps, {
 			runStats: async (options) => {
@@ -1021,6 +1040,7 @@ describe("direct mod attribution", () => {
 
 	test("direct usage upserts each turn, preserves follow-ups and creates no outcome", async () => {
 		const dbPath = join(dir, "direct.db");
+		await cacheNoneOnlyHaiku();
 		const s = setup({ dbPath, openStore });
 		const { suggestion_id } = await s.api.suggest({
 			...suggestInput(),
@@ -1601,6 +1621,7 @@ test("none rejects known reasoning models in suggestions and reports, but accept
 });
 test("missing efforts from mod usage, Claude hooks and Codex hooks use the available none-only catalog", async () => {
 	const dbPath = join(dir, "none.db");
+	await cacheNoneOnlyHaiku();
 	const s = setup({ dbPath, openStore });
 	const id = await linked(s);
 	await s.api.usage({
@@ -1633,13 +1654,11 @@ test("missing efforts from mod usage, Claude hooks and Codex hooks use the avail
 		),
 	);
 	// A future none-only model must work from cache, without a release or network request.
-	const bundled = (await import("../catalog/harness.ts"))
-		.BUNDLED_HARNESS_CATALOG;
-	const catalog = structuredClone(bundled);
-	catalog.harnesses.codex.models.push({ id: "gpt-future", efforts: ["none"] });
-	await Bun.write(
-		join(dir, ".spatz", "harness-models.json"),
-		JSON.stringify({ fetched_at: T0, catalog }),
+	await cacheNoneOnlyHaiku((catalog) =>
+		catalog.harnesses.codex.models.push({
+			id: "gpt-future",
+			efforts: ["none"],
+		}),
 	);
 	const rollout = (
 		await Bun.file(
@@ -2125,6 +2144,7 @@ describe("dispatch effort", () => {
 		for (const source of ["call", "definition"] as const)
 			for (const dispatchFirst of [true, false])
 				test(`learning counts ${cell ?? "nothing"} for ${model} requesting ${requested} by ${source} (dispatch first: ${dispatchFirst})`, async () => {
+					await cacheNoneOnlyHaiku();
 					const { s, learned } = withCatalog();
 					await Bun.write(
 						join(dir, ".claude/agents/pinned.md"),
@@ -3131,6 +3151,7 @@ test.each(["low", "high"] as const)(
 
 test("startAttempt stores the revision of an undated alias, from the caller or the harness catalog", async () => {
 	const dbPath = join(dir, "alias-version.db");
+	await cacheNoneOnlyHaiku();
 	const s = setup({ dbPath, openStore });
 	const { suggestion_id } = await s.api.suggest({
 		...suggestInput(),
@@ -3147,7 +3168,7 @@ test("startAttempt stores the revision of an undated alias, from the caller or t
 			turn: "mod-turn",
 			...(modelVersion && { modelVersion }),
 		});
-	// The bundled Claude Code catalog lists only claude-haiku-4-5-20251001 for this alias.
+	// The cached Claude Code catalog lists only claude-haiku-4-5-20251001 for this alias.
 	expect(await start("mod-turn:0", "claude-haiku-4-5")).toMatchObject({
 		model: "anthropic/claude-haiku-4.5",
 		model_version: "20251001",
