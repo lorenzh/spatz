@@ -1,9 +1,9 @@
 {
 	"schema": 1,
-	"updated": "2026-10-14",
+	"updated": "2026-10-28",
 	"harnesses": {
 		"claude-code": {
-			"version": "2.1.299",
+			"version": "2.1.312",
 			"models": [
 				{
 					"id": "claude-fable-5-1",
@@ -48,7 +48,7 @@
 			]
 		},
 		"codex": {
-			"version": "0.162.1",
+			"version": "0.165.0",
 			"models": [
 				{
 					"id": "gpt-6-astra",
@@ -84,6 +84,17 @@
 				},
 				{
 					"id": "gpt-6.1-sol",
+					"efforts": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max",
+						"ultra"
+					]
+				},
+				{
+					"id": "gpt-6.1-terra",
 					"efforts": [
 						"low",
 						"medium",
